@@ -1,4 +1,5 @@
 from casadi import MX, nlpsol, Function 
+
 import numpy as np
 import time
 import jax.numpy as jnp
@@ -8,7 +9,7 @@ from functools import partial
 import time
 
 from mu_F.solvers.utilities import (
-    build_constraint_functions, build_objective_function, casadify_constraints, unpack_problem_data, unpack_results, clean_up
+    build_constraint_functions, build_objective_function, casadify_constraints, unpack_problem_data, unpack_results, clean_up, casadify_reverse
 )
 
 """
@@ -36,6 +37,14 @@ def casadi_nlp_optimizer_no_gcons(objective, bounds, initial_guess):
     del nlp, F, x, j, lbx, ubx, options
       
     return solver, solution
+
+def callable_casadi_nlp_optimizer_gcons(objective, constraints, bounds, initial_guess, lhs, rhs):
+   
+    objective_fn = casadify_reverse(objective, len(initial_guess))
+    constraint_fn = casadify_constraints(constraints, initial_guess, len(initial_guess))
+
+    return casadi_nlp_optimizer_gcons(objective_fn, constraint_fn, bounds, initial_guess, lhs, rhs)
+   
 
 def casadi_nlp_optimizer_gcons(objective, constraints, bounds, initial_guess, lhs, rhs):
     """

@@ -3,6 +3,8 @@ import jax.numpy as jnp
 import pandas as pd
 from jax.random import PRNGKey, choice
 
+import logging
+
 
 
 # TODO think about ways to fit approximators to the eks data within this class.
@@ -43,21 +45,32 @@ class initialisation(ABC):
         return self.process_bounds(self.bounds_to_dictionary(bounds))
     
     def get_uncertain_params(self):
+
+        
         if self.cfg.formulation == 'probabilistic':
             param_dict = self.cfg.case_study.parameters_samples
+            if self.cfg.case_study.case_study == 'markov_process':
+                param_dict = [param_dict for _ in range(self.cfg.case_study.num_nodes)]
+            
             list_of_params = [jnp.array([p['c'] for p in param]) for param in param_dict]
             list_of_weights = [jnp.array([p['w'] for p in param]).reshape(-1) for param in param_dict]
 
             max_parameter_samples = self.cfg.max_uncertain_samples
             selected_params = [choice(PRNGKey(0), a, shape=(max_parameter_samples,), replace=True, p=weight, axis=0) for a, weight in zip(list_of_params, list_of_weights)]
         elif self.cfg.formulation == 'deterministic':
-            selected_params = [jnp.array([param]) for param in self.cfg.case_study.parameters_best_estimate]
-            
-        return selected_params # sample selected parameters from    the list of parameters according to probability mass specificed by the user
+            param_best_estimate = self.cfg.case_study.parameters_best_estimate
+            if self.cfg.case_study.case_study == 'markov_process':
+                param_best_estimate = [param_best_estimate for _ in range(self.cfg.case_study.num_nodes)]
+
+            selected_params = [jnp.array([param]) for param in param_best_estimate]
+        
+
+        return selected_params # sample selected parameters from the list according to probability mass specified by the user
 
     @staticmethod
     def process_bounds(bounds):
         """ from dictionary to array """
+        print(bounds)
         # get lower and upper bounds in array form
         lower_bound = jnp.array([bounds[i][i][0] for i in bounds.keys()])
         upper_bound = jnp.array([bounds[i][i][1] for i in bounds.keys()])
@@ -74,7 +87,7 @@ class initialisation(ABC):
                 if bound[0] != 'None' and bound[1] != 'None':
                     bounds_[f'd{index}'] = {f'd{index}': [bound[0], bound[1]]}
                     index += 1
-        
+    
         for j, unit_bounds in enumerate(bounds.aux_args):
             for i, bound in enumerate(unit_bounds):
                 if bound[0] != 'None' and bound[1] != 'None':

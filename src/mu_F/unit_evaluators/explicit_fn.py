@@ -1,9 +1,12 @@
 
 from functools import partial 
 from jax import jit
+from mu_F.utils import requires_param
 from omegaconf import DictConfig
 import jax.numpy as jnp
 from jax import hessian
+
+from mu_F.control.environment import MarkovEnvironment
 
 # --- tablet press case study --- # 
 
@@ -879,9 +882,20 @@ def affine_case_study_5(
 
     return A @ design_args.T + B @ input_args
 
+@requires_param('env')
+def markov_process(env: MarkovEnvironment):
+    
+    @partial(jit, static_argnums=(0,))
+    def markov_process_fn(cfg: DictConfig, design_args: jnp.ndarray, input_args: jnp.ndarray, aux:None, uncertainties: jnp.ndarray, node: int):
+        uncertainties =  5.9*jnp.ones_like(input_args[..., :1])
+        return env(input_args, design_args, uncertainties, node=node)
+    
+    return markov_process_fn
+
 
 case_studies = {'tablet_press': {0: unit_1_dynamics, 1: unit_2_dynamics, 2: unit_3_dynamics}, 
                 'convex_estimator': {0: sub_fn_1, 1: sub_fn_2, 2: sub_fn_3, 3: sub_fn_4, 4: sub_fn_5, 5: sub_fn_6},
                 'convex_underestimator': {0: sub_fn_1, 1: sub_fn_2, 2: sub_fn_3, 3: sub_fn_4, 4: sub_fn_5, 5: sub_fn_6},
                 'estimator': {0: esub_fn_1, 1: esub_fn_2, 2: esub_fn_3, 3: esub_fn_4, 4: esub_fn_5, 5: esub_fn_6},
-                'affine_study': {0: affine_case_study_1, 1: affine_case_study_2, 2: affine_case_study_3, 3: affine_case_study_4, 4: affine_case_study_5}}
+                'affine_study': {0: affine_case_study_1, 1: affine_case_study_2, 2: affine_case_study_3, 3: affine_case_study_4, 4: affine_case_study_5},
+                'markov_process': markov_process}

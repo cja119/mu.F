@@ -26,30 +26,52 @@ TODO :
 - documentation
 """
 
-@hydra.main(config_path="config", config_name="integrator")
-def main(cfg: DictConfig) -> None:
+def _set_log(level):
+    """Set the logging level for the application."""
+    numeric_level = getattr(logging, level.upper(), None)
+    if not isinstance(numeric_level, int):
+        raise ValueError(f"Invalid log level: {level}")
+    logging.basicConfig(level=numeric_level, format="%(asctime)s [%(levelname)s] %(message)s")
+
+def _set_ray(method, max_devices):
     import ray
     from hydra.utils import get_original_cwd
-    if not cfg.method == 'direct':
+    import jax
+    if not method == 'direct'  and not method == 'monolithic':
         ray.init(
             _node_ip_address="127.0.0.1",  
             include_dashboard=False, 
             runtime_env={"working_dir": get_original_cwd(), 'excludes': ['/multirun/', '/outputs/', '/config/', '../.git/']},
-            num_cpus=min(cfg.max_devices, multiprocessing.cpu_count()))  # , ,
-    
-    # Set the maximum number of devices
-    from mu_F.direct import apply_direct_method
-    from mu_F.decomposition import decomposition, decomposition_constraint_tuner
-    from mu_F.cs_assembly import case_study_constructor
-    from mu_F.utils import save_graph
+            num_cpus=min(max_devices, multiprocessing.cpu_count())) 
+        
+
+def _kill_ray():
+    import ray
+    if ray.is_initialized():
+        ray.shutdown()
+
+def _set_jax(max_devices):
     import jax
     jax.config.update('jax_platform_name', 'cpu')
+    return len(jax.devices('cpu'))
 
-    print(get_original_cwd())
-    max_devices = len(jax.devices('cpu'))
+@hydra.main(config_path="config", config_name="integrator")
+def main(cfg: DictConfig) -> None:
+    # Configure logging level from config
+    _set_log(cfg.log_level)
+    _set_ray(cfg.method, cfg.max_devices)
+    max_devices = _set_jax(cfg.max_devices)
+
+    from mu_F.direct import apply_direct_method
+    from mu_F.decomposition import decomposition, decomposition_constraint_tuner
+    from mu_F.constraints.constructor import constraint_evaluator
+    from mu_F.cs_assembly import case_study_constructor, make_markov
+    from mu_F.utils import save_graph
+    
 
     # Construct the case study graph
-    G = case_study_constructor(cfg)   # TODO integration of case study construction G is a networkx graph - need to update case study contructor
+    G = case_study_constructor(cfg)
+    cfg = make_markov(cfg)
 
     # Save the graph to a file
     save_graph(G.copy(), "initial")
@@ -69,12 +91,14 @@ def main(cfg: DictConfig) -> None:
         save_graph(G.copy(), 'direct_complete')
     elif cfg.method == 'decomposition_constraint_tuner':
         decomposition_constraint_tuner(cfg, G, max_devices)
+    elif cfg.method == 'monolithic':
+        constraint_evaluator(cfg, G, node=None, pool=None, constraint_type='monolithic')
+
     else:
         # raise an error
         raise ValueError("Method not recognised")
     
-    if not cfg.method == 'direct':
-        ray.shutdown()
+    _kill_ray()
         
     # Log the function evaluations for each node in the graph.
     for node in G.nodes():

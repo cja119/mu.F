@@ -180,7 +180,7 @@ class unit_cfg:
             if graph.nodes[node]['unit_op'] == 'dynamic':
                 self.evaluator = vmap(vmap(jit(partial(unit_dynamics, cfg=cfg, node=node)), in_axes=(0, 0, 0, 0, None), out_axes=0), in_axes=(None, 1, None, 1, 0), out_axes=1) # inputs are design args, input args, deicsion_and_uncertainty_dependent_params, uncertain params
             elif graph.nodes[node]['unit_op'] == 'steady_state':
-                self.evaluator = vmap(vmap(jit(partial(unit_steady_state, cfg=cfg, node=node)), in_axes=(0, 0, 0, 0, None), out_axes=0), in_axes=(None, 1, None, 1, 0), out_axes=1)   
+                self.evaluator = vmap(vmap(jit(partial(unit_steady_state, cfg=cfg, node=node, graph=graph)), in_axes=(0, 0, 0, 0, None), out_axes=0), in_axes=(None, 1, None, 1, 0), out_axes=1)   
             else:
                 raise NotImplementedError(f'Unit corresponding to node {node} is a {graph.nodes[node]["unit_op"]} operation, which is not yet implemented.')
 

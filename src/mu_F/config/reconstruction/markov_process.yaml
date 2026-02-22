@@ -1,0 +1,14 @@
+
+
+reconstruct: 
+  - True
+  - True
+
+post_process_sampler: True # if True, use sampling scheme, if False use local SIP scheme
+
+post_process_decision_indices: [0]  # dummy index to keep traced post-process path index-safe
+
+plot_reconstruction: nominal_map # probability_map #
+
+post_process: False
+

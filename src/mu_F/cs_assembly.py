@@ -7,8 +7,8 @@ import pandas as pd
 
 
 from mu_F.unit_evaluators.constructor import unit_evaluation, post_process_evaluation
-from mu_F.constraints.functions import CS_holder, post_process_visualiser
-from mu_F.graph.graph_assembly import graph_constructor
+from mu_F.constraints.functions import COST_holder, CS_holder, post_process_visualiser
+from mu_F.graph.graph_assembly import graph_constructor, markov_graph_constructor
 from mu_F.graph.methods import CS_edge_holder, vmap_CS_edge_holder
 from mu_F.solvers.constructor import solver_construction
 from mu_F.surrogate.surrogate import surrogate
@@ -28,6 +28,7 @@ def case_study_constructor(cfg):
 
     # Create a sample constraint dictionary
     constraint_dictionary = CS_holder[cfg.case_study.case_study]
+    cost_dictionary = COST_holder[cfg.case_study.case_study] if cfg.case_study.eval_cost else None
 
     # create edge functions
     if cfg.case_study.vmap_evaluations:
@@ -36,19 +37,22 @@ def case_study_constructor(cfg):
         dict_of_edge_fn = CS_edge_holder[cfg.case_study.case_study]
 
     # Create a graph constructor object
-    G = graph_constructor(cfg, cfg.case_study.adjacency_matrix)
+    if cfg.case_study.case_study == 'markov_process':
+        G = markov_graph_constructor(cfg, cfg.case_study.env_file)
+    else:
+        G = graph_constructor(cfg, cfg.case_study.adjacency_matrix)
 
     # construct dummy dataframe for initial forward pass
     init_df_samples = pd.DataFrame({col: np.zeros((2,)) for i,col in enumerate(cfg.case_study.design_space_dimensions)})
 
     # Call the case_study_allocation function
-    G = case_study_allocation(G, cfg, dict_of_edge_fn, constraint_dictionary, solvers=solver_constructor(cfg, G), unit_params_fn=unit_params_fn(cfg, G), initial_forward_pass=init_df_samples)
+    G = case_study_allocation(G, cfg, dict_of_edge_fn, constraint_dictionary, solvers=solver_constructor(cfg, G), unit_params_fn=unit_params_fn(cfg, G), initial_forward_pass=init_df_samples, cost_dictionary=cost_dictionary)
 
     return G.get_graph()
 
 
 
-def case_study_allocation(G, cfg, dict_of_edge_fn, constraint_dictionary, solvers, unit_params_fn, initial_forward_pass):
+def case_study_allocation(G, cfg, dict_of_edge_fn, constraint_dictionary, solvers, unit_params_fn, initial_forward_pass, cost_dictionary=None):
     """
     Add miscellaneous information to the graph
     :param G: The graph constructor
@@ -71,6 +75,9 @@ def case_study_allocation(G, cfg, dict_of_edge_fn, constraint_dictionary, solver
     G.add_arg_to_nodes('unit_params_fn', unit_params_fn)
     G.add_arg_to_nodes('extendedDS_bounds', cfg.case_study.extendedDS_bounds)
     G.add_arg_to_nodes('constraints', constraint_dictionary)
+
+    if cost_dictionary is not None:
+        G.add_arg_to_nodes('node_cost', cost_dictionary)
     
     G.add_arg_to_nodes('forward_coupling_solver', solvers['forward_coupling_solver'])
     G.add_arg_to_nodes('backward_coupling_solver', solvers['backward_coupling_solver'])
@@ -87,8 +94,21 @@ def case_study_allocation(G, cfg, dict_of_edge_fn, constraint_dictionary, solver
     G.add_arg_to_graph('aux_bounds', cfg.case_study.KS_bounds.aux_args)
     G.add_arg_to_graph('n_aux_args', cfg.case_study.global_n_aux_args)
     G.add_arg_to_graph('initial_forward_pass', initial_forward_pass)
-    G.add_arg_to_graph('n_design_args', sum(cfg.case_study.n_design_args))
-    G.add_arg_to_graph('bounds', list(chain.from_iterable(cfg.case_study.KS_bounds.design_args + cfg.case_study.KS_bounds.aux_args)))
+    G.add_arg_to_graph('solve_post_processing_problem', False)
+    G.add_arg_to_graph('post_process_decision_indices', cfg.reconstruction.post_process_decision_indices if hasattr(cfg, 'reconstruction') else [])
+    # Defaults so downstream evaluators always find keys even when post_process is disabled
+    G.add_arg_to_graph('solve_post_processing_problem', False)
+    G.add_arg_to_graph('post_process_decision_indices', cfg.reconstruction.post_process_decision_indices if hasattr(cfg, 'reconstruction') else [])
+    # default: no post-process solve unless reconstruction enables it later
+    G.add_arg_to_graph('solve_post_processing_problem', False)
+    if cfg.case_study.eval_cost:
+        G.add_arg_to_graph('n_design_args', cfg.case_study.n_design_args * len(cfg.case_study.adjacency_matrix))
+        G.add_arg_to_graph('bounds', list(chain.from_iterable([cfg.case_study.KS_bounds.design_args]* len(cfg.case_study.adjacency_matrix) + cfg.case_study.KS_bounds.aux_args)))
+    else:
+        G.add_arg_to_graph('n_design_args', sum(cfg.case_study.n_design_args))
+        G.add_arg_to_graph('bounds', list(chain.from_iterable(cfg.case_study.KS_bounds.design_args + cfg.case_study.KS_bounds.aux_args)))
+
+   
     G.add_arg_to_graph('classifier_x_scalar', None) # initialisation
     G.add_arg_to_graph('post_process_classifier', lambda x: jnp.sum(x)) # scalarise input as dummy function for jit tracing.
     G.add_arg_to_graph('post_process_lower_classifier', lambda x: jnp.sum(x))
@@ -127,8 +147,10 @@ def unit_params_fn(cfg, G):
         return {node: partial(arrhenius_kinetics_fn_2,Ea=jnp.array(cfg.model.arrhenius.EA[node]), R=jnp.array(cfg.model.arrhenius.R)) for node in G.G.nodes}
     elif cfg.case_study.case_study == 'serial_mechanism_batch':
         return {node: partial(arrhenius_kinetics_fn,Ea=jnp.array(cfg.model.arrhenius.EA[node]), A=jnp.array(cfg.model.arrhenius.A[node]), R=jnp.array(cfg.model.arrhenius.R)) for node in G.G.nodes}
-    elif cfg.case_study.case_study in ['tablet_press', 'convex_estimator', 'estimator', 'convex_underestimator', 'affine_study']:
+    elif cfg.case_study.case_study in ['tablet_press', 'convex_estimator', 'estimator', 'convex_underestimator', 'affine_study', ]:
         return {node: lambda x, y: jnp.empty((0,)) for node in G.G.nodes}
+    elif cfg.case_study.case_study == 'markov_process':
+        return lambda x, y: jnp.empty((0,))
     else :
         raise ValueError('Invalid case study')
     
@@ -143,3 +165,29 @@ def solver_constructor(cfg, G):
 
     return  {'forward_coupling_solver': {node: solver_construction for node in G.G.nodes },  # if G.G.in_degree()[node] > 0 (this is better, but raises errors downstream, so we'll roll with it for now) 
             'backward_coupling_solver': {node: solver_construction for node in G.G.nodes}}# if G.G.out_degree()[node] > 0 (this is better, but raises errors downstream, so we'll roll with it for now) 
+
+def make_markov(cfg):
+    if cfg.case_study.case_study == 'markov_process':
+        cfg.case_study.parameters_best_estimate = [cfg.case_study.parameters_best_estimate for _ in range(cfg.case_study.num_nodes)]
+        cfg.case_study.KS_bounds.design_args = [cfg.case_study.KS_bounds.design_args for _ in range(cfg.case_study.num_nodes)]
+        cfg.case_study.design_space_dimensions = [f'{dim}_node_{i}' for i in range(cfg.case_study.num_nodes) for dim in cfg.case_study.design_space_dimensions]
+        cfg.case_study.n_design_args = [cfg.case_study.n_design_args for _ in range(cfg.case_study.num_nodes)]
+        cfg.case_study.n_input_args = [cfg.case_study.n_input_args for _ in range(cfg.case_study.num_nodes)]
+        cfg.case_study.unit_op = [cfg.case_study.unit_op for _ in range(cfg.case_study.num_nodes)]
+        cfg.case_study.extendedDS_bounds = [cfg.case_study.extendedDS_bounds for _ in range(cfg.case_study.num_nodes)]
+        cfg.model.node_aux = [cfg.model.node_aux for _ in range(cfg.case_study.num_nodes)]
+        cfg.case_study.n_aux_args = build_aux_args(cfg)
+
+    return cfg
+
+def build_aux_args(cfg):
+    n_aux_per_node = cfg.case_study.n_aux_args['node_0']
+    n_aux_per_edge = cfg.case_study.n_aux_args['(0,1)']
+
+    n_aux_args = {}
+    for node in range(cfg.case_study.num_nodes):
+        n_aux_args[f'node_{node}'] = n_aux_per_node
+
+    for i in range(cfg.case_study.num_nodes-1):
+        n_aux_args[f'({i},{i+1})'] = n_aux_per_edge
+    return n_aux_args

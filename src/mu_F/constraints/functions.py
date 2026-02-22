@@ -4,6 +4,9 @@ from jax import jit, vmap
 import jax.numpy as jnp
 from functools import partial
 
+from mu_F.control.environment import MarkovEnvironment
+from mu_F.utils import requires_param
+
 # ----------------------------------------------------------------------------- #
 # ---------------------------- Serial Mechanism Batch ------------------------- #
 # ----------------------------------------------------------------------------- #
@@ -187,6 +190,28 @@ def evaluation_function_aux(dynamic_profile, cfg):
 def negative_output_constraint(output, cfg):
     return -output 
 
+# -------------------------------------------------------------------------------- #
+# --------------------- Control problem constraint definition ---------------------#
+# -------------------------------------------------------------------------------- #
+
+def _markov_cons(env: MarkovEnvironment, i: int, rollout, cfg=None):
+    return env.G(rollout)[..., i]
+
+
+@requires_param('env')
+def make_markov_cons(env):
+    return [partial(_markov_cons, env, i) for i in range(env.G_SIZE)]
+
+
+def _markov_cost(env: MarkovEnvironment, rollout, cfg=None):
+    return env.R(rollout) + env.phi(rollout) if env.phi(rollout).shape[-1] > 0 else env.R(rollout)
+
+
+@requires_param('env')
+def make_markov_cost(env):
+    return [partial(_markov_cost, env)]
+
+
 
 """ insert case study specific functions for constraints here"""
 CS_holder = {'tablet_press': {0: [unit1_volume_ub], 1: [unit2_volume_ub, tablet_composition_lb, tablet_composition_ub], 2: [tablet_hardness_lb, tablet_hardness_ub, tablet_size_lb, tablet_size_ub]}, 
@@ -194,7 +219,12 @@ CS_holder = {'tablet_press': {0: [unit1_volume_ub], 1: [unit2_volume_ub, tablet_
              'convex_estimator': {0: [], 1: [log_term_hess_1], 2: [log_term_hess_1], 3: [], 4: [psd_constraint], 5: [estimation_bound_lb]},
              'convex_underestimator': {0: [], 1: [log_term_hess_1], 2: [log_term_hess_1], 3: [], 4: [psd_constraint], 5: [underestimation_constraint]},
              'estimator': {0: [], 1: [], 2: [], 3: [], 4: [], 5: [estimation_g_aux]},
-             'affine_study': {0: [negative_output_constraint], 1: [negative_output_constraint], 2: [negative_output_constraint], 3: [negative_output_constraint], 4: [negative_output_constraint]},}
+             'affine_study': {0: [negative_output_constraint], 1: [negative_output_constraint], 2: [negative_output_constraint], 3: [negative_output_constraint], 4: [negative_output_constraint]},
+             'markov_process': make_markov_cons}
+
+COST_holder = {
+    'markov_process': make_markov_cost
+}
 
 post_process_visualiser = {
     "estimator": {0: [], 1: [], 2: [], 3: [], 4: [], 5: [evaluation_function_aux]},

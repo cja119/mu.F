@@ -154,7 +154,6 @@ def evaluate(outputs, aux, graph, node, cfg):
     """
     Evaluates the constraints.
     Handles both graph-wide and node-local (backward) problems.
-    Amenable to jax pmap by using jax.lax.cond for control flow.
     """
 
     evaluate_method = solve
@@ -196,12 +195,12 @@ def evaluate(outputs, aux, graph, node, cfg):
             ]
             return shaping_function(jnp.hstack(fn_evaluations), cfg)
 
-    is_graph_wide = graph.graph["solve_post_processing_problem"]
+    is_graph_wide = bool(graph.graph["solve_post_processing_problem"])
     return lax.cond(
         is_graph_wide,
-        false_fun = node_local_branch,
-        true_fun = graph_wide_branch,
-        operand = (outputs, aux)
+        false_fun=node_local_branch,
+        true_fun=graph_wide_branch,
+        operand=(outputs, aux)
     )
 
 

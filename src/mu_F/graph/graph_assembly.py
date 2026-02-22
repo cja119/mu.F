@@ -1,7 +1,11 @@
 from abc import ABC
+import importlib
+from pathlib import Path
 import networkx as nx
 import numpy as np
 import matplotlib.pyplot as plt
+from mu_F.utils import check_requires
+from mu_F.control.environment import MarkovEnvironment
 
 class graph_constructor_base(ABC):
     def __init__(self, cfg, adjacency_matrix):
@@ -86,6 +90,94 @@ class graph_constructor(graph_constructor_base):
                 raise ValueError('Invalid auxiliary variable structure')
         return
     
+    def add_arg_to_edges(self, arg_name, arg_value):
+        for (i, j) in self.G.edges:
+            self.G.edges[i,j][arg_name] = arg_value
+        return
+
+class markov_graph_constructor(graph_constructor):
+    def __init__(self, cfg, env_file: str):
+        adjacency_matrix = self._build_adjacency_matrix(cfg)
+        super().__init__(cfg, adjacency_matrix)
+        env = self._build_env(cfg.case_study.env_file, cfg)
+        self.G.env = env
+        self.G.graph['env'] = env
+
+    def get_graph(self):
+        g = self.G.copy()
+        if hasattr(self.G, 'env'):
+            g.env = self.G.env
+        if 'env' in self.G.graph:
+            g.graph['env'] = self.G.graph['env']
+        return g
+
+    
+    def add_n_input_args(self, n_input_args):
+        for (i, j) in self.G.edges:
+            self.G.edges[i,j]["n_input_args"] = n_input_args
+        for node in self.G.nodes:
+            self.G.nodes[node]["n_input_args"] = sum([self.G.edges[predec, node]["n_input_args"] for predec in self.G.predecessors(node)])
+        return
+    
+    def add_n_aux_args(self, n_aux_args):
+
+        for (i, j) in self.G.edges:
+            self.G.edges[i,j]["n_auxiliary_args"] = n_aux_args
+
+        for node in self.G.nodes:
+            self.G.nodes[node]["n_auxiliary_args"] = n_aux_args
+
+        return
+   
+
+    def add_arg_to_nodes(self, arg_name, arg_value):
+        for node in self.G.nodes:
+            if callable(arg_value) and check_requires(arg_value, 'env'):
+                self.G.nodes[node][arg_name] = arg_value(self.G.env)
+            else:
+                self.G.nodes[node][arg_name] = arg_value
+        return None
+
+    def add_arg_to_edges(self, arg_name, arg_value):
+        for (i, j) in self.G.edges:
+            v = arg_value[(i, j)] if isinstance(arg_value, dict) else arg_value
+            if callable(v) and check_requires(v, 'env'):
+                self.G.edges[i, j][arg_name] = v(self.G.env)
+            else:
+                self.G.edges[i, j][arg_name] = v
+        return None
+    
+    def add_arg_to_edge(self, i, j, arg_name, arg_value):
+        if callable(arg_value) and check_requires(arg_value, 'env'):
+            self.G.edges[i,j][arg_name] = arg_value(self.G.env)
+        elif callable(arg_value):
+            self.G.edges[i,j][arg_name] = arg_value
+        else:
+            self.G.edges[i,j][arg_name] = arg_value
+        return None
+        
+    def _load_env(self, env_file: str):
+
+        path = Path(env_file).resolve()
+        module_name =  f"{path.stem}_{abs(hash(str(path)))}"
+        spec = importlib.util.spec_from_file_location(module_name, str(path))
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Cannot import module from {path}")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        return mod
+
+    def _build_env(self, env_file, cfg):
+        module = self._load_env(env_file)
+        env = MarkovEnvironment(simulator = module.simulator, cfg=cfg, env_params=module.DEFAULT_PARAM_DICT, **module.SHAPE_DICT)
+        return env
+    
+    def _build_adjacency_matrix(self, cfg):
+        N = cfg.case_study.num_nodes
+        adjacency_matrix = np.zeros((N, N), dtype=int)
+        adjacency_matrix[np.arange(N-1), np.arange(1, N)] = 1
+        return adjacency_matrix
 
 def case_study_uncertain_parameters_dummy(G):
     """

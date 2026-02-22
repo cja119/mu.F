@@ -68,6 +68,32 @@ def init_plot(cfg, G, pp= None, init=True, save=True):
 
     return pp
 
+def add_policy(pp, policy_data, cfg=None, color="r", marker="o", size=60):
+    """
+    Overlay policy points on an existing PairGrid.
+    """
+
+    cols = list(cfg.case_study.design_space_dimensions)
+    vec = np.ravel(policy_data)
+    if vec.shape[0] < len(cols):
+        vec = np.hstack([vec, np.full(len(cols) - vec.shape[0], np.nan)])
+    else:
+        vec = vec[:len(cols)]
+    policy_df = pd.DataFrame([vec], columns=cols)
+
+    # Manually overlay a single point per subplot to avoid seaborn re-plotting
+    row = policy_df.iloc[0]
+    indices = zip(*np.tril_indices_from(pp.axes, -1))
+    for i, j in indices:
+        x_var = pp.x_vars[j]
+        y_var = pp.y_vars[i]
+        ax = pp.axes[i, j]
+        x_val = row.get(x_var, np.nan)
+        y_val = row.get(y_var, np.nan)
+        if not (np.isnan(x_val) or np.isnan(y_val)):
+            ax.scatter(x_val, y_val, c=color, marker=marker, s=size, edgecolor="k", linewidth=0.5, zorder=5)
+    return pp
+
 def decompose_call(cfg, G, path, init=True):
     pp = init_plot(cfg, G, init=init, save=False)
     pp = decomposition_plot(cfg, G, pp, save=True, path=path)

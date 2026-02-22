@@ -1,0 +1,60 @@
+case_study: markov_process
+
+env_file: "../../../../../sample_envs/hydrogen.py"
+
+vmap_evaluations: True
+
+eval_cost: True
+
+num_nodes: 2
+
+adjacency_matrix: None
+
+n_design_args: 2
+
+n_aux_args: 
+  node_0: 0
+  (0,1): 0
+
+n_input_args: 2 
+
+discount_factor: 0.99999
+
+KS_bounds:
+  design_args: 
+  - - 0
+    - 8572.8
+  - - 1387.8 
+    - 18954.2 
+  aux_args:
+  - - - None
+      - None
+
+parameters_samples: [{'c': [ 0.02048169 11.87977224  0.29061465  7.13482955  7.78359092], # Start simple with stationary distribution
+      'w': [0.07390548 0.54504614 0.12598331 0.12247117 0.1325939 ]}]     # we can add markov samples later. 
+
+parameters_best_estimate: [8.420454054312653]
+
+extendedDS_bounds: None
+
+design_space_dimensions:
+- 'v0'
+- 'v1'
+
+global_n_aux_args: 0
+
+process_space_names: ['v0', 'v1']
+
+mode:
+  - backward
+
+evaluation_mode: 'jax-pmap'
+
+serial_graph: True
+
+
+unit_op: 'steady_state'
+
+n_theta: 1
+
+fn_evals: 0

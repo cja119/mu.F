@@ -75,9 +75,15 @@ class apply_decomposition:
             # train constraints for DS downstream using data now stored in the graph
             if (mode in ['forward'] and graph.out_degree(node) != 0) or (mode in ['backward'] and graph.in_degree(node) == 0): 
                 if cfg.surrogate.forward_evaluation_surrogate: surrogate_training_forward(cfg, graph, node)
+
+                # train reward function
+            if cfg.case_study.eval_cost:
+                graph = get_ctg_training_data(graph, node, model, cfg)
+
             # classifier construction for current unit
             if (cfg.surrogate.classifier and mode != 'backward-forward'): classifier_construction(cfg, graph, node, iterate) # NOTE this is a study specific condition
             if (cfg.surrogate.probability_map and mode != 'backward-forward'): probability_map_construction(cfg, graph, node, iterate) #  NOTE this is a study specific condition
+            if (cfg.case_study.eval_cost and mode != 'backward-forward'): ctg_surrogate_construction(cfg, graph, node, iterate)
 
             del model, problem_sheet, solver, infeasible, feasible_set_prob, feasible_set, feasible
             
@@ -322,6 +328,8 @@ class subproblem_model(ABC):
 
         # subproblem construction
         self.process_constraints = constraint_evaluator(cfg, G, unit_index, pool=None, constraint_type='process')
+        if cfg.case_study.eval_cost: 
+            self.node_costs = constraint_evaluator(cfg, G, unit_index, pool=None, constraint_type='node_cost')
         if mode == 'forward':
             self.forward_constraints = constraint_evaluator(cfg, G, unit_index, pool=cfg.solvers.evaluation_mode.forward, constraint_type='forward')
             self.backward_constraints = None
@@ -332,6 +340,8 @@ class subproblem_model(ABC):
             self.forward_constraints = None
             self.forward_decentralised = None
             self.root_node_constraint = None
+            if self.cfg.case_study.eval_cost:
+                self.backward_cost_to_go = constraint_evaluator(cfg, G, unit_index, pool=cfg.solvers.evaluation_mode.cost_to_go, constraint_type='backward_cost_to_go')
         elif (mode in ['forward-backward','backward-forward']):
             self.forward_constraints = constraint_evaluator(cfg, G, unit_index, pool=cfg.solvers.evaluation_mode.forward, constraint_type='forward')
             if self.cfg.method == 'decomposition_constraint_tuner': 
@@ -360,10 +370,10 @@ class subproblem_model(ABC):
         # dataset initialisation 
         self.input_output_data = None 
         self.constraint_data = None 
+        self.ctg_values = None
         self.probability_map_data = None
         self.mode = mode
         self.max_devices = max_devices
-
 
     def determine_batches(self, data, batch_size):
         """ Method to determine the number of batches"""
@@ -378,12 +388,15 @@ class subproblem_model(ABC):
         constraints = []
         for i in range(n_batches):
             batch = data[i*batch_size:(i+1)*batch_size,:]
-            constraints.append(self.subproblem_constraint_evals(batch, p))
+            output = self.subproblem_constraint_evals(batch, p)
+            constraints.append(output)
             del batch
+
             if (data.shape[0]>50) and (n_batches % (i+1) == 0): logging.info(f'Batch {i} of {n_batches} evaluated')
 
         return np.concatenate(constraints, axis=0)
-        
+
+
     def subproblem_constraint_evals(self, d, p):
         # unit forward pass
         outputs = self.unit_forward_evaluator.get_constraints(d, p) # outputs (rank 3 tensor if we have parametric uncertainty in the unit, n_d \times n_theta \times n_g)
@@ -394,8 +407,10 @@ class subproblem_model(ABC):
         # evaluate process constraints 
         if outputs is not None:
             process_constraint_evals = self.process_constraints.evaluate(unit_design, unit_inputs, aux_args, outputs) # process constraints (rank 3 tensor n_d \times n_theta \times n_g)
+            node_cost_evals = self.node_costs.evaluate(unit_design, unit_inputs, aux_args, outputs) if self.cfg.case_study.eval_cost else None
         else:
             process_constraint_evals = None
+            node_cost_evals = None
 
         # evaluate feasibility upstream
         if (self.forward_constraints is not None) and (self.G.in_degree(self.unit_index) > 0):
@@ -457,7 +472,22 @@ class subproblem_model(ABC):
         else:
             decentralised_root_constraint_evals = None
 
-
+        # Evaluate rewards
+        if node_cost_evals is not None:
+            if self.G.out_degree(self.unit_index) > 0:
+                start_time = time.time()
+                ctg_function_evals = self.backward_cost_to_go.evaluate(outputs, aux_args)
+                if ctg_function_evals.ndim == 1:
+                    ctg_function_evals = ctg_function_evals.reshape(-1,1)
+                if ctg_function_evals.ndim == 2:
+                    ctg_function_evals = jnp.expand_dims(ctg_function_evals, axis=1)
+                ctg_target = node_cost_evals + self.cfg.case_study.discount_factor * ctg_function_evals
+                end_time = time.time()
+                execution_time = end_time - start_time
+                logging.info(f'execution_time_ctg_function: {execution_time}')
+            else:
+                ctg_target = node_cost_evals
+            self.ctg_values = update_data(self.ctg_values, d, p, ctg_target)
         # update input output data for forward surrogate model
         # TODO check all this works, turn off data collection for forward on decentrlaised and check backoffs
         if (self.cfg.surrogate.forward_evaluation_surrogate and self.mode != 'backward-forward'):
@@ -473,27 +503,27 @@ class subproblem_model(ABC):
         if (self.cfg.surrogate.probability_map and self.mode != 'backward-forward'):
             self.probability_map_data = update_data(self.probability_map_data, d, p, self.SAA(cons_g))  # updating dataset for surrogate model of forward unit evaluation
 
-        del process_constraint_evals, forward_constraint_evals, backward_constraint_evals, concat_obj, outputs, decentralised_constraint_evals
+        del process_constraint_evals, forward_constraint_evals, backward_constraint_evals, concat_obj, decentralised_constraint_evals
 
         return cons_g
-
+    
     def s(self, d, p):
         #if (self.forward_constraints is not None) and (self.G.in_degree(self.unit_index) > 0) and (self.cfg.solvers.evaluation_mode.forward == 'ray'):
         #   ray.init(runtime_env={"working_dir": get_original_cwd(), 'excludes': ['/multirun/', '/outputs/', '/config/', '../.git/']}, num_cpus=10)  # , ,
         # evaluate feasibility and then update classifier data and number of function evaluations
         g = self.evaluate_subproblem_batch(d, self.max_devices, p)
         # shape parameters for returning constraint evaluations to DEUS
+
         n_theta, n_g = g.shape[-2], g.shape[-1]
         # adding function evaluations
         self.function_evaluations += g.shape[0]*g.shape[1]
+
         # return information for DEUS
-        #if (self.forward_constraints is not None) and (self.G.in_degree(self.unit_index) > 0)  and (self.cfg.solvers.evaluation_mode.forward == 'ray'):
-        #   ray.shutdown()
         return [g[i,:,:].reshape(n_theta,n_g) for i in range(g.shape[0])]
         
     def get_constraints(self, d, p):
         return self.s(d, p)
-    
+
     def SAA(self, g):
         
         if self.cfg.samplers.notion_of_feasibility == 'positive':
@@ -508,8 +538,6 @@ class subproblem_model(ABC):
             
         return prob_feasible.reshape(g.shape[0],1)
     
-
-    
 def update_data(data, *args):
     """ Method to update the data holder with new data"""
     if data is None:
@@ -518,3 +546,47 @@ def update_data(data, *args):
         data.add(*args)
 
     return data
+
+def ctg_surrogate_construction(cfg, graph, node, iterate):
+    # train the model
+    ctg_surrogate = surrogate(graph, node, cfg, ('regression', cfg.surrogate.regressor_selection, 'ctg_surrogate'), iterate)
+    ctg_surrogate.fit(node=None)
+    if cfg.solvers.standardised:
+        query_model = ctg_surrogate.get_model('standardised_model')
+    else:
+        query_model = ctg_surrogate.get_model('unstandardised_model')
+
+    # store the trained model in the graph
+    graph.nodes[node]["ctg_surrogate"] = query_model
+    graph.nodes[node]['ctg_surrogate_x_scalar'] = ctg_surrogate.trainer.get_model_object('standardisation_metrics_input')
+    graph.nodes[node]['ctg_surrogate_serialised'] = ctg_surrogate.get_serailised_model_data()
+
+    del ctg_surrogate
+    
+    return
+
+def get_ctg_training_data(graph, node, model, cfg):
+    x_d_list = model.ctg_values.d[cfg.surrogate.index_on:]
+    y_ctg_list = model.ctg_values.y[cfg.surrogate.index_on:]
+    y_d_list = model.constraint_data.y[cfg.surrogate.index_on:]
+
+    # Apply feasibility per batch and collect feasible samples
+    x_feasible_list = []
+    y_feasible_list = []
+
+    for x_batch, y_ctg_batch, y_d_batch in zip(x_d_list, y_ctg_list, y_d_list):
+        _, _, feasible_indices = apply_feasibility([x_batch], [y_d_batch], cfg, node, cfg.formulation).get_feasible(return_indices=True)
+        feasible_idx = feasible_indices[0].squeeze()
+        # Convert boolean mask to integer indices if needed
+        if feasible_idx.dtype == bool:
+            feasible_idx = jnp.where(feasible_idx)[0]
+        x_feasible_list.append(x_batch[feasible_idx])
+        y_feasible_list.append(y_ctg_batch[feasible_idx])
+
+    # Concatenate all feasible samples
+    x_feasible = jnp.vstack(x_feasible_list) if x_feasible_list else jnp.empty((0, x_d_list[0].shape[1]))
+    y_feasible = jnp.vstack(y_feasible_list) if y_feasible_list else jnp.empty((0, y_ctg_list[0].shape[1]))
+
+    graph.nodes[node]["ctg_func_training"] = dataset(X=x_feasible, y=y_feasible)
+    return graph
+

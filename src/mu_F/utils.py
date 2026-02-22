@@ -1,4 +1,7 @@
-import pickle
+import cloudpickle as pickle
+
+import inspect
+from functools import wraps
 from abc import ABC
 import jax.numpy as jnp
 from typing import List
@@ -39,7 +42,8 @@ def save_graph(G, mode):
     # Save the graph to a file
     filename = f"graph_{mode}.pickle"
     with open(filename, 'wb') as f:
-        pickle.dump(G, f, protocol=pickle.HIGHEST_PROTOCOL)
+        protocol = getattr(pickle, "HIGHEST_PROTOCOL", getattr(pickle, "DEFAULT_PROTOCOL", 4))
+        pickle.dump(G, f, protocol=protocol)
     return
 
 
@@ -248,3 +252,21 @@ class apply_feasibility(feasibility_base):
         else:
             return  jnp.vstack(X), jnp.vstack(labels), cond
 
+def requires_param(param_name: str):
+    def deco(fn):
+        sig = inspect.signature(fn)
+        if param_name not in sig.parameters:
+            raise TypeError(f"{fn.__name__} must have parameter '{param_name}', got {sig}")
+        return fn
+    return deco
+
+def check_requires(fn, param_name: str) -> bool:
+    """True if `fn` can accept `param_name` (explicitly or via **kwargs)."""
+    sig = inspect.signature(fn)
+    params = sig.parameters
+
+    if param_name in params:
+        return True
+
+    # If it has **kwargs, it can accept it too
+    return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())

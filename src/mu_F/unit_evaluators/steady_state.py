@@ -3,7 +3,7 @@ import jax.numpy as jnp
 from functools import partial
 from mu_F.unit_evaluators.explicit_fn import case_studies
 
-def unit_steady_state(design_params, u, aux, dd_params, uncertain_params, cfg, node):   
+def unit_steady_state(design_params, u, aux, dd_params, uncertain_params, cfg, node, graph=None):   
 
     if design_params.ndim < 2:
         design_params = jnp.expand_dims(design_params, axis=0)
@@ -27,8 +27,11 @@ def unit_steady_state(design_params, u, aux, dd_params, uncertain_params, cfg, n
     collected_p = jnp.concatenate([u, dd_params], axis=-1)
 
     # defining the dynamics
-    term = case_studies[cfg.case_study.case_study][node]
+    if cfg.case_study.eval_cost:
+        term = partial(case_studies[cfg.case_study.case_study](graph.env), node = node)
+    else:
+        term = case_studies[cfg.case_study.case_study][node]
 
-    return term(cfg, design_params, collected_p, aux).squeeze()
+    return term(cfg, design_params, collected_p, aux, uncertain_params).squeeze()
 
 

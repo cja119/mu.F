@@ -30,7 +30,7 @@ class reconstruction(reconstruct_base):
         self.live_sets_nd_proj = construct_cartesian_product_of_live_sets(graph)
         self.ls_holder = live_set(cfg, cfg.samplers.notion_of_feasibility)
         self.feasible = False
-        self.post_process_bool = cfg.reconstruction.post_process[iterate]
+        self.post_process_bool = cfg.reconstruction.post_process#[iterate]
         self.iterate = iterate
         self.desired_edge_index = list(self.graph.nodes)[-1]
         self.desired_regressor_data = live_set(cfg, cfg.samplers.notion_of_feasibility)

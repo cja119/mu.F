@@ -7,7 +7,7 @@ import numpy as np
 from omegaconf import DictConfig
 
 
-from mu_F.surrogate.data_utils import binary_classifier_data_preparation, regression_node_data_preparation, forward_evaluation_data_preparation
+from mu_F.surrogate.data_utils import binary_classifier_data_preparation, ctg_data_preparation, regression_node_data_preparation, forward_evaluation_data_preparation
 from mu_F.surrogate.gp_utils import train as train_gp
 from mu_F.surrogate.gp_utils import build_gp    
 from mu_F.surrogate.nn_utils import hyperparameter_selection as train_ann
@@ -39,6 +39,7 @@ class trainer_base(ABC):
 class trainer(trainer_base):
     def __init__(self, graph, unit_index, cfg, model_type, iterate, data_str: str = 'classifier_training'):
         super().__init__(graph, unit_index, cfg, model_type, iterate, data_str)
+        self.x_scalar_override = None
 
     def get_model_object(self, string: str) -> None:
         if string == 'standardised_model':
@@ -53,7 +54,7 @@ class trainer(trainer_base):
     def load_trainer_methods(self) -> None:
         if self.model_subclass == 'ANN':
             if self.model_class == 'regression':
-                self.trainer = partial(train_ann, model_type='regressor')
+                self.trainer = partial(train_ann, model_type='regressor', x_scalar_override=self.x_scalar_override)
             elif self.model_class == 'classification':
                 self.trainer = partial(train_ann, model_type='classifier')
         elif self.model_subclass == 'GP':
@@ -64,10 +65,12 @@ class trainer(trainer_base):
 
     def get_data(self, successor_node: int = None) -> None:
         
-        if (self.model_class == 'regression') and (self.model_surrogate != 'forward_evaluation_surrogate'): # TODO make sure this method exists and acts on the right component of the graph e.g. edge or node
+        if (self.model_class == 'regression') and (self.model_surrogate != 'forward_evaluation_surrogate')  and (self.model_surrogate != 'ctg_surrogate'): # TODO make sure this method exists and acts on the right component of the graph e.g. edge or node
             dataset = regression_node_data_preparation(self.graph, self.unit_index, self.cfg, data_str=self.data_str)
         elif (self.model_class == 'regression') and (self.model_surrogate == 'forward_evaluation_surrogate'):
             dataset = forward_evaluation_data_preparation(self.graph, self.unit_index, self.cfg, successor_node)
+        elif (self.model_class == 'regression') and (self.model_surrogate == 'ctg_surrogate'):
+            dataset = ctg_data_preparation(self.graph, self.unit_index, self.cfg)
         elif self.model_class == 'classification': # this is only used for determining node data i..e in approximating feasibility
             data_points, labels = binary_classifier_data_preparation(self.graph, self.unit_index, self.cfg, data_str=self.data_str)
             if self.model_subclass == 'SVM' : dataset = (data_points, labels)
@@ -80,6 +83,10 @@ class trainer(trainer_base):
             dataset = self.get_data() # TODO
         else:
             dataset = self.get_data(successor_node=node)
+
+
+        if self.model_surrogate == 'ctg_surrogate' and self.model_subclass == 'ANN':
+            self.x_scalar_override = self.graph.nodes[self.unit_index].get('classifier_x_scalar')
 
         self.load_trainer_methods()
         model, args, serialised_data = self.trainer(self.cfg, dataset, self.cfg.surrogate.num_folds) 
