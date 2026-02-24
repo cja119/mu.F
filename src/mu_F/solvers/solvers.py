@@ -130,8 +130,9 @@ class jax_box_nlp_solver(solver_base):
     
 
 class parallel_casadi_box_eq_nlp_solver(solver_base):
-    def __init__(self, cfg, objective_func, constraints, bounds):
+    def __init__(self, cfg, objective_func, constraints, bounds, ctg=None):
         super().__init__(cfg)
+        self.ctg = ctg
         self.solver, self.problem_data = self.construct_solver(objective_func, constraints, bounds)
 
     def __call__(self, initial_guesses):
@@ -142,7 +143,7 @@ class parallel_casadi_box_eq_nlp_solver(solver_base):
         self.n_d = len(bounds[0])
         self.bounds = bounds
         solver = ray.remote(ray_casadi_multi_start) # , num_cpus=1)
-        problem_data = {'objective_func': objective_func, 'constraints': constraints, 'bounds': bounds}
+        problem_data = {'objective_func': objective_func, 'constraints': constraints, 'bounds': bounds, 'ctg': self.ctg}
         problem = {'data': problem_data}
         return solver, problem
     

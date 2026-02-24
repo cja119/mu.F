@@ -43,17 +43,30 @@ def _set_ray(method, max_devices):
             include_dashboard=False, 
             runtime_env={"working_dir": get_original_cwd(), 'excludes': ['/multirun/', '/outputs/', '/config/', '../.git/']},
             num_cpus=min(max_devices, multiprocessing.cpu_count())) 
+        logging.info(f"Ray initialized with {ray.available_resources()['CPU']} CPUs.")
+    return None
         
 
 def _kill_ray():
     import ray
     if ray.is_initialized():
         ray.shutdown()
+        logging.info("Ray shutdown successfully.")
+    return None
 
 def _set_jax(max_devices):
     import jax
+    import os
+    
+    os.environ["XLA_FLAGS"] = f"--xla_force_host_platform_device_count={max_devices}"
+    os.environ["JAX_PLATFORMS"] = "cpu"
+    os.environ["JAX_PLATFORM_NAME"] = "cpu"
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
     jax.config.update('jax_platform_name', 'cpu')
-    return len(jax.devices('cpu'))
+    n_jax_devices = len(jax.devices())
+    logging.info(f"Jax maximum devices set to: {n_jax_devices}")
+    return n_jax_devices
 
 @hydra.main(config_path="config", config_name="integrator")
 def main(cfg: DictConfig) -> None:
@@ -62,7 +75,7 @@ def main(cfg: DictConfig) -> None:
     _set_ray(cfg.method, cfg.max_devices)
     max_devices = _set_jax(cfg.max_devices)
 
-    from mu_F.direct import apply_direct_method
+    from mu_F.direct.constructor import apply_direct_method
     from mu_F.decomposition import decomposition, decomposition_constraint_tuner
     from mu_F.constraints.constructor import constraint_evaluator
     from mu_F.cs_assembly import case_study_constructor, make_markov
@@ -85,14 +98,13 @@ def main(cfg: DictConfig) -> None:
         # run the decomposition
         G = decomposition(cfg, G, precedence_order, mode, max_devices).run()
         # finished decomposition                    
-    elif cfg.method == 'direct':
+    elif cfg.method in ['direct', 'monolithic']:
         # run the decomposition
-        feasible, infeasible = apply_direct_method(cfg, G)
-        save_graph(G.copy(), 'direct_complete')
+        outs = apply_direct_method(cfg, G, method=cfg.method)
+        logging.info(f"Direct method {cfg.method} completed with outputs: {outs}")
+        save_graph(G.copy(), f'{cfg.method}_complete')
     elif cfg.method == 'decomposition_constraint_tuner':
         decomposition_constraint_tuner(cfg, G, max_devices)
-    elif cfg.method == 'monolithic':
-        constraint_evaluator(cfg, G, node=None, pool=None, constraint_type='monolithic')
 
     else:
         # raise an error

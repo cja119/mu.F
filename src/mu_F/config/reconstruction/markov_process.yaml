@@ -2,7 +2,8 @@
 
 reconstruct: 
   - True
-  - True
+  - False
+  - False
 
 post_process_sampler: True # if True, use sampling scheme, if False use local SIP scheme
 

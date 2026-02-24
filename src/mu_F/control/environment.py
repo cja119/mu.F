@@ -44,16 +44,10 @@ class MarkovEnvironment(ABC):
 
         # Build the configuration for the environment
         self.cfg = self._build_cfg(**kwargs)
-        self._initialise_env(self.cfg)
         self._set_dim(**kwargs)
-
-        simulator_fn = lambda x, u, z: kwargs['simulator'](kwargs['env_params'], x, u, z)
-        self._simulate_fn = lambda x, u, z, node=None: self.simulate(simulator_fn, x, u, z, node=node)
-        
-        self.model_cfg = self.cfg.model if hasattr(self.cfg, "model") else self.cfg
-        self.current_step = 0
-        self.max_steps = self.model_cfg.number_repeats
-        self._cache = self.model_cfg.memory
+        self._init_model()
+        self._set_infeas_sign()
+        self._set_sim_fn(**kwargs)
         
 
     # ---- Mu-F Interface ---- #
@@ -105,13 +99,12 @@ class MarkovEnvironment(ABC):
         Returns:
             - output: The output vector containing observations, constraint values, and costs
         """
-        return fn(x, u, z)
+        return fn(x, u, z, node)
 
     # ---- Rollout Methods ---- #
     def reset(self):
         """Reset the environment to initial state"""
         self.current_step = 0
-        self._initialise_env(self.cfg)
         return jnp.array(self.cfg.model.root_node_inputs)
     
     def step(self, u, v, z):
@@ -140,6 +133,7 @@ class MarkovEnvironment(ABC):
 
         return  y, reward, term, trunc, {'constraint_values': x}
     
+    # ---- Internal Methods ---- #
     def _termination_conditions(self, x):
         """Termination conditions for the environment"""
         test = [self._infeas_sign(x_i, self._feas_thresh) for x_i in x]
@@ -179,16 +173,25 @@ class MarkovEnvironment(ABC):
             self._feas_thresh = - self._feas_thresh
         else:
             self._infeas_sign = ge
+        return None
 
-    def _initialise_env(self, cfg):
-        """Initialise the environment """
-        model_cfg = cfg.model 
-        self._feas_thresh = model_cfg.feas_thresh
-        self._set_infeas_sign()
-        return model_cfg
-    
+    def _init_model(self):
+        """Initialise any model-specific parameters"""
+        self.current_step = 0
+        self.max_steps = self.cfg.case_study.num_nodes
+        self._feas_thresh = self.cfg.model.feas_thresh
+        self._cache = self.cfg.model.memory
+        return None
+
     def _set_dim(self, **kwargs):
         """Set the shape dict for the environment """
         for attr in ('X_SIZE', 'U_SIZE', 'F_SIZE', 'G_SIZE', 'Z_SIZE', 'L_SIZE', 'PHI_SIZE'):
             val = kwargs.get(attr, getattr(self.__class__, attr))
             setattr(self.__class__, attr, val)
+        return None
+    
+    def _set_sim_fn(self, **kwargs):
+        """Set the simulation function for the environment"""
+        simulator_fn = lambda x, u, z, node=None: kwargs['simulator'](kwargs['env_params'], node=node, x=x, u=u, z=z)
+        self._simulate_fn = lambda x, u, z, node=None: self.simulate(simulator_fn, x, u, z, node=node)
+        return None

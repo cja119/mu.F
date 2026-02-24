@@ -55,7 +55,11 @@ class decomposition:
             k = len(operations)
             operations[k] = partial(apply_decomposition, precedence_order=self.precedence_order, mode=m, max_devices=self.max_devices)
             visualisations[k] = partial(visualiser, mode=m, string='decomposition', path=f'decomposition_{m}_iterate_{iteration}')
-
+        elif m == 'rollout':
+            operations, visualisations = {}, {}
+            k = len(operations)
+            operations[k] = partial(apply_decomposition, precedence_order=self.original_precedence_order.copy(), mode=m, max_devices=self.max_devices)
+            visualisations[k] = partial(visualiser, mode=m, string='rollout', path=f'rollout_iterate_{iteration}')
         return operations, visualisations
     
     def run(self, iterations=0):
@@ -73,7 +77,10 @@ class decomposition:
             self.update_precedence_order(self.mode[i])
 
         return self.G
-        
+
+    def restore_precedence_order(self):
+        self.precedence_order = self.original_precedence_order.copy()
+        return    
 
     def reconstruct(self, m, i):
         # network simulator
@@ -94,8 +101,6 @@ class decomposition:
         visualiser(self.cfg, self.G, df, 'reconstruction', path=f'reconstruction_{m}_iterate_{i}').run()
         df.to_excel(f'inside_samples_{m}_iterate_{i}.xlsx')
         save_graph(self.G.copy(), m + '-reconstructed'+ '_iterate_' + str(i))
-
-        return
 
     def update_precedence_order(self, m):
         precedence_order = self.original_precedence_order.copy()

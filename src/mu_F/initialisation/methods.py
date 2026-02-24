@@ -59,9 +59,7 @@ class initialisation(ABC):
             selected_params = [choice(PRNGKey(0), a, shape=(max_parameter_samples,), replace=True, p=weight, axis=0) for a, weight in zip(list_of_params, list_of_weights)]
         elif self.cfg.formulation == 'deterministic':
             param_best_estimate = self.cfg.case_study.parameters_best_estimate
-            if self.cfg.case_study.case_study == 'markov_process':
-                param_best_estimate = [param_best_estimate for _ in range(self.cfg.case_study.num_nodes)]
-
+            
             selected_params = [jnp.array([param]) for param in param_best_estimate]
         
 

@@ -906,7 +906,7 @@ class forward_root_constraint_decentralised_evaluator(coupling_surrogate_constra
             except:
                 return decisions
 
-class current_constraint_evaluator(backward_constraint_evaluator_general):
+class current_constraint_surrogate(backward_constraint_evaluator_general):
     """
     A current node surrogate constraint evaluator
     - solved using casadi interface with jax and IPOPT
@@ -955,7 +955,41 @@ class current_constraint_evaluator(backward_constraint_evaluator_general):
             costs.append(cost)
             status_flags.append(status)
 
-        return jnp.concatenate([jnp.array(v).reshape(-1,1) for v in results], axis=-1), jnp.array(costs), np.array(status_flags)
+        return jnp.concatenate(results, axis=0), jnp.array(costs), np.array(status_flags)
+
+    def ray_evaluation(self, solver, max_devices, solver_processing):
+        # determine the batch size
+        workers, remainder = determine_batches(len(solver), max_devices)
+        # split the problems
+        solver_batches = create_batches(workers, solver)
+
+        # parallelise the batch
+        result_dict = {}
+        evals = 0
+        for i, solve in enumerate(solver_batches): 
+            results = ray.get([sol.remote(d['id'], d['data'], d['data']['cfg']) for sol, d in  solve]) # set off and then synchronize before moving on
+            for j, result in enumerate(results):
+                digest = solver_processing.solve_digest(*result)
+                result_dict[evals + j] = (
+                    self.destandardise_model_decisions(digest['decision_variables'], self.node),
+                    digest.get('success', False),
+                    digest.get('message', None),
+                    digest.get('objective')
+                )
+            evals += j+1
+
+        del solver_batches, results
+
+        decisions = []
+        costs = []
+        status_flags = []
+        for _, (decision, success, msg, cost) in result_dict.items():
+            decisions.append(jnp.array([decision]).reshape(1,-1))
+            costs.append(cost)
+            status_flags.append(success)
+
+        return jnp.concatenate(decisions, axis=0), jnp.array(costs), jnp.array(status_flags)
+
 
     def serial_evaluation(self, solver, max_devices, solver_processing):
 
@@ -970,9 +1004,9 @@ class current_constraint_evaluator(backward_constraint_evaluator_general):
         for i, solve in enumerate(solver_batches): 
             results = [sol(d['id'], d['data'], d['data']['cfg']) for sol, d in  solve] # set off and then synchronize before moving on
             for j, result in enumerate(results):
-                digest = solver_processing.solve_digest(*result, return_results=True)
+                digest = solver_processing.solve_digest(*result)
                 result_dict[evals + j] = (
-                    self.destandardise_model_decisions(digest['result'], self.node),
+                    self.destandardise_model_decisions(digest['decision_variables'], self.node),
                     digest.get('success', False),
                     digest.get('message', None),
                     digest.get('objective')
@@ -1098,7 +1132,7 @@ class current_constraint_evaluator(backward_constraint_evaluator_general):
         dec = dec[opt_idx]
         return (dec * std) + mean
 
-class cost_to_go_evaluator(current_constraint_evaluator):
+class current_cost_surrogate(current_constraint_surrogate):
     """
     A Q-learning based evaluator for the current node
     """
@@ -1107,6 +1141,10 @@ class cost_to_go_evaluator(current_constraint_evaluator):
     
 
     def prepare_forward_problem(self, inputs):
+
+        if inputs is None:
+            inputs = jnp.empty((1, 0))
+            
         problem_data = super().prepare_forward_problem(inputs)
 
         node, graph, cfg = self.node, self.graph, self.cfg
@@ -1143,7 +1181,75 @@ class cost_to_go_evaluator(current_constraint_evaluator):
 
             
         return problem_data
+
+    def serial_evaluation(self, solver, max_devices, solver_processing):
+
+        # determine the batch size
+        workers, remainder = determine_batches(len(solver), 1)
+        # split the problems
+        solver_batches = create_batches(workers, solver)
+
+        # parallelise the batch
+        result_dict = {}
+        evals = 0
+        for i, solve in enumerate(solver_batches): 
+            results = [sol(d['id'], d['data'], d['data']['cfg'], ctg=True) for sol, d in  solve] # set off and then synchronize before moving on
+            for j, result in enumerate(results):
+                digest = solver_processing.solve_digest(*result)
+                result_dict[evals + j] = (
+                    self.destandardise_model_decisions(digest['decision_variables'], self.node),
+                    digest.get('success', False),
+                    digest.get('message', None),
+                    digest.get('objective')
+                )
+            evals += j+1
+
+        del solver_batches, results
+
+        decisions = []
+        costs = []
+        status_flags = []
+        for _, (decision, success, msg, cost) in result_dict.items():
+            decisions.append(jnp.array([decision]).reshape(1,-1))
+            costs.append(cost)
+            status_flags.append(success)
+
+        return jnp.concatenate(decisions, axis=0), jnp.array(costs), jnp.array(status_flags)
     
+
+    def ray_evaluation(self, solver, max_devices, solver_processing):
+        # determine the batch size
+        workers, remainder = determine_batches(len(solver), max_devices)
+        # split the problems
+        solver_batches = create_batches(workers, solver)
+
+        # parallelise the batch
+        result_dict = {}
+        evals = 0
+        for i, solve in enumerate(solver_batches): 
+            results = ray.get([sol.remote(d['id'], d['data'], d['data']['cfg'], ctg=True) for sol, d in  solve]) # set off and then synchronize before moving on
+            for j, result in enumerate(results):
+                digest = solver_processing.solve_digest(*result)
+                result_dict[evals + j] = (
+                    self.destandardise_model_decisions(digest['decision_variables'], self.node),
+                    digest.get('success', False),
+                    digest.get('message', None),
+                    digest.get('objective')
+                )
+            evals += j+1
+
+        del solver_batches, results
+
+        decisions = []
+        costs = []
+        status_flags = []
+        for _, (decision, success, msg, cost) in result_dict.items():
+            decisions.append(jnp.array([decision]).reshape(1,-1))
+            costs.append(cost)
+            status_flags.append(success)
+
+        return jnp.concatenate(decisions, axis=0), jnp.array(costs), jnp.array(status_flags)
+
     def wrapper(self, inputs, aux):
         """ first prepare the problem set up, 
         then evaluate the constraints in parallel using ray.
@@ -1169,7 +1275,7 @@ class cost_to_go_evaluator(current_constraint_evaluator):
             costs.append(self.rescale_cost(cost, self.node))
             status_flags.append(status)
 
-        return jnp.concatenate([jnp.array(v).reshape(-1,1) for v in results], axis=-1), jnp.array(costs), np.array(status_flags)
+        return jnp.concatenate(results, axis=0), jnp.array(costs), np.array(status_flags)
     
     def rescale_cost(self, y, node):
         if not self.cfg.solvers.standardised:
@@ -1179,8 +1285,6 @@ class cost_to_go_evaluator(current_constraint_evaluator):
         y_scaler = q_model.get("standardisation_metrics_output")
         y_mean = jnp.asarray(y_scaler.mean)
         y_std = jnp.asarray(y_scaler.std)
-        print(y, y_mean, y_std)
-
         return (jnp.asarray(y) * y_std + y_mean)
 
 

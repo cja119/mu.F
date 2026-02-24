@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy.interpolate import griddata
 import logging
+import re
 
 DEFAULT_DPI = 20
 
@@ -129,7 +130,110 @@ def decomposition_plot(cfg, G, pp, save=True, path='decomposed_pair_grid_plot'):
     if save: pp.savefig(path +'.svg', dpi=DEFAULT_DPI)
 
     return pp
-    
+
+def reconstruction_with_policy_plot(cfg, G, reconstructed_df, policy_data, save=True, path='reconstructed_with_policy'):
+    pp = initializer_cp(reconstructed_df)
+    pp = init_plot(cfg, G, pp, init=False, save=False)
+    pp = decomposition_plot(cfg, G, pp, save=False)
+    pp.map_lower(sns.scatterplot, data=reconstructed_df, edgecolor="k", c="b", linewidth=0.5)
+    pp = add_policy(pp, policy_data, cfg=cfg, color="r", marker="X", size=80)
+    if save:
+        pp.savefig(path + ".svg", dpi=DEFAULT_DPI)
+    return pp
+
+
+def _blank_reconstruction_df(cfg):
+    cols = list(cfg.case_study.design_space_dimensions)
+    return pd.DataFrame([{col: np.nan for col in cols}])
+
+
+def _load_latest_inside_samples():
+    pattern = re.compile(r"^inside_samples_.+_iterate_(\d+)\.xlsx$")
+    candidates = []
+    for fname in os.listdir("."):
+        match = pattern.match(fname)
+        if match:
+            iterate = int(match.group(1))
+            candidates.append((iterate, os.path.getmtime(fname), fname))
+
+    if not candidates:
+        return None, None
+
+    _, _, latest_file = max(candidates, key=lambda x: (x[0], x[1]))
+    df = pd.read_excel(latest_file, index_col=0)
+    return df, latest_file
+
+
+def _rollout_policy_from_graph(cfg, G):
+    cols = list(cfg.case_study.design_space_dimensions)
+    col_to_idx = {name: i for i, name in enumerate(cols)}
+    policy_vec = np.full(len(cols), np.nan, dtype=float)
+
+    for node in G.nodes:
+        if 'rollout_action' not in G.nodes[node]:
+            continue
+
+        action_vec = np.ravel(np.asarray(G.nodes[node]['rollout_action'], dtype=float))
+        node_dims = cfg.case_study.process_space_names[node]
+        if not isinstance(node_dims, (list, tuple)):
+            node_dims = [node_dims]
+
+        for dim_idx, value in enumerate(action_vec):
+            if dim_idx >= len(node_dims):
+                break
+            base_name = str(node_dims[dim_idx])
+            stripped_name = base_name
+            node_prefix = f"n{node}_"
+            if stripped_name.startswith(node_prefix):
+                stripped_name = stripped_name[len(node_prefix):]
+            candidate_cols = [
+                f"{base_name}_node_{node}",
+                f"{base_name}_{node}",
+                base_name,
+                f"{stripped_name}_node_{node}",
+                f"{stripped_name}_{node}",
+                stripped_name,
+            ]
+            col_idx = next((col_to_idx[c] for c in candidate_cols if c in col_to_idx), None)
+            if col_idx is not None:
+                policy_vec[col_idx] = value
+
+    return policy_vec
+
+
+def rollout_with_policy_plot(cfg, G, policy_data=None, save=True, path='rollout_with_policy'):
+    reconstructed_df, source = _load_latest_inside_samples()
+    if reconstructed_df is None:
+        logging.warning("No inside-samples file found. Falling back to blank reconstruction canvas.")
+        reconstructed_df = _blank_reconstruction_df(cfg)
+    else:
+        logging.info(f"Loaded latest inside samples from {source}")
+
+    cols = list(cfg.case_study.design_space_dimensions)
+    missing_cols = [c for c in cols if c not in reconstructed_df.columns]
+    for c in missing_cols:
+        reconstructed_df[c] = np.nan
+    reconstructed_df = reconstructed_df[cols]
+
+    pp = initializer_cp(reconstructed_df)
+    pp = init_plot(cfg, G, pp, init=False, save=False)
+
+    try:
+        pp = decomposition_plot(cfg, G, pp, save=False)
+    except Exception as exc:
+        logging.warning(f"Could not overlay decomposition live sets on rollout plot: {exc}")
+
+    if not reconstructed_df.isna().all().all():
+        pp.map_lower(sns.scatterplot, data=reconstructed_df, edgecolor="k", c="b", linewidth=0.5)
+
+    policy_vec = _rollout_policy_from_graph(cfg, G) if policy_data is None else policy_data
+    pp = add_policy(pp, policy_vec, cfg=cfg, color="r", marker="o", size=90)
+
+    if save:
+        pp.savefig(path + ".svg", dpi=DEFAULT_DPI)
+
+    return pp
+
 def reconstruction_plot(cfg, G, reconstructed_df, save=True, path='reconstructed_pair_grid_plot'):
 
     pp = initializer_cp(reconstructed_df)

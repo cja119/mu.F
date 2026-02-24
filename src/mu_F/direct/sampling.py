@@ -12,8 +12,42 @@ from mu_F.visualisation.visualiser import visualiser
 from mu_F.reconstruction.constructor import reconstruction as reconstruct
 from mu_F.reconstruction.objects import live_set, dataset
 from mu_F.reconstruction.utils import post_process_sampling_setup, post_process_setup
+from mu_F.direct.base import SolveDirect 
 
 from deus import DEUS
+
+
+class DirectSampler(SolveDirect):
+    def __init__(self, cfg, G):
+        super().__init__(cfg, G)
+    
+    def solve(self, problem_data, x0=None):
+        """
+        Solves the problem using the loaded solver and prepared model.
+        """
+        return apply_direct_method(self.cfg, self.G)
+
+    def _load_solver(self):
+        """
+        Loads in solver object
+        """
+        return None
+
+    def _prepare_model(self, graph):
+        """
+        Prepares the model for solving. This is where the monolithic NLP will be built.
+        """
+        return None
+
+    def _get_solution(self, solver_output):
+        """
+        Extracts the solution from the solver output. This is where any necessary post-processing of the solution will be done.
+        """
+        return None
+
+# -------------------------------------------------------------------------------- #
+# ------------------ This Needs Tidying and Itntegration ------------------------- #
+# -------------------------------------------------------------------------------- #
 
 def apply_direct_method(cfg, graph):
 

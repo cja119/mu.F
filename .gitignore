@@ -171,3 +171,5 @@ outputs/
 /feasible*
 
 /src/memray*
+/jobs
+/test_*.py

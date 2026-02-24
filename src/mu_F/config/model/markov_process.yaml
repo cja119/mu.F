@@ -1,7 +1,5 @@
 root_node_inputs:
   - [147717.5, 4286.4]
-
-number_repeats: 2
   
 constraint:
   auxiliary: 'None'
@@ -11,3 +9,5 @@ node_aux: None
 feas_thresh: 0.1
 
 memory: false
+
+model_version: null

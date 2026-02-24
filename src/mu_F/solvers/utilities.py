@@ -4,6 +4,8 @@ import jax.numpy as jnp
 import ray 
 from functools import partial
 from scipy.stats import qmc
+from collections import deque
+import time
 
 from mu_F.surrogate.surrogate import surrogate_reconstruction
 from mu_F.solvers.callbacks import casadify_forward, casadify_reverse
@@ -84,13 +86,44 @@ def construct_model(problem_data, cfg, supervised_learner:str, model_type:str, m
     """
     return surrogate_reconstruction(cfg, (supervised_learner, model_type, model_surrogate), problem_data).rebuild_model()
 
-def generate_initial_guess(n_starts, n_d, bounds):
+def generate_initial_guess(n_starts, n_d, bounds, seed=None):
     n_d = len(bounds[0])
     lower_bound = bounds[0]
     upper_bound = bounds[1]
-    sobol_samples = qmc.Sobol(d=n_d, scramble=True).random(n_starts)
+    sobol_samples = qmc.Sobol(d=n_d, scramble=True, seed=seed).random(n_starts)
     return jnp.array(lower_bound) + (jnp.array(upper_bound) - jnp.array(lower_bound)) * sobol_samples
 
+def rejection_sample_initial_guess(n_starts, n_d, bounds, constraints, max_time = 0.5, seed=None):
+   """
+   We use this function as a brief pre-solve step to get the NLP solver to start with some feasible points.
+   """
+
+   feasible_guesses = deque()
+   n_req = n_starts
+   start_time = time.time()
+
+   while len(feasible_guesses) < n_starts and (time.time() - start_time) < max_time:
+      
+      # Generate sobol sequences and then reject infeasible
+      guess_batch = generate_initial_guess(n_req * 100, n_d, bounds, seed=seed)
+      batch_eval = jnp.hstack([constraint(guess_batch) for constraint in constraints.values()]) # N_batch, n_g
+      feasible_mask = jnp.all(batch_eval <= 0, axis=-1).squeeze() # N_batch,1 -> N_batch
+      feasible_guesses.extend(guess_batch[feasible_mask])
+
+      
+      seed = hash((42, seed)) % (2**32)
+      
+      if len(feasible_guesses) >= n_starts:
+         break
+      
+      n_req = n_starts - len(feasible_guesses)
+
+   
+   # If iter lim exceeded, fall back.
+   if len(feasible_guesses) < n_starts:
+      feasible_guesses.extend(guess_batch[:n_req])
+ 
+   return jnp.array(list(feasible_guesses))[:n_starts,:]
 
 def build_constraint_functions(cfg, problem_data):
   # get constraint functions and define masking of the inputs
@@ -149,7 +182,7 @@ def unpack_problem_data(problem_data):
     lhs = problem_data['eq_lhs']
     rhs = problem_data['eq_rhs']
     n_d = initial_guess.shape[1]
-    n_starts = initial_guess.shape[0]
+    n_starts = initial_guess.shape[0] 
 
     return initial_guess, bounds, lhs, rhs, n_d, n_starts
 

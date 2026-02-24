@@ -46,7 +46,7 @@ SHAPE_DICT = {
 
 @partial(jax.jit, static_argnums=(0,))
 def simulator(
-    param_dict, node, x: jnp.ndarray, u: jnp.ndarray, z: jnp.ndarray = None
+    param_dict, node,  x: jnp.ndarray, u: jnp.ndarray, z: jnp.ndarray = None
 ) -> jnp.ndarray:
     """
     Combined simulator for the H2 Export model.
@@ -55,8 +55,10 @@ def simulator(
     _hydrogen_storage = x[..., 0]
     _vector_throughput = x[..., 1]
     _renewable_energy = z[..., 0] if z is not None else param_dict["renewable_energy_value"]
-    vector_throughput = u[..., 0]
-    hydrogen_throughput = u[..., 1]
+    train_1_throughput = u[..., 0]
+    train_2_throughput = u[..., 1]
+    train_3_throughput = u[..., 2]
+    hydrogen_throughput = u[..., 3]
 
     # Simulate the model dynamics here
     _active_trains = number_active_trains_eq(

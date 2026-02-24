@@ -1,4 +1,6 @@
 from abc import ABC
+
+from jax.random import PRNGKey, choice
 from hydra.utils import get_original_cwd
 
 import jax.numpy as jnp
@@ -26,7 +28,6 @@ from mu_F.utils import save_graph
 
 
 
-
 class apply_decomposition:
     def __init__(self, cfg, graph, precedence_order, mode:str="forward", iterate=0, max_devices=1, total_iterates=1):
         self.cfg = cfg
@@ -45,55 +46,76 @@ class apply_decomposition:
 
         if mode == "backward" or mode == "forward-backward":
             nodes = reversed(precedence_order.copy())
-        elif mode == "forward" or mode == "backward-forward":
-            nodes = precedence_order.copy()
+        elif mode == "forward" or mode == "backward-forward" or mode == 'rollout':
+            nodes = self.precedence_order.copy()
         else:
             raise ValueError(f"Mode {mode} not recognized. Please use 'forward', 'backward' or 'forward-backward'.")
         
+        node_input = None
+        r_cost = 0.0
+        
         # Iterate over the nodes and apply nested sampling
         for node in nodes:
-            #if cfg.solvers.evaluation_mode.forward == 'ray':  ray.init(runtime_env={"working_dir": get_original_cwd(), 'excludes': ['/multirun/', '/outputs/', '/config/']})
             logging.info(f'------- Characterising node {node} according to precedence order -------')
-            # define model for deus
             model = subproblem_model(node, cfg, graph, mode=mode, max_devices=max_devices)
-            # create problem sheet according to cfg 
-            problem_sheet = create_problem_description_deus(cfg, model, graph, node, mode) 
-            # solve extended DS using NS
-            solver =  construct_deus_problem(DEUS, problem_sheet, model)
-            solver.solve()
-            if cfg.method == 'decomposition_constraint_tuner': graph.nodes[node]['log_evidence'] = solver.get_log_evidence()
-            feasible, infeasible = solver.get_solution()
-            feasible_set, feasible_set_prob = feasible[0], feasible[1]
-            if feasible_set.size == 0:
-                logging.warning(f"No feasible set found for node {node}. Terminating simulation.")
-                graph.graph['terminate'] = True
-                return graph
-            # update the graph with the number of function evaluations
-            graph.nodes[node]["fn_evals"] += model.function_evaluations
-            # estimate box for bounds for DS downstream
-            process_data_forward(cfg, graph, node, model, feasible_set, mode)
-            # train constraints for DS downstream using data now stored in the graph
-            if (mode in ['forward'] and graph.out_degree(node) != 0) or (mode in ['backward'] and graph.in_degree(node) == 0): 
-                if cfg.surrogate.forward_evaluation_surrogate: surrogate_training_forward(cfg, graph, node)
+            if mode == 'rollout':
+                if node_input is not None:
+                
+                    if node_input.ndim < 3: node_input = jnp.expand_dims(node_input, axis=0)
 
-                # train reward function
-            if cfg.case_study.eval_cost:
-                graph = get_ctg_training_data(graph, node, model, cfg)
+                    node_input = jnp.squeeze(node_input, axis=1) # Remove uncertainty dimensions for uncertain case
+                    
+                outputs, n_cost, decision = model.rollout(node_input)
+                graph.nodes[node]["rollout_action"] = np.asarray(decision)
+                
+                if graph.out_degree(node) > 0: 
+                    node_input = graph.edges[node, list(graph.successors(node))[0]]["edge_fn"](outputs) 
+                
+                r_cost += n_cost
+                logging.info("Rollout cost thus far: " + str(r_cost))
 
-            # classifier construction for current unit
-            if (cfg.surrogate.classifier and mode != 'backward-forward'): classifier_construction(cfg, graph, node, iterate) # NOTE this is a study specific condition
-            if (cfg.surrogate.probability_map and mode != 'backward-forward'): probability_map_construction(cfg, graph, node, iterate) #  NOTE this is a study specific condition
-            if (cfg.case_study.eval_cost and mode != 'backward-forward'): ctg_surrogate_construction(cfg, graph, node, iterate)
+            else:
+                #if cfg.solvers.evaluation_mode.forward == 'ray':  ray.init(runtime_env={"working_dir": get_original_cwd(), 'excludes': ['/multirun/', '/outputs/', '/config/']})
+                # define model for deus
+                
+                # create problem sheet according to cfg 
+                problem_sheet = create_problem_description_deus(cfg, model, graph, node, mode) 
+                # solve extended DS using NS
+                solver =  construct_deus_problem(DEUS, problem_sheet, model)
+                solver.solve()
+                if cfg.method == 'decomposition_constraint_tuner': graph.nodes[node]['log_evidence'] = solver.get_log_evidence()
+                feasible, infeasible = solver.get_solution()
+                feasible_set, feasible_set_prob = feasible[0], feasible[1]
+                if feasible_set.size == 0:
+                    logging.warning(f"No feasible set found for node {node}. Terminating simulation.")
+                    graph.graph['terminate'] = True
+                    return graph
+                # update the graph with the number of function evaluations
+                graph.nodes[node]["fn_evals"] += model.function_evaluations
+                # estimate box for bounds for DS downstream
+                process_data_forward(cfg, graph, node, model, feasible_set, mode)
+                # train constraints for DS downstream using data now stored in the graph
+                if (mode in ['forward'] and graph.out_degree(node) != 0) or (mode in ['backward'] and graph.in_degree(node) == 0): 
+                    if cfg.surrogate.forward_evaluation_surrogate: surrogate_training_forward(cfg, graph, node)
 
-            del model, problem_sheet, solver, infeasible, feasible_set_prob, feasible_set, feasible
-            
-            
-            save_graph(graph.copy(), mode + '_iterate_' + str(iterate)+ '_node_' + str(node))
-            graph = del_data(graph, node)
-            gc.collect()
-            profiler.save_device_memory_profile(f"memory{node}.prof")
-            clear_caches()
-            profiler.save_device_memory_profile(f"memory{node}_post_backend_clear.prof")
+                    # train reward function
+                if cfg.case_study.eval_cost:
+                    graph = get_ctg_training_data(graph, node, model, cfg)
+
+                # classifier construction for current unit
+                if (cfg.surrogate.classifier and mode != 'backward-forward'): classifier_construction(cfg, graph, node, iterate) # NOTE this is a study specific condition
+                if (cfg.surrogate.probability_map and mode != 'backward-forward'): probability_map_construction(cfg, graph, node, iterate) #  NOTE this is a study specific condition
+                if (cfg.case_study.eval_cost and mode != 'backward-forward'): ctg_surrogate_construction(cfg, graph, node, iterate)
+
+                del model, problem_sheet, solver, infeasible, feasible_set_prob, feasible_set, feasible
+                
+                
+                save_graph(graph.copy(), mode + '_iterate_' + str(iterate)+ '_node_' + str(node))
+                graph = del_data(graph, node)
+                gc.collect()
+                profiler.save_device_memory_profile(f"memory{node}.prof")
+                clear_caches()
+                profiler.save_device_memory_profile(f"memory{node}_post_backend_clear.prof")
        
         return graph
 
@@ -330,18 +352,20 @@ class subproblem_model(ABC):
         self.process_constraints = constraint_evaluator(cfg, G, unit_index, pool=None, constraint_type='process')
         if cfg.case_study.eval_cost: 
             self.node_costs = constraint_evaluator(cfg, G, unit_index, pool=None, constraint_type='node_cost')
+            self.backward_cost_to_go = constraint_evaluator(cfg, G, unit_index, pool=cfg.solvers.evaluation_mode.cost_to_go, constraint_type='backward_cost_to_go')
         if mode == 'forward':
             self.forward_constraints = constraint_evaluator(cfg, G, unit_index, pool=cfg.solvers.evaluation_mode.forward, constraint_type='forward')
             self.backward_constraints = None
             self.forward_decentralised = None
             self.root_node_constraint = None
+        elif mode == 'rollout':
+            self.rollout_costs = constraint_evaluator(cfg, G, unit_index, pool=cfg.solvers.evaluation_mode.cost_to_go, constraint_type='cost_rollout')  
+            self.rollout_constraints = constraint_evaluator(cfg, G, unit_index, pool=cfg.solvers.evaluation_mode.cost_to_go, constraint_type='constraint_rollout')
         elif mode == 'backward':
             self.backward_constraints = constraint_evaluator(cfg, G, unit_index, pool=cfg.solvers.evaluation_mode.backward, constraint_type='backward')
             self.forward_constraints = None
             self.forward_decentralised = None
             self.root_node_constraint = None
-            if self.cfg.case_study.eval_cost:
-                self.backward_cost_to_go = constraint_evaluator(cfg, G, unit_index, pool=cfg.solvers.evaluation_mode.cost_to_go, constraint_type='backward_cost_to_go')
         elif (mode in ['forward-backward','backward-forward']):
             self.forward_constraints = constraint_evaluator(cfg, G, unit_index, pool=cfg.solvers.evaluation_mode.forward, constraint_type='forward')
             if self.cfg.method == 'decomposition_constraint_tuner': 
@@ -524,6 +548,54 @@ class subproblem_model(ABC):
     def get_constraints(self, d, p):
         return self.s(d, p)
 
+    def rollout(self, inputs, aux=None):
+        
+        # Edge handling if inputs or aux are None
+        if inputs is None:
+            inputs = jnp.empty((1,0))
+        if aux is None:
+            aux = jnp.empty((inputs.shape[0],0))
+
+        # Make a decision
+        decision, opt_ctg, opt_status = self.rollout_costs.evaluate(inputs, aux)
+
+        # Concatenate decision, inputs and aux for constraint evaluation
+        d = jnp.concatenate([decision, inputs, aux], axis=-1)
+        p = self.get_uncertain_params()
+
+        # Evaluate the graph, get constraints and rewards
+        outputs = self.unit_forward_evaluator.get_constraints(d, p)
+        p_cons = self.process_constraints.evaluate(decision, inputs, aux, outputs)
+        n_cost = self.node_costs.evaluate(decision, inputs, aux, outputs)
+        
+        # Determine feasibility and status
+        feasible = jnp.all(p_cons >= 0) 
+        status = 'feasible' if feasible else 'infeasible'
+
+        logging.info(f"Rollout decision: {decision}, Cost-to-go: {opt_ctg}, Status: {status}")
+
+        return outputs, n_cost, decision
+
+    def get_uncertain_params(self):
+        
+        if self.cfg.formulation == 'probabilistic':
+            param_dict = self.cfg.case_study.parameters_samples
+            if self.cfg.case_study.case_study == 'markov_process':
+                param_dict = [param_dict for _ in range(self.cfg.case_study.num_nodes)]
+            
+            list_of_params = [jnp.array([p['c'] for p in param]) for param in param_dict]
+            list_of_weights = [jnp.array([p['w'] for p in param]).reshape(-1) for param in param_dict]
+
+            max_parameter_samples = self.cfg.max_uncertain_samples
+            selected_params = [choice(PRNGKey(0), a, shape=(max_parameter_samples,), replace=True, p=weight, axis=0) for a, weight in zip(list_of_params, list_of_weights)]
+        elif self.cfg.formulation == 'deterministic':
+            param_best_estimate = self.cfg.case_study.parameters_best_estimate
+            
+            selected_params = [jnp.array([param]) for param in param_best_estimate]
+        
+ 
+        return selected_params[self.unit_index]
+    
     def SAA(self, g):
         
         if self.cfg.samplers.notion_of_feasibility == 'positive':
@@ -589,4 +661,3 @@ def get_ctg_training_data(graph, node, model, cfg):
 
     graph.nodes[node]["ctg_func_training"] = dataset(X=x_feasible, y=y_feasible)
     return graph
-

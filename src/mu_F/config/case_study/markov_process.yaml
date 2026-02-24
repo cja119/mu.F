@@ -47,6 +47,7 @@ process_space_names: ['v0', 'v1']
 
 mode:
   - backward
+  - rollout
 
 evaluation_mode: 'jax-pmap'
 

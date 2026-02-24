@@ -3,7 +3,6 @@ from functools import partial
 
 from mu_F.constraints.jax_evaluator import backward_constraint_evaluator
 from mu_F.constraints.casadi_evaluator import * 
-from mu_F.constraints.monolithic import monolithic_problem
 from mu_F.constraints.downstream import global_graph_upperlevel_NLP
 
 class constraint_evaluator(ABC):
@@ -37,6 +36,12 @@ class constraint_evaluator(ABC):
         elif constraint_type == 'node_cost':
             self.constraint_evaluator = node_cost_evaluator(cfg, graph, node, pool)
             self.evaluate = self.evaluate_process
+        elif constraint_type == 'constraint_rollout':
+            self.constraint_evaluator = current_constraint_surrogate(cfg, graph, node, pool)
+            self.evaluate = self.evaluate_coupling
+        elif constraint_type == 'cost_rollout':
+            self.constraint_evaluator = current_cost_surrogate(cfg, graph, node, pool)
+            self.evaluate = self.evaluate_coupling
         elif constraint_type == 'post_process_lower_level':
             self.constraint_evaluator = partial(backward_constraint_evaluator, cfg=cfg, graph=graph, node=node, pool=pool)
             self.evaluate = self.evaluate_coupling
@@ -46,9 +51,6 @@ class constraint_evaluator(ABC):
         elif constraint_type == 'post_process_evals':
             self.constraint_evaluator = post_process_constraint_evaluator(cfg, graph, node, pool)
             self.evaluate = self.evaluate_process
-        elif constraint_type == 'monolithic':
-            self.constraint_evaluator = monolithic_problem(cfg, graph, node, pool)
-            self.evaluate = self.evaluate_global
         else:   
             raise ValueError('Invalid constraint type')
 

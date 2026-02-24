@@ -1,5 +1,6 @@
 
-from functools import partial 
+from functools import partial
+import logging 
 from jax import jit
 from mu_F.utils import requires_param
 from omegaconf import DictConfig
@@ -884,12 +885,9 @@ def affine_case_study_5(
 
 @requires_param('env')
 def markov_process(env: MarkovEnvironment):
-    
     @partial(jit, static_argnums=(0,))
     def markov_process_fn(cfg: DictConfig, design_args: jnp.ndarray, input_args: jnp.ndarray, aux:None, uncertainties: jnp.ndarray, node: int):
-        uncertainties =  5.9*jnp.ones_like(input_args[..., :1])
         return env(input_args, design_args, uncertainties, node=node)
-    
     return markov_process_fn
 
 

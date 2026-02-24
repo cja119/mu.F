@@ -170,7 +170,13 @@ class markov_graph_constructor(graph_constructor):
 
     def _build_env(self, env_file, cfg):
         module = self._load_env(env_file)
-        env = MarkovEnvironment(simulator = module.simulator, cfg=cfg, env_params=module.DEFAULT_PARAM_DICT, **module.SHAPE_DICT)
+        if cfg.model.model_version is not None:
+            shape_dict= module.SHAPE_DICTS[cfg.model.model_version]
+            env_params = module.ENV_PARAMS[cfg.model.model_version]
+        else:
+            shape_dict = module.SHAPE_DICT
+            env_params = module.ENV_PARAMS
+        env = MarkovEnvironment(simulator = module.simulator, cfg=cfg, env_params=env_params, **shape_dict)
         return env
     
     def _build_adjacency_matrix(self, cfg):

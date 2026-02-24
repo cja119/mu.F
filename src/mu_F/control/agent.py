@@ -19,11 +19,9 @@ from omegaconf import OmegaConf
 
 # Local application imports
 from mu_F.control.utils import ALL_CONSTANTS
-from mu_F.constraints.casadi_evaluator import cost_to_go_evaluator as CTG_Surrogate
-from mu_F.constraints.casadi_evaluator import current_constraint_evaluator as Constraint_Surrogate
+from mu_F.constraints.casadi_evaluator import current_cost_surrogate as CTG_Surrogate
+from mu_F.constraints.casadi_evaluator import current_constraint_surrogate as Constraint_Surrogate
 from mu_F.control.utils import _trajectory_plots, _add_policy_to_plot
-
-from graph.graph_assembly import build_graph_structure
 
 # --- Global Constantss ---
 globals().update(ALL_CONSTANTS)
@@ -37,25 +35,31 @@ def suppress_output():
             yield
 
 
-class Agent:
+class Controller:
     _node = 0
     _actions = deque()
 
-    def __init__(self, solve_date: str, solve_id: str):
+    def __init__(self, solve_date: Optional[str], solve_id: Optional[str], cfg: Optional[OmegaConf] = None, graph=None):
         # Loading graph config and setting output directory
-        self._out_dir = OUTPUTS_DIR.format(solve_date=solve_date, solve_id=solve_id)
-        self.cfg = OmegaConf.load(self._out_dir + HYDRA_CONFIG_FILE)
-        
-        # Init helper functions
-        self._update_cfg()
-        self.graph = self._load_pickle()
+        if cfg is None and graph is None:
+            self._out_dir = OUTPUTS_DIR.format(solve_date=solve_date, solve_id=solve_id)
+            self.cfg = OmegaConf.load(self._out_dir + HYDRA_CONFIG_FILE)
+            self.graph = self._load_pickle()
+        else:
+            self.cfg = cfg
+            self._out_dir = cfg.hydra.runtime.output_dir
+            self.graph = graph
+        # Init helper functions 
         self.ctg_network, self.constraint_surrogate = self._init_policy()
 
 
 
     # ---- Public methods ---- #
-    def act(self, u: jnp.ndarray):
+    def act(self, u: jnp.ndarray, node: Optional[int] = None) -> jnp.ndarray:
         """Take an action based on the current state u"""
+
+        if node is not None:
+            self._node = node
 
         # If this is the root node, there are no observations, so we pass an empty array to the surrogate models
         if self._node == 0:
@@ -107,23 +111,13 @@ class Agent:
 
         return graph
 
-    def _update_cfg(self):
-        """Update the cfg with any new values provided at call time. 
-        This is useful for updating the cfg with new surrogate parameters after training."""
-
-        self.cfg = build_graph_structure(self.cfg)
-        self.cfg.solvers.evaluation_mode.reward = POOL
-
-        for key, value in CFG_UPDATE.items():
-            setattr(self.cfg.solvers.forward_coupling, key, value)
-        return None
 
     def _init_policy(self):
         # Initialise the surrogate models for the agent
-        q_network = partial(
+        ctg_network = partial(
             CTG_Surrogate, cfg=self.cfg, graph=self.graph, pool=POOL
             )
         constraint_surrogate = partial(
             Constraint_Surrogate, cfg=self.cfg, graph=self.graph, pool=POOL
             )
-        return q_network, constraint_surrogate
+        return ctg_network, constraint_surrogate

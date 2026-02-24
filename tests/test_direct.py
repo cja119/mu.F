@@ -2,7 +2,7 @@ import pytest
 import networkx as nx
 import numpy as np
 from unittest.mock import MagicMock, patch
-from mu_F.direct import apply_direct_method
+from mu_F.direct.constructor import apply_direct_method
 
 @patch("mu_F.direct.construct_deus_problem_network")
 @patch("mu_F.direct.create_problem_description_deus_direct")

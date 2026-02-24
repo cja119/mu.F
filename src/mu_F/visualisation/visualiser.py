@@ -3,14 +3,18 @@ from typing import List, Tuple
 from functools import partial
 
 import pandas as pd
-from mu_F.visualisation.methods import init_plot, decompose_call, polytope_plot, decomposition_plot, reconstruction_plot, design_space_plot, polytope_plot_2, design_space_plot_plus_polytope, post_process_upper_solution
+from mu_F.visualisation.methods import (
+    init_plot, decompose_call, polytope_plot, decomposition_plot, reconstruction_plot,
+    design_space_plot, polytope_plot_2, design_space_plot_plus_polytope, post_process_upper_solution,
+    reconstruction_with_policy_plot, rollout_with_policy_plot
+)
 
 class visualiser(ABC):
     def __init__(self, cfg, G, data: pd.DataFrame=None, mode:str='forward', string:str='design_space', path=None):
         self.data = data
         self.cfg, self.G = cfg, G
         self.path = path
-        assert string in ['initialisation', 'design_space', 'reconstruction', 'decomposition', 'post_process_upper'], 'string must be one of "initialisastion", "design_space", "reconstruction", "decomposition", "post_process_upper" '
+        assert string in ['initialisation', 'design_space', 'reconstruction', 'decomposition', 'post_process_upper', 'rollout'], 'string must be one of "initialisation", "design_space", "reconstruction", "decomposition", "post_process_upper", "rollout"'
         if string == 'initialisation':
             self.visualiser =partial(init_plot, init=True, save=True)
         elif string == 'design_space':
@@ -27,8 +31,15 @@ class visualiser(ABC):
                 self.visualiser = partial(decompose_call, init=True, path=path)
         elif string == 'post_process_upper':
             self.visualiser = partial(post_process_upper_solution, args=data)
+        elif string == 'rollout':
+            self.visualiser = partial(
+                rollout_with_policy_plot,
+                policy_data=data,
+                save=True,
+                path=path,
+            )
         else:
-            raise ValueError('string must be one of "initialisastion", "design_space", "reconstruction", "decomposition", "post_process_upper"')
+            raise ValueError('string must be one of "initialisation", "design_space", "reconstruction", "decomposition", "post_process_upper", "rollout" ')
 
 
     def run(self):

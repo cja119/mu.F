@@ -1,4 +1,4 @@
-from casadi import MX, nlpsol, Function 
+from casadi import MX, nlpsol, Function, Linsol
 
 import numpy as np
 import time
@@ -9,7 +9,8 @@ from functools import partial
 import time
 
 from mu_F.solvers.utilities import (
-    build_constraint_functions, build_objective_function, casadify_constraints, unpack_problem_data, unpack_results, clean_up, casadify_reverse
+    build_constraint_functions, build_objective_function, casadify_constraints,
+    unpack_problem_data, unpack_results, clean_up, casadify_reverse, rejection_sample_initial_guess
 )
 
 """
@@ -39,12 +40,42 @@ def casadi_nlp_optimizer_no_gcons(objective, bounds, initial_guess):
     return solver, solution
 
 def callable_casadi_nlp_optimizer_gcons(objective, constraints, bounds, initial_guess, lhs, rhs):
-   
-    objective_fn = casadify_reverse(objective, len(initial_guess))
-    constraint_fn = casadify_constraints(constraints, initial_guess, len(initial_guess))
+    
+    if initial_guess.ndim == 1:
+       initial_guess = jnp.expand_dims(initial_guess, axis=0)
+
+    objective_fn = casadify_reverse(objective, initial_guess.shape[-1])
+    constraint_fn, _ = casadify_constraints(constraints, initial_guess, initial_guess.shape[-1])
 
     return casadi_nlp_optimizer_gcons(objective_fn, constraint_fn, bounds, initial_guess, lhs, rhs)
-   
+
+def casadi_lp_optimizer_gcons(objective, constraints, bounds, initial_guess, lhs, rhs):
+    n_d = len(bounds[0].squeeze())
+    lb = [bounds[0].squeeze()[i] for i in range(n_d)]
+    ub = [bounds[1].squeeze()[i] for i in range(n_d)]
+
+    x = MX.sym('x', n_d,1)
+    j = objective(x)
+    g = constraints(x)
+
+    F = Function('F', [x], [j])
+    G = Function('G', [x], [g])
+
+    lbx = lb
+    ubx = ub
+    lbg = np.array(lhs)
+    ubg = np.array(rhs)
+
+    nlp = {'x':x , 'f':F(x), 'g': G(x)}
+
+    options = {"ipopt": {"hessian_approximation": "limited-memory"}, 'ipopt.print_level':0, 'print_time':0, 'ipopt.max_iter': 150} 
+    solver = nlpsol('solver', 'ipopt', nlp, options)
+
+    solution = solver(x0=np.hstack(initial_guess), lbx=lbx, ubx=ubx, lbg=lbg, ubg=ubg)
+      
+    del nlp, F, G, x, j, g, lbx, ubx, lbg, ubg, options
+      
+    return solver, solution
 
 def casadi_nlp_optimizer_gcons(objective, constraints, bounds, initial_guess, lhs, rhs):
     """
@@ -113,7 +144,7 @@ def casadi_multi_start(initial_guess, objective_func, constraints, bounds):
         return None, None, len(solutions)
 
 
-def ray_casadi_multi_start(problem_id, problem_data, cfg):
+def ray_casadi_multi_start(problem_id, problem_data, cfg, ctg = None):
   """
   objective: casadi callback
   equality_constraints: casadi callback
@@ -129,6 +160,7 @@ def ray_casadi_multi_start(problem_id, problem_data, cfg):
 
   # determine if there are any constraints
   if len(g_fn) > 0:
+    initial_guess = rejection_sample_initial_guess(n_starts, n_d, bounds, g_fn, max_time=0.5, seed=problem_id)
     casadify_constraints_fn, _ = casadify_constraints(g_fn, initial_guess[0].reshape(1,-1), n_d)
     optimizer_func = partial(casadi_nlp_optimizer_gcons, constraints=casadify_constraints_fn, lhs=lhs, rhs=rhs)
   else:
@@ -139,7 +171,7 @@ def ray_casadi_multi_start(problem_id, problem_data, cfg):
   solutions = []
   for i in range(n_starts):
       solver, solution = optimizer_func(objective=objective_fn, bounds=bounds, initial_guess=np.array(initial_guess[i,:]).squeeze())
-      if solver.stats()['success']:
+      if solver.stats()['success'] and ctg is not None:
         solutions.append((solver, solution))
         if np.array(solution['f']) <= 0: break
 

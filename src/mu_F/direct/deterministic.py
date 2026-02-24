@@ -2,50 +2,28 @@
 Classes for solving the problem as a monolithic NLP
 """
 
-from functools import partial
 
-from mu_F.solvers.functions import callable_casadi_nlp_optimizer_gcons
+import logging
+
+from jax import lax
 import jax.numpy as jnp
 import networkx as nx
-import logging
-from jax import lax
+
+from mu_F.direct.base import SolveDirect
+from mu_F.solvers.functions import callable_casadi_nlp_optimizer_gcons
 
 
-class SolveMonolithic:
+class DeterministicMonolithic(SolveDirect):
     def __init__(self, cfg, G):
-        self.cfg = cfg
-        self.G = G
-        self.pos_feas = (
-            True if cfg.samplers.notion_of_feasibility.lower() == "positive" else False
-        )
-        self._prepare_model(G)
-
+        super().__init__(cfg, G)
+        self._solver = callable_casadi_nlp_optimizer_gcons
         assert (
             cfg.formulation.lower() == "deterministic"
         ), "Stochastic optimistaion is unsupported. Run in deterministic setting"
 
-    # --- Public Interface --- #
-    def solve(self, problem_data, x0=None):
-        """
-        Solves the problem using the loaded solver
-        """
-        solver = self._load_solver()
-
-        if x0 is None:
-            x0 = _initial_guess(problem_data["var_bounds"])
-
-        return solver(
-            problem_data["objective_fn"],
-            problem_data["constraints"],
-            problem_data["var_bounds"],
-            x0,
-            problem_data["eq_rhs"],
-            problem_data["eq_lhs"],
-            
-        )
 
     # --- Private Methods --- #
-
+    
     def _prepare_model(self, graph):
         """
         Prepare the model for solving. We will build the model to be solved as a monolithic NLP.
@@ -74,8 +52,9 @@ class SolveMonolithic:
 
             # Building the node's evaluation function
             node_fn = graph.nodes[node]["forward_evaluator"].evaluate
+            uncer = jnp.array(graph.nodes[node]["parameters_best_estimate"])
             composed_eval[node] = evaluate_node(
-                node_fn, input_fns, des_slice, aux_slice
+                node_fn, input_fns, des_slice, aux_slice, uncer
             )
 
             # ------- Constraint Functions -------
@@ -96,10 +75,10 @@ class SolveMonolithic:
         n_g = len(constraints)
 
         problem_data["objective_fn"] = make_objective(rewards)
-        problem_data["constraints"] = make_constraints(constraints)
+        problem_data["constraints"] = constraints #make_constraints(constraints)
         problem_data["var_bounds"] = _get_bounds(self.cfg)
-        problem_data["eq_rhs"] = jnp.zeros((n_g, 1))
-        problem_data["eq_lhs"] = jnp.inf * jnp.ones((n_g, 1))
+        problem_data["eq_rhs"] = jnp.inf * jnp.ones((n_g, 1))
+        problem_data["eq_lhs"] = jnp.zeros((n_g, 1))
         problem_data["num_vars"] = curr_idx
 
         assert _idx_check(curr_idx, graph), (
@@ -108,28 +87,47 @@ class SolveMonolithic:
         )
 
         return problem_data
+    
+    def solve(self):
+        """
+        Solves the problem using the loaded solver
+        """
+        problem_data = self._prepare_model(self.G)
+        solver = self._load_solver()
 
+        return solver(
+            problem_data["objective_fn"],
+            problem_data["constraints"],
+            problem_data["var_bounds"],
+            _initial_guess(problem_data["var_bounds"]),
+            problem_data["eq_lhs"], 
+            problem_data["eq_rhs"],
+        )
+    
+    def _get_solution(self, solver_output):
+        return solver_output['x']
+    
     def _load_solver(self):
         """
         Loads in solver object
         """
-        return callable_casadi_nlp_optimizer_gcons
-
+        return self._solver
 
 # -------------------------------------------------------------------------------- #
 # ------------------------------- Core Functions --------------------------------- #
 # -------------------------------------------------------------------------------- #
 
 
-def evaluate_node(node_fn, in_fn, des_slice, aux_slice):
+def evaluate_node(node_fn, in_fn, des_slice, aux_slice, uncer):
     des_0, des_len = des_slice
     aux_0, aux_len = aux_slice
 
     def node_eval(ctrl):
         des = _to_rank3(_slice_1d(ctrl, des_0, des_len))
         aux = _to_rank3(_slice_1d(ctrl, aux_0, aux_len))
+        unc = _to_rank3(uncer)
         ins = in_fn(ctrl) if in_fn is not None else None
-        return node_fn(des, ins, aux)
+        return node_fn(des, ins, aux, unc)
 
     return node_eval
 
@@ -197,6 +195,7 @@ def _apply_feasibility(constraint, pos_feas):
 
 
 def _slice_1d(x, start: int, length: int):
+    x = jnp.ravel(x)
     return lax.dynamic_slice(x, (start,), (length,))
 
 
@@ -264,11 +263,16 @@ def monolithic_problem(cfg, G, node, pool):
     Solves the problem as a monolithic NLP
     """
 
-    logging.warning(
-        "Solving the problem as a monolithic NLP. This is not core functionalitu, and is only intended for testing purposes."
-    )
+    logging.warning((
+        "Solving the problem as a monolithic NLP. This is not core functionality, ",
+        "and is only intended for testing/diagnostic purposes."
+    ))
 
-    solver = SolveMonolithic(cfg, G)
+    if cfg.formulation.lower() == "deterministic":
+        solver = DeterministicMonolithic(cfg, G)
+    else:
+        raise NotImplementedError("Stochastic optimization is not (yet) supported in the monolithic formulation.")
+    
     problem_data = solver._prepare_model(G)
     solver, solution = solver.solve(problem_data)
 
