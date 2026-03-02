@@ -10,10 +10,9 @@ NOTE:
 from functools import partial
 
 import jax.numpy as jnp
-from jax import jit
 
 from omegaconf import OmegaConf, DictConfig
-from abc import ABC, abstractmethod
+from abc import ABC
 from operator import ge, le
 
 from mu_F.control.utils import HYDRA_CONFIG_FILE, OUTPUTS_DIR

@@ -885,7 +885,6 @@ def affine_case_study_5(
 
 @requires_param('env')
 def markov_process(env: MarkovEnvironment):
-    @partial(jit, static_argnums=(0,))
     def markov_process_fn(cfg: DictConfig, design_args: jnp.ndarray, input_args: jnp.ndarray, aux:None, uncertainties: jnp.ndarray, node: int):
         return env(input_args, design_args, uncertainties, node=node)
     return markov_process_fn

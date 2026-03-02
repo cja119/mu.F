@@ -6,6 +6,7 @@ from functools import partial
 from scipy.stats import qmc
 from collections import deque
 import time
+import jax
 
 from mu_F.surrogate.surrogate import surrogate_reconstruction
 from mu_F.solvers.callbacks import casadify_forward, casadify_reverse
@@ -101,12 +102,15 @@ def rejection_sample_initial_guess(n_starts, n_d, bounds, constraints, max_time 
    feasible_guesses = deque()
    n_req = n_starts
    start_time = time.time()
+   
+   constraints = jax.vmap(partial(lambda x, g: jnp.vstack([g[i](x) for i in range(len(g))]), g=constraints), in_axes=0, out_axes=0)
 
    while len(feasible_guesses) < n_starts and (time.time() - start_time) < max_time:
       
       # Generate sobol sequences and then reject infeasible
-      guess_batch = generate_initial_guess(n_req * 100, n_d, bounds, seed=seed)
-      batch_eval = jnp.hstack([constraint(guess_batch) for constraint in constraints.values()]) # N_batch, n_g
+      guess_batch = generate_initial_guess(n_req * 10, n_d, bounds, seed=seed)
+      batch_eval = constraints(guess_batch) # N_batch, n_g
+
       feasible_mask = jnp.all(batch_eval <= 0, axis=-1).squeeze() # N_batch,1 -> N_batch
       feasible_guesses.extend(guess_batch[feasible_mask])
 

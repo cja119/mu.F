@@ -35,10 +35,10 @@ ENV_PARAMS = FrozenDict({
 })
 
 SHAPE_DICT = {
-    "X_SIZE": 2,
-    "U_SIZE": 2,
+    "X_SIZE": 4,
+    "U_SIZE": 4,
     "F_SIZE": 2,
-    "G_SIZE": 5,
+    "G_SIZE": 9,
     "Z_SIZE": 1,
     "L_SIZE": 1,
     "PHI_SIZE": 0
@@ -53,7 +53,9 @@ def simulator(
     """
     # Implement the simulation logic
     _hydrogen_storage = x[..., 0]
-    _vector_throughput = x[..., 1]
+    _train_1_throughput = x[..., 1]
+    _train_2_throughput = x[..., 2]
+    _train_3_throughput = x[..., 3]
     _renewable_energy = z[..., 0] if z is not None else param_dict["renewable_energy_value"]
     train_1_throughput = u[..., 0]
     train_2_throughput = u[..., 1]
@@ -61,19 +63,23 @@ def simulator(
     hydrogen_throughput = u[..., 3]
 
     # Simulate the model dynamics here
-    _active_trains = number_active_trains_eq(
-        _vector_throughput,
-        param_dict["train_throughput_capacity"],
+    vector_energy_1,  = vector_energy_eq(
+        train_1_throughput,
+        1,
+        param_dict["variable_energy_penalty"],
         param_dict["vector_calorific_value"],
+        param_dict["fixed_energy_penalty"],
     )
-    active_trains = number_active_trains_eq(
-        vector_throughput,
-        param_dict["train_throughput_capacity"],
+    vector_energy_2,  = vector_energy_eq(
+        train_2_throughput,
+        1,
+        param_dict["variable_energy_penalty"],
         param_dict["vector_calorific_value"],
+        param_dict["fixed_energy_penalty"],
     )
-    vector_energy = vector_energy_eq(
-        vector_throughput,
-        active_trains,
+    vector_energy_3,  = vector_energy_eq(
+        train_3_throughput,
+        1,
         param_dict["variable_energy_penalty"],
         param_dict["vector_calorific_value"],
         param_dict["fixed_energy_penalty"],
@@ -90,18 +96,50 @@ def simulator(
     hydrogen_storage = hydrogen_storage_eq(_hydrogen_storage, hydrogen_throughput)
 
     # Calculate constraints
-    lower_ramp_cons = vector_ramping_lower_cons(
-        vector_throughput,
-        _vector_throughput,
-        _active_trains,
+    lower_ramp_cons_1 = vector_ramping_lower_cons(
+        train_1_throughput,
+        _train_1_throughput,
+        1,
         param_dict["vector_calorific_value"],
         param_dict["lower_ramp_limit"],
         param_dict["train_throughput_capacity"],
     )
-    upper_ramp_cons = vector_ramping_upper_cons(
-        vector_throughput,
-        _vector_throughput,
-        _active_trains,
+    upper_ramp_cons_1 = vector_ramping_upper_cons(
+        train_1_throughput,
+        _train_1_throughput,
+        1,
+        param_dict["vector_calorific_value"],
+        param_dict["upper_ramp_limit"],
+        param_dict["train_throughput_capacity"],
+    )
+    lower_ramp_cons_2 = vector_ramping_lower_cons(
+        train_2_throughput,
+        _train_2_throughput,
+        1,
+        param_dict["vector_calorific_value"],
+        param_dict["lower_ramp_limit"],
+        param_dict["train_throughput_capacity"],
+    )
+    upper_ramp_cons_2 = vector_ramping_upper_cons(
+        train_2_throughput,
+        _train_2_throughput,
+        1,
+        param_dict["vector_calorific_value"],
+        param_dict["upper_ramp_limit"],
+        param_dict["train_throughput_capacity"],
+    )
+    lower_ramp_cons_3 = vector_ramping_lower_cons(
+        train_3_throughput,
+        _train_3_throughput,
+        1,
+        param_dict["vector_calorific_value"],
+        param_dict["lower_ramp_limit"],
+        param_dict["train_throughput_capacity"],
+    )
+    upper_ramp_cons_3 = vector_ramping_upper_cons(
+        train_3_throughput,
+        _train_3_throughput,
+        1,
         param_dict["vector_calorific_value"],
         param_dict["upper_ramp_limit"],
         param_dict["train_throughput_capacity"],
@@ -117,7 +155,7 @@ def simulator(
     )
 
     energy_balance_cons = energy_balance_upper_cons(
-        vector_energy,
+        vector_energy_1 + vector_energy_2 + vector_energy_3,
         energy_electrolysis,
         energy_fuelcell,
         _renewable_energy,
@@ -125,19 +163,49 @@ def simulator(
     )
 
     # Calculate reward
-    reward = jnp.broadcast_to(-vector_throughput, hydrogen_storage.shape)
+    reward = jnp.broadcast_to(-sum([vector_throughput_1, vector_throughput_2, vector_throughput_3]), hydrogen_storage.shape)
 
     # Stack outputs and constraints - saturate outputs to reduce domain in longer graphs
-    throughput_sat_l = vector_throughput_sat_l(
-        _vector_throughput,
-        _active_trains,
+    throughput_sat_l_1 = vector_throughput_sat_l(
+        train_1_throughput,
+        1,
         param_dict["vector_calorific_value"],
         param_dict["lower_ramp_limit"],
         param_dict["train_throughput_capacity"],
     )
-    throughput_sat_u = vector_throughput_sat_u(
-        _vector_throughput,
-        _active_trains,
+    throughput_sat_l_2 = vector_throughput_sat_l(
+        train_2_throughput,
+        1,
+        param_dict["vector_calorific_value"],
+        param_dict["lower_ramp_limit"],
+        param_dict["train_throughput_capacity"],
+    )
+    throughput_sat_l_3 = vector_throughput_sat_l(
+        train_3_throughput,
+        1,
+        param_dict["vector_calorific_value"],
+        param_dict["lower_ramp_limit"],
+        param_dict["train_throughput_capacity"],
+    )
+    throughput_sat_u_1 = vector_throughput_sat_u(
+        train_1_throughput,
+        1,
+        param_dict["vector_calorific_value"],
+        param_dict["upper_ramp_limit"],
+        param_dict["train_throughput_capacity"],
+        param_dict["n_trains_conversion"],
+    )
+    throughput_sat_u_2 = vector_throughput_sat_u(
+        train_2_throughput,
+        1,
+        param_dict["vector_calorific_value"],
+        param_dict["upper_ramp_limit"],
+        param_dict["train_throughput_capacity"],
+        param_dict["n_trains_conversion"],
+    )
+    throughput_sat_u_3 = vector_throughput_sat_u(
+        train_3_throughput,
+        1,
         param_dict["vector_calorific_value"],
         param_dict["upper_ramp_limit"],
         param_dict["train_throughput_capacity"],
@@ -149,15 +217,26 @@ def simulator(
         a_min=param_dict["lower_storage_limit"] * param_dict["upper_storage_limit"],
         a_max=param_dict["upper_storage_limit"],
     )
-    vector_throughput = jnp.clip(
-        vector_throughput, a_min=throughput_sat_l, a_max=throughput_sat_u
+    vector_throughput_1 = jnp.clip(
+        train_1_throughput, a_min=throughput_sat_l_1, a_max=throughput_sat_u_1
+    )
+    vector_throughput_2 = jnp.clip(
+        train_2_throughput, a_min=throughput_sat_l_2, a_max=throughput_sat_u_2
+    )
+    vector_throughput_3 = jnp.clip(
+        train_3_throughput, a_min=throughput_sat_l_3, a_max=throughput_sat_u_3
     )
 
-    outputs = jnp.stack([hydrogen_storage, vector_throughput], axis=-1)
+    outputs = jnp.stack([hydrogen_storage, vector_throughput_1, vector_throughput_2, vector_throughput_3], axis=-1)
+
     constraints = jnp.stack(
         [
-            lower_ramp_cons,
-            upper_ramp_cons,
+            lower_ramp_cons_1,
+            upper_ramp_cons_1,
+            lower_ramp_cons_2,
+            upper_ramp_cons_2,
+            lower_ramp_cons_3,
+            upper_ramp_cons_3,
             lower_h2_storage_cons,
             upper_h2_storage_cons,
             energy_balance_cons,

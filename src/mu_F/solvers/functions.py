@@ -171,9 +171,9 @@ def ray_casadi_multi_start(problem_id, problem_data, cfg, ctg = None):
   solutions = []
   for i in range(n_starts):
       solver, solution = optimizer_func(objective=objective_fn, bounds=bounds, initial_guess=np.array(initial_guess[i,:]).squeeze())
-      if solver.stats()['success'] and ctg is not None:
+      if solver.stats()['success']:
         solutions.append((solver, solution))
-        if np.array(solution['f']) <= 0: break
+        if np.array(solution['f']) <= 0 and ctg is None: break
 
   # unpack and clean up
   solver, solution, ns = unpack_results(solutions, solver, solution)

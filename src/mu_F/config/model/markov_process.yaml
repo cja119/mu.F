@@ -1,5 +1,5 @@
 root_node_inputs:
-  - [147717.5, 4286.4]
+  - [3692.94,1071.6] #[147717.5, 4286.4]
   
 constraint:
   auxiliary: 'None'

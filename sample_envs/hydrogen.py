@@ -14,11 +14,11 @@ import jax
 # -------------------------------------------------------------------------------- #
 
 ENV_PARAMS = FrozenDict({
-    "hydrogen_storage_capacity": 295435,
+    "hydrogen_storage_capacity": 295435/4,
     "vector_storage_capacity": 0.0,
-    "n_turbines": 1513,
-    "n_trains_conversion": 4,
-    "hfc_capacity": 832,
+    "n_turbines": 378.25, #1513,
+    "n_trains_conversion": 1,
+    "hfc_capacity": 832/4,
     "renewable_energy_value": 5.9,
     "train_throughput_capacity": 114,
     "vector_molar_efficiency": 0.888,
@@ -30,7 +30,7 @@ ENV_PARAMS = FrozenDict({
     "lower_ramp_limit": 0.25,
     "upper_ramp_limit": 0.1,
     "lower_storage_limit": 0.2,
-    "upper_storage_limit": 295435,
+    "upper_storage_limit": 295435/4,
     "feas_thresh": 0.1,
 })
 
@@ -59,16 +59,9 @@ def simulator(
     hydrogen_throughput = u[..., 1]
 
     # Simulate the model dynamics here
-    _active_trains = number_active_trains_eq(
-        _vector_throughput,
-        param_dict["train_throughput_capacity"],
-        param_dict["vector_calorific_value"],
-    )
-    active_trains = number_active_trains_eq(
-        vector_throughput,
-        param_dict["train_throughput_capacity"],
-        param_dict["vector_calorific_value"],
-    )
+    _active_trains = 1
+    active_trains = 1
+    
     vector_energy = vector_energy_eq(
         vector_throughput,
         active_trains,

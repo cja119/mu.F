@@ -23,9 +23,9 @@ discount_factor: 0.99999
 KS_bounds:
   design_args: 
   - - 0
-    - 8572.8
-  - - 1387.8 
-    - 18954.2 
+    - 2143.2 #8572.8
+  - - -346.75 #-1387.8 
+    - 4738.55 #18954.2 
   aux_args:
   - - - None
       - None
@@ -56,6 +56,6 @@ serial_graph: True
 
 unit_op: 'steady_state'
 
-n_theta: 1
+n_theta: 2
 
 fn_evals: 0

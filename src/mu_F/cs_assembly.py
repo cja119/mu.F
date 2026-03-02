@@ -178,7 +178,7 @@ def make_markov(cfg):
         cfg.model.node_aux = [cfg.model.node_aux for _ in range(cfg.case_study.num_nodes)]
         cfg.case_study.n_aux_args = build_aux_args(cfg)
         cfg.case_study.process_space_names = [[f'n{i}_{name}'for name in cfg.case_study.process_space_names] for i in range(cfg.case_study.num_nodes)]
-
+        cfg.samplers.unit_wise_target_reliability = [cfg.samplers.unit_wise_target_reliability for _ in range(cfg.case_study.num_nodes)]
     return cfg
 
 def build_aux_args(cfg):
