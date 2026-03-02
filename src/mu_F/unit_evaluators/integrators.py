@@ -25,7 +25,7 @@ from diffrax import Tsit5
 from mu_F.unit_evaluators.ode import case_studies
 
 
-def unit_dynamics(design_params, u, aux, decision_dependent, uncertainty_params, cfg, node):   
+def unit_dynamics(design_params, u, aux, decision_dependent, uncertainty_params, cfg, node, graph=None):   
     """
     Here we assume that the dynamics are defined by a system of ODEs.
     This is a general function that assumes initial conditions are defined by input parameters within the extended design space 
@@ -42,10 +42,14 @@ def unit_dynamics(design_params, u, aux, decision_dependent, uncertainty_params,
         decision_dependent = jnp.expand_dims(decision_dependent, axis=0)
 
     # defining the params to pass to the vector field
-    params = jnp.hstack([design_params, decision_dependent, aux, uncertainty_params.reshape(1,-1)]).squeeze()
+    params = jnp.hstack([design_params, decision_dependent, aux, uncertainty_params.reshape(1,-1)])
 
     # defining the dynamics
-    term = ODETerm(case_studies[cfg.case_study.case_study][node])
+    if cfg.case_study.eval_cost:
+        term = ODETerm(partial(case_studies[cfg.case_study.case_study](graph.env), node = node))
+        u = u + jnp.zeros((1, 1, graph.env.G_SIZE + 1)) # Path constraints + stage cost  both start at 0.
+    else:
+        term = ODETerm(case_studies[cfg.case_study.case_study][node])
 
     # defining the diffrax solver
     solver = dispatcher[cfg.model.integration.scheme]

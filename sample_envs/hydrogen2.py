@@ -37,7 +37,7 @@ ENV_PARAMS = FrozenDict({
 SHAPE_DICT = {
     "X_SIZE": 4,
     "U_SIZE": 4,
-    "F_SIZE": 2,
+    "F_SIZE": 4,
     "G_SIZE": 9,
     "Z_SIZE": 1,
     "L_SIZE": 1,
@@ -65,21 +65,20 @@ def simulator(
     # Simulate the model dynamics here
     vector_energy_1,  = vector_energy_eq(
         train_1_throughput,
-        1,
         param_dict["variable_energy_penalty"],
         param_dict["vector_calorific_value"],
         param_dict["fixed_energy_penalty"],
+        param_dict["train_throughput_capacity"]
     )
     vector_energy_2,  = vector_energy_eq(
         train_2_throughput,
-        1,
         param_dict["variable_energy_penalty"],
         param_dict["vector_calorific_value"],
         param_dict["fixed_energy_penalty"],
+        param_dict["train_throughput_capacity"]
     )
     vector_energy_3,  = vector_energy_eq(
         train_3_throughput,
-        1,
         param_dict["variable_energy_penalty"],
         param_dict["vector_calorific_value"],
         param_dict["fixed_energy_penalty"],
@@ -99,7 +98,6 @@ def simulator(
     lower_ramp_cons_1 = vector_ramping_lower_cons(
         train_1_throughput,
         _train_1_throughput,
-        1,
         param_dict["vector_calorific_value"],
         param_dict["lower_ramp_limit"],
         param_dict["train_throughput_capacity"],
@@ -107,7 +105,6 @@ def simulator(
     upper_ramp_cons_1 = vector_ramping_upper_cons(
         train_1_throughput,
         _train_1_throughput,
-        1,
         param_dict["vector_calorific_value"],
         param_dict["upper_ramp_limit"],
         param_dict["train_throughput_capacity"],
@@ -115,7 +112,6 @@ def simulator(
     lower_ramp_cons_2 = vector_ramping_lower_cons(
         train_2_throughput,
         _train_2_throughput,
-        1,
         param_dict["vector_calorific_value"],
         param_dict["lower_ramp_limit"],
         param_dict["train_throughput_capacity"],
@@ -123,7 +119,6 @@ def simulator(
     upper_ramp_cons_2 = vector_ramping_upper_cons(
         train_2_throughput,
         _train_2_throughput,
-        1,
         param_dict["vector_calorific_value"],
         param_dict["upper_ramp_limit"],
         param_dict["train_throughput_capacity"],
@@ -131,7 +126,6 @@ def simulator(
     lower_ramp_cons_3 = vector_ramping_lower_cons(
         train_3_throughput,
         _train_3_throughput,
-        1,
         param_dict["vector_calorific_value"],
         param_dict["lower_ramp_limit"],
         param_dict["train_throughput_capacity"],
@@ -139,11 +133,9 @@ def simulator(
     upper_ramp_cons_3 = vector_ramping_upper_cons(
         train_3_throughput,
         _train_3_throughput,
-        1,
         param_dict["vector_calorific_value"],
         param_dict["upper_ramp_limit"],
         param_dict["train_throughput_capacity"],
-        param_dict["n_trains_conversion"],
     )
     lower_h2_storage_cons = hydrogen_storage_lower_cons(
         hydrogen_storage,
@@ -163,53 +155,44 @@ def simulator(
     )
 
     # Calculate reward
-    reward = jnp.broadcast_to(-sum([vector_throughput_1, vector_throughput_2, vector_throughput_3]), hydrogen_storage.shape)
+    
 
     # Stack outputs and constraints - saturate outputs to reduce domain in longer graphs
     throughput_sat_l_1 = vector_throughput_sat_l(
         train_1_throughput,
-        1,
         param_dict["vector_calorific_value"],
         param_dict["lower_ramp_limit"],
         param_dict["train_throughput_capacity"],
     )
     throughput_sat_l_2 = vector_throughput_sat_l(
         train_2_throughput,
-        1,
         param_dict["vector_calorific_value"],
         param_dict["lower_ramp_limit"],
         param_dict["train_throughput_capacity"],
     )
     throughput_sat_l_3 = vector_throughput_sat_l(
         train_3_throughput,
-        1,
         param_dict["vector_calorific_value"],
         param_dict["lower_ramp_limit"],
         param_dict["train_throughput_capacity"],
     )
     throughput_sat_u_1 = vector_throughput_sat_u(
         train_1_throughput,
-        1,
         param_dict["vector_calorific_value"],
         param_dict["upper_ramp_limit"],
         param_dict["train_throughput_capacity"],
-        param_dict["n_trains_conversion"],
     )
     throughput_sat_u_2 = vector_throughput_sat_u(
         train_2_throughput,
-        1,
         param_dict["vector_calorific_value"],
         param_dict["upper_ramp_limit"],
-        param_dict["train_throughput_capacity"],
-        param_dict["n_trains_conversion"],
+        param_dict["train_throughput_capacity"]
     )
     throughput_sat_u_3 = vector_throughput_sat_u(
         train_3_throughput,
-        1,
         param_dict["vector_calorific_value"],
         param_dict["upper_ramp_limit"],
-        param_dict["train_throughput_capacity"],
-        param_dict["n_trains_conversion"],
+        param_dict["train_throughput_capacity"]
     )
 
     hydrogen_storage = jnp.clip(
@@ -226,6 +209,8 @@ def simulator(
     vector_throughput_3 = jnp.clip(
         train_3_throughput, a_min=throughput_sat_l_3, a_max=throughput_sat_u_3
     )
+
+    reward = jnp.broadcast_to(-sum([vector_throughput_1, vector_throughput_2, vector_throughput_3]), hydrogen_storage.shape)
 
     outputs = jnp.stack([hydrogen_storage, vector_throughput_1, vector_throughput_2, vector_throughput_3], axis=-1)
 
@@ -251,17 +236,6 @@ def simulator(
 # -------------------------------------------------------------------------------- #
 # ------------------------------ Equations --------------------------------------- #
 # -------------------------------------------------------------------------------- #
-@partial(jax.jit, static_argnums=(1, 2))
-def number_active_trains_eq(
-    vector_throughput, train_throughput_capacity, vector_calorific_value
-):
-    """Calculate the number of active trains based on vector throughput"""
-    # (GJ/ h) / (t(NH3) / train * GJ/t(NH3)) = trains
-    return jnp.ceil(
-        vector_throughput / (train_throughput_capacity * vector_calorific_value)
-    )
-
-
 @partial(jax.jit, static_argnums=(1,))
 def energy_electrolysis_eq(hydrogen_throughput, electrolyser_efficiency):
     """Calculate the energy used for electrolysis"""
@@ -301,10 +275,9 @@ def hydrogen_delta_eq(
     )
 
 
-@partial(jax.jit, static_argnums=(2, 3, 4, 5))
+@partial(jax.jit, static_argnums=(1, 2, 3, 4))
 def vector_energy_eq(
     vector_throughput,
-    number_active_trains,
     variable_energy_penalty,
     vector_calorific_value,
     fixed_energy_penalty,
@@ -316,8 +289,7 @@ def vector_energy_eq(
         vector_throughput
         * (variable_energy_penalty / vector_calorific_value)
         * (1 - fixed_energy_penalty)
-        + number_active_trains
-        * fixed_energy_penalty
+        + fixed_energy_penalty
         * variable_energy_penalty
         * train_throughput_capacity
     )
@@ -326,11 +298,10 @@ def vector_energy_eq(
 # -------------------------------------------------------------------------------- #
 # ------------------------------ Constraints ------------------------------------- #
 # -------------------------------------------------------------------------------- #
-@partial(jax.jit, static_argnums=(3, 4, 5))
+@partial(jax.jit, static_argnums=(2, 3, 4))
 def vector_ramping_lower_cons(
     vector_throughput,
     _vector_throughput,
-    _active_trains,
     vector_calorific_value,
     lower_ramp_limit,
     train_throughput_capacity,
@@ -339,14 +310,13 @@ def vector_ramping_lower_cons(
     # GJ(NH3) / h - GJ(NH3) / h - (-) * Number * GJ(NH3) / h = GJ(NH3) / h
     return -(
         (_vector_throughput - vector_throughput) / vector_calorific_value
-        - lower_ramp_limit * (_active_trains) * train_throughput_capacity
-    ) / (lower_ramp_limit * (_active_trains) * train_throughput_capacity)
+        - lower_ramp_limit * train_throughput_capacity
+    ) / (lower_ramp_limit * train_throughput_capacity)
 
 
-@partial(jax.jit, static_argnums=(2, 3, 4))
+@partial(jax.jit, static_argnums=(1, 2, 3))
 def vector_throughput_sat_l(
     _vector_throughput,
-    _active_trains,
     vector_calorific_value,
     lower_ramp_limit,
     train_throughput_capacity,
@@ -355,49 +325,41 @@ def vector_throughput_sat_l(
         _vector_throughput
         - lower_ramp_limit
         * vector_calorific_value
-        * _active_trains
         * train_throughput_capacity
     )
 
 
-@partial(jax.jit, static_argnums=(3, 4, 5, 6))
+@partial(jax.jit, static_argnums=(2, 3, 4))
 def vector_ramping_upper_cons(
     vector_throughput,
     _vector_throughput,
-    _active_trains,
     vector_calorific_value,
     upper_ramp_limit,
     train_throughput_capacity,
-    total_trains,
 ):
     """Constraint for upper ramping limit of vector energy"""
     # GJ(NH3) / h - GJ(NH3) / h - (-) * Number * GJ(NH3) / h = GJ(NH3) / h
     return -(
         (vector_throughput - _vector_throughput) / vector_calorific_value
         - upper_ramp_limit
-        * (total_trains - _active_trains + 1)
         * train_throughput_capacity
     ) / (
         upper_ramp_limit
-        * (total_trains - _active_trains + 1)
         * train_throughput_capacity
     )
 
 
-@partial(jax.jit, static_argnums=(2, 3, 4, 5))
+@partial(jax.jit, static_argnums=(1, 2, 3))
 def vector_throughput_sat_u(
     _vector_throughput,
-    _active_trains,
     vector_calorific_value,
     upper_ramp_limit,
     train_throughput_capacity,
-    total_trains,
 ):
     return (
         _vector_throughput
         + vector_calorific_value
         * upper_ramp_limit
-        * (total_trains - _active_trains + 1)
         * train_throughput_capacity
     )
 

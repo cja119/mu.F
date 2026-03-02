@@ -43,7 +43,6 @@ SHAPE_DICTS = {
     },
 }
 
-@jax.jit(static_argnums=(1,))
 def simulator(
     param_dict, node, x: jnp.ndarray, u: jnp.ndarray, z: jnp.ndarray = None
 ) -> jnp.ndarray:
@@ -85,9 +84,10 @@ def simulator(
     print("Action: ", u)
 
     # Injecting disturbances < - Need to check injecting at right time(?)
+    uc = [350,1.0]
     for i, k in enumerate(pc_env.model.info()["disturbances"]):
         zi = z[i] if z.ndim == 1 else z[:, i]
-        pc_env.disturbances[k][pc_env.t + 1] = zi
+        pc_env.disturbances[k][pc_env.t + 1] =  uc[i] #zi.squeeze()
 
     x_n, rew, done, term, info = pc_env.step(u)
     cons_vals = pc_constriants(x_n, u)
