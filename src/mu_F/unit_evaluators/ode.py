@@ -143,9 +143,10 @@ def markov_process(env: MarkovEnvironment):
     def markov_process_fn(t: float, state: jnp.ndarray, parameters: jnp.ndarray, node=None):
         
         # Extracting the input args, design args, uncertainty params and node from the parameters vector
+        inputs = state[..., :env.X_SIZE]
         design_args = parameters[..., :env.U_SIZE]
         uncertainties = parameters[..., env.U_SIZE:env.U_SIZE + env.Z_SIZE]
-        return env(state, design_args, uncertainties, node=node)
+        return env(inputs, design_args, uncertainties, node=node)
     
     return markov_process_fn
 

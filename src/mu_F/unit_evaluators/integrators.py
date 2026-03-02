@@ -47,7 +47,7 @@ def unit_dynamics(design_params, u, aux, decision_dependent, uncertainty_params,
     # defining the dynamics
     if cfg.case_study.eval_cost:
         term = ODETerm(partial(case_studies[cfg.case_study.case_study](graph.env), node = node))
-        u = u + jnp.zeros((1, 1, graph.env.G_SIZE + 1)) # Path constraints + stage cost  both start at 0.
+        u = jnp.concatenate([u, jnp.zeros(u.shape[:-1] + (graph.env.G_SIZE + 1,))], axis=-1) # Path constraints + stage cost  both start at 0.
     else:
         term = ODETerm(case_studies[cfg.case_study.case_study][node])
 
@@ -68,7 +68,7 @@ def unit_dynamics(design_params, u, aux, decision_dependent, uncertainty_params,
         cfg.model.integration.dt0,
         y0=u,
         args=params,
-        max_steps=cfg.model.integration.max_steps,
+        #max_steps=cfg.model.integration.max_steps,
         stepsize_controller=step_size_controller,
         saveat=saveat,
     ).ys[
@@ -83,7 +83,7 @@ def unit_dynamics(design_params, u, aux, decision_dependent, uncertainty_params,
         cfg.model.integration.dt0,
         y0=jnp.hstack([u.reshape(1,-1), jnp.zeros(1).reshape(1,1)]).squeeze(),
         args=params,
-        max_steps=cfg.model.integration.max_steps,
+        #max_steps=cfg.model.integration.max_steps,
         stepsize_controller=step_size_controller,
         saveat=saveat,
     ).ys[
