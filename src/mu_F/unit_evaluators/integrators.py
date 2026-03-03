@@ -10,7 +10,8 @@ import matplotlib.pyplot as plt
 import jax
 import jax.numpy as jnp
 from jax import grad, jit, vmap
-
+import time
+import logging
 # hydra imports
 from omegaconf import DictConfig, OmegaConf
 
@@ -60,6 +61,7 @@ def unit_dynamics(design_params, u, aux, decision_dependent, uncertainty_params,
     # define step size controller for solver
     step_size_controller = dispatcher[cfg.model.integration.step_size_controller]
     try:
+        start = time.time()
         return diffeqsolve(
         term,
         solver,
@@ -68,7 +70,7 @@ def unit_dynamics(design_params, u, aux, decision_dependent, uncertainty_params,
         cfg.model.integration.dt0,
         y0=u,
         args=params,
-        #max_steps=cfg.model.integration.max_steps,
+        max_steps=cfg.model.integration.max_steps,
         stepsize_controller=step_size_controller,
         saveat=saveat,
     ).ys[
@@ -83,13 +85,14 @@ def unit_dynamics(design_params, u, aux, decision_dependent, uncertainty_params,
         cfg.model.integration.dt0,
         y0=jnp.hstack([u.reshape(1,-1), jnp.zeros(1).reshape(1,1)]).squeeze(),
         args=params,
-        #max_steps=cfg.model.integration.max_steps,
+        max_steps=cfg.model.integration.max_steps,
         stepsize_controller=step_size_controller,
         saveat=saveat,
     ).ys[
         :, :
     ][-1,:]  # t x n_components
-
+    finally:
+        logging.info(f"Integration took {time.time() - start} seconds")
 
 
 
@@ -100,6 +103,6 @@ dispatcher = {
     "tsit5": Tsit5(),
     "dopri8": diffrax.Dopri8(),
     "Kvaerno5": diffrax.Kvaerno5(),
-    "pid": diffrax.PIDController(rtol=1e-5, atol=1e-5),
+    "pid": diffrax.PIDController(rtol=1e-3, atol=1e-3),
 }
 

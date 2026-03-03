@@ -27,6 +27,26 @@ from mu_F.utils import apply_feasibility
 from mu_F.utils import save_graph
 
 
+def _get_rollout_action_columns(cfg, node, n_actions):
+    process_names = cfg.case_study.process_space_names
+    node_dims = process_names[node] if isinstance(process_names, (list, tuple)) else process_names
+    if not isinstance(node_dims, (list, tuple)):
+        node_dims = [node_dims]
+
+    if len(node_dims) == n_actions:
+        return [str(c) for c in node_dims]
+
+    ds_cols = list(cfg.case_study.design_space_dimensions)
+    node_ds_cols = [c for c in ds_cols if f"N{node+1}" in str(c)]
+    if len(node_ds_cols) == n_actions:
+        return [str(c) for c in node_ds_cols]
+
+    if len(ds_cols) == n_actions:
+        return [str(c) for c in ds_cols]
+
+    return [f"node_{node}_action_{i}" for i in range(n_actions)]
+
+
 
 class apply_decomposition:
     def __init__(self, cfg, graph, precedence_order, mode:str="forward", iterate=0, max_devices=1, total_iterates=1):
@@ -66,7 +86,13 @@ class apply_decomposition:
                     node_input = jnp.squeeze(node_input, axis=1) # Remove uncertainty dimensions for uncertain case
                     
                 outputs, n_cost, decision = model.rollout(node_input)
-                graph.nodes[node]["rollout_action"] = np.asarray(decision)
+                decision_vec = np.ravel(np.asarray(decision, dtype=float))
+                action_cols = _get_rollout_action_columns(cfg, node, decision_vec.shape[0])
+                graph.nodes[node]["rollout_action"] = decision_vec
+                graph.nodes[node]["rollout_action_columns"] = action_cols
+                graph.nodes[node]["rollout_action_named"] = {
+                    col: float(value) for col, value in zip(action_cols, decision_vec)
+                }
                 
                 if graph.out_degree(node) > 0: 
                     node_input = graph.edges[node, list(graph.successors(node))[0]]["edge_fn"](outputs) 

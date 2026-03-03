@@ -13,9 +13,10 @@ memory: false
 model_version: null
 
 integration:
-  scheme: tsit5  # dopri8
+  scheme: tsit5
   step_size_controller: pid
   t0: 0
-  tf: 1
-  dt0: 1.0e-1
+  tf: 0.25
+  dt0: Null
   max_steps: 10000
+  vmap_chunk_size: 0

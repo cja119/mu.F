@@ -3,8 +3,7 @@ A general interface for pc-gym problems
 """
 
 from functools import partial
-
-from pcgym import make_env
+from dataclasses import dataclass
 from flax.core import FrozenDict, unfreeze
 import jax.numpy as jnp
 import numpy as np
@@ -45,21 +44,97 @@ SHAPE_DICTS = {
     },
 }
 
+
+@dataclass(frozen=False, kw_only=True)
+class BaseModel:
+    int_method: str = "jax"
+
+    def info(self) -> dict:
+        info = {
+            "parameters": self.__dict__.copy(),
+            "states": self.states,
+            "inputs": self.inputs,
+            "disturbances": self.disturbances,
+            "uncertainties": list(self.uncertainties.keys()) if self.uncertainties else [],
+        }
+        info["parameters"].pop("int_method", None)
+        return info
+
+@dataclass(frozen=False, kw_only=True)
+class cstr(BaseModel):
+    q: float = 100
+    V: float = 100
+    rho: float = 1000
+    C: float = 0.239
+    deltaHr: float = -5e4
+    EA_over_R: float = 8750
+    k0: float = 7.2e10
+    UA: float = 5e4
+    Ti: float = 350
+    Caf: float = 1
+    int_method: str = 'jax'
+    states: list = None
+    inputs: list = None
+    disturbances: list = None
+    uncertainties: dict = None
+
+    def __post_init__(self):
+        self.states = ["Ca", "T"]
+        self.inputs = ["Tc"]
+        self.disturbances = ["Ti", "Caf"]
+
+    def __call__(self, x: np.ndarray, u: np.ndarray) -> np.ndarray:
+        # Diffrax/JAX tracing can hand in shape (1, n) or (n, 1) views; flatten first.
+        x = jnp.ravel(x)
+        u = jnp.ravel(u)
+        ca, T = x[0], x[1]
+        Tc = u[0]
+        rA = self.k0 * jnp.exp(-self.EA_over_R / T) * ca
+        dxdt = jnp.array([
+            self.q / self.V * (self.Caf - ca) - rA,
+            self.q / self.V * (self.Ti - T)
+            + ((-self.deltaHr) * rA) * (1 / (self.rho * self.C))
+            + self.UA * (Tc - T) * (1 / (self.rho * self.C * self.V)),
+        ])
+        return dxdt
+            
 def simulator(
     param_dict, node, x: jnp.ndarray, u: jnp.ndarray, z: jnp.ndarray = None
 ) -> jnp.ndarray:
     import importlib
         
-    mod = importlib.import_module("pcgym.model_classes")
-    ModelCls = getattr(mod, param_dict["case_study"])   # e.g. "cstr"
-    model = ModelCls(int_method="jax")
+    #mod = importlib.import_module("pcgym.model_classes")
+    #ModelCls = getattr(mod, param_dict["case_study"])   # e.g. "cstr"
+    model = cstr(int_method="jax")
+
+    # Normalize traced inputs to 1D vectors before model/constraint math.
+    x = jnp.ravel(x)
+    u = jnp.ravel(u)
 
     dxdt = model(x, u).squeeze()
     dgdt = jnp.concatenate([jnp.atleast_1d(c(param_dict, x, u)) for c in CONS_HOLDER[param_dict["case_study"]]], axis=0)
-    rwd = jnp.square(param_dict["SP"]["Ca"][node] - x[0])
+    rwd = jnp.square(param_dict["SP"]["Ca"][node] - x[0]) 
     
 
-    return jnp.concatenate([dxdt, dgdt, rwd.reshape(1)], axis=0)
+    # Jacobian of RHS wrt state x=[Ca, T], useful for diagnosing stiffness during integration.
+    ca, T = x[0], x[1]
+    rA = model.k0 * jnp.exp(-model.EA_over_R / T) * ca
+    drA_dca = model.k0 * jnp.exp(-model.EA_over_R / T)
+    drA_dT = rA * (model.EA_over_R / (T * T))
+    dfdx = jnp.array(
+        [
+            [-model.q / model.V - drA_dca, -drA_dT],
+            [
+                ((-model.deltaHr) / (model.rho * model.C)) * drA_dca,
+                -model.q / model.V
+                + ((-model.deltaHr) / (model.rho * model.C)) * drA_dT
+                - model.UA * (1 / (model.rho * model.C * model.V)),
+            ],
+        ]
+    )
+
+    return jnp.concatenate([jnp.ravel(dxdt), jnp.ravel(dgdt), jnp.ravel(rwd)], axis=0)
+
 
 
 # -------------------------------------------------------------------------------- #
@@ -67,11 +142,11 @@ def simulator(
 # -------------------------------------------------------------------------------- #
 @partial(jax.jit, static_argnums=(0,))
 def cstr_cons_1(param_dict, x: jnp.ndarray, u: jnp.ndarray) -> jnp.ndarray:
-    return jnp.maximum(0.0, (x[1] - param_dict["t_lower"]) / param_dict["t_upper"])
+    return jnp.square(jnp.minimum(0.0, (x[1] - param_dict["t_lower"]) / param_dict["t_upper"])) 
 
 @partial(jax.jit, static_argnums=(0,))
 def cstr_cons_2(param_dict, x: jnp.ndarray, u: jnp.ndarray) -> jnp.ndarray:
-    return jnp.maximum(0.0, (param_dict["t_upper"] - x[1]) / param_dict["t_upper"])
+    return jnp.square(jnp.minimum(0.0, (param_dict["t_upper"] - x[1]) / param_dict["t_upper"]))
 
 
 # -------------------------------------------------------------------------------- #

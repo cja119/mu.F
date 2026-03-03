@@ -53,7 +53,7 @@ def init_plot(cfg, G, pp= None, init=True, save=True):
     
     pp.map_lower(sns.scatterplot, data=init_df, edgecolor="k", c="k", size=0.01, alpha=0.05,  linewidth=0.5)
         
-    indices = zip(*np.tril_indices_from(pp.axes, -1))
+    indices = list(zip(*np.tril_indices_from(pp.axes, -1)))
 
     for i, j in indices: 
         x_var = pp.x_vars[j]
@@ -75,24 +75,42 @@ def add_policy(pp, policy_data, cfg=None, color="r", marker="o", size=60):
     """
 
     cols = list(cfg.case_study.design_space_dimensions)
-    vec = np.ravel(policy_data)
-    if vec.shape[0] < len(cols):
-        vec = np.hstack([vec, np.full(len(cols) - vec.shape[0], np.nan)])
-    else:
-        vec = vec[:len(cols)]
-    policy_df = pd.DataFrame([vec], columns=cols)
 
-    # Manually overlay a single point per subplot to avoid seaborn re-plotting
-    row = policy_df.iloc[0]
+    if isinstance(policy_data, pd.DataFrame):
+        policy_df = policy_data.reindex(columns=cols)
+    else:
+        arr = np.asarray(policy_data, dtype=float)
+        if arr.ndim == 1:
+            arr = arr.reshape(1, -1)
+
+        rows = []
+        for row_vec in arr:
+            if row_vec.shape[0] < len(cols):
+                row_vec = np.hstack([row_vec, np.full(len(cols) - row_vec.shape[0], np.nan)])
+            else:
+                row_vec = row_vec[:len(cols)]
+            rows.append(row_vec)
+        policy_df = pd.DataFrame(rows, columns=cols)
+
     indices = zip(*np.tril_indices_from(pp.axes, -1))
-    for i, j in indices:
-        x_var = pp.x_vars[j]
-        y_var = pp.y_vars[i]
-        ax = pp.axes[i, j]
-        x_val = row.get(x_var, np.nan)
-        y_val = row.get(y_var, np.nan)
-        if not (np.isnan(x_val) or np.isnan(y_val)):
-            ax.scatter(x_val, y_val, c=color, marker=marker, s=size, edgecolor="k", linewidth=0.5, zorder=5)
+    for _, row in policy_df.iterrows():
+        for i, j in indices:
+            x_var = pp.x_vars[j]
+            y_var = pp.y_vars[i]
+            ax = pp.axes[i, j]
+            x_val = row.get(x_var, np.nan)
+            y_val = row.get(y_var, np.nan)
+            if not (np.isnan(x_val) or np.isnan(y_val)):
+                ax.scatter(
+                    x_val,
+                    y_val,
+                    c=color,
+                    marker=marker,
+                    s=size,
+                    edgecolor="k",
+                    linewidth=0.5,
+                    zorder=5,
+                )
     return pp
 
 def decompose_call(cfg, G, path, init=True):
@@ -167,38 +185,72 @@ def _load_latest_inside_samples():
 def _rollout_policy_from_graph(cfg, G):
     cols = list(cfg.case_study.design_space_dimensions)
     col_to_idx = {name: i for i, name in enumerate(cols)}
-    policy_vec = np.full(len(cols), np.nan, dtype=float)
+    policy_rows = []
 
     for node in G.nodes:
         if 'rollout_action' not in G.nodes[node]:
             continue
 
         action_vec = np.ravel(np.asarray(G.nodes[node]['rollout_action'], dtype=float))
+        node_policy_vec = np.full(len(cols), np.nan, dtype=float)
+        matched_any = False
+
+        named_action = G.nodes[node].get('rollout_action_named', None)
+        if isinstance(named_action, dict):
+            for key, value in named_action.items():
+                if key in col_to_idx:
+                    node_policy_vec[col_to_idx[key]] = float(value)
+                    matched_any = True
+
+        action_cols = G.nodes[node].get('rollout_action_columns', None)
+        if (not matched_any) and isinstance(action_cols, (list, tuple)):
+            for key, value in zip(action_cols, action_vec):
+                if key in col_to_idx:
+                    node_policy_vec[col_to_idx[key]] = float(value)
+                    matched_any = True
+
         node_dims = cfg.case_study.process_space_names[node]
         if not isinstance(node_dims, (list, tuple)):
             node_dims = [node_dims]
 
-        for dim_idx, value in enumerate(action_vec):
-            if dim_idx >= len(node_dims):
-                break
-            base_name = str(node_dims[dim_idx])
-            stripped_name = base_name
-            node_prefix = f"n{node}_"
-            if stripped_name.startswith(node_prefix):
-                stripped_name = stripped_name[len(node_prefix):]
-            candidate_cols = [
-                f"{base_name}_node_{node}",
-                f"{base_name}_{node}",
-                base_name,
-                f"{stripped_name}_node_{node}",
-                f"{stripped_name}_{node}",
-                stripped_name,
-            ]
-            col_idx = next((col_to_idx[c] for c in candidate_cols if c in col_to_idx), None)
-            if col_idx is not None:
-                policy_vec[col_idx] = value
+        if not matched_any:
+            for dim_idx, value in enumerate(action_vec):
+                if dim_idx >= len(node_dims):
+                    break
+                base_name = str(node_dims[dim_idx])
+                stripped_name = base_name
+                node_prefix = f"n{node}_"
+                if stripped_name.startswith(node_prefix):
+                    stripped_name = stripped_name[len(node_prefix):]
+                candidate_cols = [
+                    f"{base_name}_node_{node}",
+                    f"{base_name}_{node}",
+                    base_name,
+                    f"{stripped_name}_node_{node}",
+                    f"{stripped_name}_{node}",
+                    stripped_name,
+                ]
+                col_idx = next((col_to_idx[c] for c in candidate_cols if c in col_to_idx), None)
+                if col_idx is not None:
+                    node_policy_vec[col_idx] = value
+                    matched_any = True
 
-    return policy_vec
+        if not matched_any:
+            node_cols = [c for c in cols if f"N{node+1}" in c]
+            if node_cols:
+                for idx, value in enumerate(action_vec[:len(node_cols)]):
+                    node_policy_vec[col_to_idx[node_cols[idx]]] = value
+            else:
+                for idx, value in enumerate(action_vec[:len(cols)]):
+                    node_policy_vec[idx] = value
+
+        if not np.isnan(node_policy_vec).all():
+            policy_rows.append(node_policy_vec)
+
+    if not policy_rows:
+        return np.full(len(cols), np.nan, dtype=float)
+
+    return np.vstack(policy_rows)
 
 
 def rollout_with_policy_plot(cfg, G, policy_data=None, save=True, path='rollout_with_policy'):
