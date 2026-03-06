@@ -50,7 +50,14 @@ def case_study_constructor(cfg):
 
     return G.get_graph()
 
-
+def _process_bounds(cfg):
+    raw_extended = cfg.case_study.extendedDS_bounds
+    if raw_extended in (None, "None"):
+        return "None"
+    else:
+        ext_arr = np.asarray(raw_extended)
+        return [ext_arr[:, 0].reshape(1, -1), ext_arr[:, 1].reshape(1, -1)]
+   
 
 def case_study_allocation(G, cfg, dict_of_edge_fn, constraint_dictionary, solvers, unit_params_fn, initial_forward_pass, cost_dictionary=None):
     """
@@ -73,7 +80,7 @@ def case_study_allocation(G, cfg, dict_of_edge_fn, constraint_dictionary, solver
     G.add_arg_to_nodes('fn_evals', cfg.case_study.fn_evals)
     G.add_arg_to_nodes('unit_op', cfg.case_study.unit_op)
     G.add_arg_to_nodes('unit_params_fn', unit_params_fn)
-    G.add_arg_to_nodes('extendedDS_bounds', np.array(cfg.case_study.extendedDS_bounds))
+    G.add_arg_to_nodes('extendedDS_bounds', _process_bounds(cfg))
     G.add_arg_to_nodes('constraints', constraint_dictionary)
 
     if cost_dictionary is not None:

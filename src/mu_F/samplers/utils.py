@@ -50,7 +50,7 @@ def add_global_aux(bounds, G):
 
 def get_unit_bounds(G: nx.DiGraph, unit_index: int):
     # constructing holder for input and design parameter bounds
-    if isinstance(G.nodes[unit_index]['extendedDS_bounds'], str):
+    if isinstance(G.nodes[unit_index]['extendedDS_bounds'], str) or unit_index == 0:
         design_var = design_list_constructor(G.nodes[unit_index]['KS_bounds'])
         if G.in_degree()[unit_index] > 0: 
             bounds_for_input = [G.edges[predec,unit_index]['aux_filter'](G.edges[predec,unit_index]["input_data_bounds"]) for predec in G.predecessors(unit_index)]

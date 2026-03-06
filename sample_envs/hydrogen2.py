@@ -32,6 +32,7 @@ ENV_PARAMS = FrozenDict({
     "lower_storage_limit": 0.2,
     "upper_storage_limit": 295435,
     "feas_thresh": 0.1,
+    "lambda": 10e-5
 })
 
 SHAPE_DICT = {
@@ -67,15 +68,15 @@ def simulator(
     _train_2_throughput = x[..., 2]
     _train_3_throughput = x[..., 3]
     _renewable_energy = jnp.take(weather_map, node)  # z[..., 0] if z is not None else param_dict["renewable_energy_value"]
-    train_1_throughput = u[..., 0]
-    train_2_throughput = u[..., 1]
-    train_3_throughput = u[..., 2]
+    ramp_t1 = u[..., 0]
+    ramp_t2 = u[..., 1]
+    ramp_t3 = u[..., 2]
     hydrogen_throughput = u[..., 3]
 
     # Find the new throughput, saturating at the maximum throughput capacity
-    train_1_throughput = jnp.clip(_train_1_throughput + train_1_throughput, a_min=0.0, a_max=18.8*param_dict["train_throughput_capacity"])
-    train_2_throughput = jnp.clip(_train_2_throughput + train_2_throughput, a_min=0.0, a_max=18.8*param_dict["train_throughput_capacity"])
-    train_3_throughput = jnp.clip(_train_3_throughput + train_3_throughput, a_min=0.0, a_max=18.8*param_dict["train_throughput_capacity"])
+    train_1_throughput = jnp.clip(_train_1_throughput + ramp_t1, a_min=0.0, a_max=18.8*param_dict["train_throughput_capacity"])
+    train_2_throughput = jnp.clip(_train_2_throughput + ramp_t2, a_min=0.0, a_max=18.8*param_dict["train_throughput_capacity"])
+    train_3_throughput = jnp.clip(_train_3_throughput + ramp_t3, a_min=0.0, a_max=18.8*param_dict["train_throughput_capacity"])
 
     # Simulate the model dynamics 
     vector_energy_1,  = vector_energy_eq(
@@ -133,7 +134,15 @@ def simulator(
         a_max=param_dict["upper_storage_limit"],
     )
 
-    reward = jnp.broadcast_to(-sum([train_1_throughput, train_2_throughput, train_3_throughput]), hydrogen_storage.shape)
+
+    # penalty can take a mazimum value of 861,180.6252
+    # maximum reward is 6429.6
+    # lambda between 10e-5 and 10e-6 should be appropriate
+
+    _lambda = param_dict["lambda"]
+    penalty = jnp.square(ramp_t1) + jnp.square(ramp_t2) + jnp.square(ramp_t3)
+
+    reward = jnp.broadcast_to(-sum([train_1_throughput, train_2_throughput, train_3_throughput, - _lambda * penalty]), hydrogen_storage.shape)
     outputs = jnp.stack([hydrogen_storage, train_1_throughput, train_2_throughput, train_3_throughput], axis=-1)
 
     constraints = jnp.stack(
