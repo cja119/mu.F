@@ -60,6 +60,8 @@ def binary_classifier_data_preparation(
         
     support = data.X
     labels = data.y
+    # Preserve 2D feature shape (N, d), including the single-feature case d=1.
+    support = support.reshape(support.shape[0], -1)
     
     if cfg.formulation == 'deterministic':
         if cfg.samplers.notion_of_feasibility == 'positive':
@@ -83,16 +85,14 @@ def binary_classifier_data_preparation(
         # Randomly select negative samples to match the number of positive samples
         neg_indices = jnp.where(labels == -1)[0]
         selected_indices = jax.random.choice(Key, neg_indices, shape=(num_pos - num_neg,))
-        support = jnp.concatenate([support.squeeze(), support[selected_indices].squeeze()], axis=0)
+        support = jnp.concatenate([support, support[selected_indices]], axis=0)
         labels = jnp.concatenate([labels, labels[selected_indices]], axis=0)
     elif (num_neg > num_pos) and (min(num_pos, num_neg) > 0):
         # Randomly select positive samples to match the number of negative samples
         pos_indices = jnp.where(labels == 1)[0]
         selected_indices = jax.random.choice(Key, pos_indices, shape=(num_neg - num_pos,))
-        support = jnp.concatenate([support.squeeze(), support[selected_indices].squeeze()], axis=0)
+        support = jnp.concatenate([support, support[selected_indices]], axis=0)
         labels = jnp.concatenate([labels, labels[selected_indices]], axis=0)
-    else:
-        support = support.squeeze()
     
     return support, labels
 

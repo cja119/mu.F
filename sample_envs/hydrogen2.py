@@ -44,6 +44,8 @@ SHAPE_DICT = {
     "PHI_SIZE": 0
 }    
 
+
+
 @partial(jax.jit, static_argnums=(0,))
 def simulator(
     param_dict, node,  x: jnp.ndarray, u: jnp.ndarray, z: jnp.ndarray = None
@@ -51,23 +53,31 @@ def simulator(
     """
     Combined simulator for the H2 Export model.
     """
+    weather_map = jnp.array(
+        [
+            11.88, 11.88, 11.88, 11.88, 11.88, 11.88, 11.88, 11.88, 11.88, 11.88,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ]
+    )
+    weather_map = 11.88 * jnp.linspace(0.75, 0.25, 20)
+    
     # Implement the simulation logic
     _hydrogen_storage = x[..., 0]
     _train_1_throughput = x[..., 1]
     _train_2_throughput = x[..., 2]
     _train_3_throughput = x[..., 3]
-    _renewable_energy = z[..., 0] if z is not None else param_dict["renewable_energy_value"]
+    _renewable_energy = jnp.take(weather_map, node)  # z[..., 0] if z is not None else param_dict["renewable_energy_value"]
     train_1_throughput = u[..., 0]
     train_2_throughput = u[..., 1]
     train_3_throughput = u[..., 2]
     hydrogen_throughput = u[..., 3]
 
-    # Find the new throughput
+    # Find the new throughput, saturating at the maximum throughput capacity
     train_1_throughput = jnp.clip(_train_1_throughput + train_1_throughput, a_min=0.0, a_max=18.8*param_dict["train_throughput_capacity"])
     train_2_throughput = jnp.clip(_train_2_throughput + train_2_throughput, a_min=0.0, a_max=18.8*param_dict["train_throughput_capacity"])
     train_3_throughput = jnp.clip(_train_3_throughput + train_3_throughput, a_min=0.0, a_max=18.8*param_dict["train_throughput_capacity"])
 
-    # Simulate the model dynamics here
+    # Simulate the model dynamics 
     vector_energy_1,  = vector_energy_eq(
         train_1_throughput,
         param_dict["variable_energy_penalty"],
@@ -204,72 +214,6 @@ def vector_energy_eq(
 # -------------------------------------------------------------------------------- #
 # ------------------------------ Constraints ------------------------------------- #
 # -------------------------------------------------------------------------------- #
-@partial(jax.jit, static_argnums=(2, 3, 4))
-def vector_ramping_lower_cons(
-    vector_throughput,
-    _vector_throughput,
-    vector_calorific_value,
-    lower_ramp_limit,
-    train_throughput_capacity,
-):
-    """Constraint for lower ramping limit of vector energy"""
-    # GJ(NH3) / h - GJ(NH3) / h - (-) * Number * GJ(NH3) / h = GJ(NH3) / h
-    return -(
-        (_vector_throughput - vector_throughput) / vector_calorific_value
-        - lower_ramp_limit * train_throughput_capacity
-    ) / (lower_ramp_limit * train_throughput_capacity)
-
-
-@partial(jax.jit, static_argnums=(1, 2, 3))
-def vector_throughput_sat_l(
-    _vector_throughput,
-    vector_calorific_value,
-    lower_ramp_limit,
-    train_throughput_capacity,
-):
-    return (
-        _vector_throughput
-        - lower_ramp_limit
-        * vector_calorific_value
-        * train_throughput_capacity
-    )
-
-
-@partial(jax.jit, static_argnums=(2, 3, 4))
-def vector_ramping_upper_cons(
-    vector_throughput,
-    _vector_throughput,
-    vector_calorific_value,
-    upper_ramp_limit,
-    train_throughput_capacity,
-):
-    """Constraint for upper ramping limit of vector energy"""
-    # GJ(NH3) / h - GJ(NH3) / h - (-) * Number * GJ(NH3) / h = GJ(NH3) / h
-    return -(
-        (vector_throughput - _vector_throughput) / vector_calorific_value
-        - upper_ramp_limit
-        * train_throughput_capacity
-    ) / (
-        upper_ramp_limit
-        * train_throughput_capacity
-    )
-
-
-@partial(jax.jit, static_argnums=(1, 2, 3))
-def vector_throughput_sat_u(
-    _vector_throughput,
-    vector_calorific_value,
-    upper_ramp_limit,
-    train_throughput_capacity,
-):
-    return (
-        _vector_throughput
-        + vector_calorific_value
-        * upper_ramp_limit
-        * train_throughput_capacity
-    )
-
-
 @partial(jax.jit, static_argnums=(1, 2))
 def hydrogen_storage_lower_cons(
     hydrogen_storage, lower_storage_limit, upper_storage_limit

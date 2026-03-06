@@ -18,6 +18,8 @@ n_aux_args:
 
 n_input_args: 2 
 
+reject_time: 0.5
+
 discount_factor: 0.99999
 
 KS_bounds:

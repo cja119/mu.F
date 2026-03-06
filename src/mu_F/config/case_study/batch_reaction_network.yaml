@@ -82,3 +82,5 @@ mode:
 
 
 evaluation_mode: 'jax-pmap' #serial
+
+reject_time: 0.5

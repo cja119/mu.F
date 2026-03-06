@@ -1118,6 +1118,9 @@ class current_constraint_surrogate(backward_constraint_evaluator_general):
         """
 
         scaler = self.graph.nodes[in_node].get('classifier_x_scalar')
+        if scaler is None:
+            # Degenerate classifier fallback (all-feasible/all-infeasible) has no scaler.
+            return jnp.ravel(jnp.array(decisions))
 
         n_d = self.graph.nodes[in_node]['n_design_args']
         n_u = self.graph.nodes[in_node]['n_input_args']

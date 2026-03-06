@@ -92,7 +92,8 @@ def add_policy(pp, policy_data, cfg=None, color="r", marker="o", size=60):
             rows.append(row_vec)
         policy_df = pd.DataFrame(rows, columns=cols)
 
-    indices = zip(*np.tril_indices_from(pp.axes, -1))
+    # Materialize indices so they can be reused for every policy row.
+    indices = list(zip(*np.tril_indices_from(pp.axes, -1)))
     for _, row in policy_df.iterrows():
         for i, j in indices:
             x_var = pp.x_vars[j]
@@ -185,72 +186,59 @@ def _load_latest_inside_samples():
 def _rollout_policy_from_graph(cfg, G):
     cols = list(cfg.case_study.design_space_dimensions)
     col_to_idx = {name: i for i, name in enumerate(cols)}
-    policy_rows = []
+    global_policy_vec = np.full(len(cols), np.nan, dtype=float)
 
+    n_design_cfg = cfg.case_study.n_design_args
+    if isinstance(n_design_cfg, (list, tuple)):
+        n_design_per_node = {i: int(n_design_cfg[i]) for i in range(len(n_design_cfg))}
+    elif isinstance(n_design_cfg, dict):
+        n_design_per_node = {
+            int(str(k).replace("node_", "")): int(v) for k, v in n_design_cfg.items()
+        }
+    else:
+        n_design_per_node = {}
+
+    running_offset = 0
     for node in G.nodes:
-        if 'rollout_action' not in G.nodes[node]:
+        action_raw = G.nodes[node].get("rollout_action", None)
+        if action_raw is None:
+            n_d_skip = int(G.nodes[node].get("n_design_args", n_design_per_node.get(node, 0)))
+            running_offset += max(n_d_skip, 0)
+            logging.info(f"Rollout plot: node {node} has no rollout_action.")
             continue
 
-        action_vec = np.ravel(np.asarray(G.nodes[node]['rollout_action'], dtype=float))
-        node_policy_vec = np.full(len(cols), np.nan, dtype=float)
-        matched_any = False
+        action_vec = np.ravel(np.asarray(action_raw, dtype=float))
+        n_d = int(G.nodes[node].get("n_design_args", n_design_per_node.get(node, action_vec.shape[0])))
+        n_take = min(max(n_d, 0), action_vec.shape[0])
+        assigned = 0
 
-        named_action = G.nodes[node].get('rollout_action_named', None)
-        if isinstance(named_action, dict):
-            for key, value in named_action.items():
-                if key in col_to_idx:
-                    node_policy_vec[col_to_idx[key]] = float(value)
-                    matched_any = True
-
-        action_cols = G.nodes[node].get('rollout_action_columns', None)
-        if (not matched_any) and isinstance(action_cols, (list, tuple)):
+        action_cols = G.nodes[node].get("rollout_action_columns", None)
+        if isinstance(action_cols, (list, tuple)):
             for key, value in zip(action_cols, action_vec):
                 if key in col_to_idx:
-                    node_policy_vec[col_to_idx[key]] = float(value)
-                    matched_any = True
+                    global_policy_vec[col_to_idx[key]] = float(value)
+                    assigned += 1
 
-        node_dims = cfg.case_study.process_space_names[node]
-        if not isinstance(node_dims, (list, tuple)):
-            node_dims = [node_dims]
+        node_cols = [c for c in cols if f"N{node+1}" in str(c)]
+        if assigned < n_take and node_cols:
+            for idx, value in enumerate(action_vec[: min(n_take, len(node_cols))]):
+                global_policy_vec[col_to_idx[node_cols[idx]]] = float(value)
+            assigned = max(assigned, min(n_take, len(node_cols)))
 
-        if not matched_any:
-            for dim_idx, value in enumerate(action_vec):
-                if dim_idx >= len(node_dims):
-                    break
-                base_name = str(node_dims[dim_idx])
-                stripped_name = base_name
-                node_prefix = f"n{node}_"
-                if stripped_name.startswith(node_prefix):
-                    stripped_name = stripped_name[len(node_prefix):]
-                candidate_cols = [
-                    f"{base_name}_node_{node}",
-                    f"{base_name}_{node}",
-                    base_name,
-                    f"{stripped_name}_node_{node}",
-                    f"{stripped_name}_{node}",
-                    stripped_name,
-                ]
-                col_idx = next((col_to_idx[c] for c in candidate_cols if c in col_to_idx), None)
-                if col_idx is not None:
-                    node_policy_vec[col_idx] = value
-                    matched_any = True
+        if assigned < n_take:
+            start = running_offset
+            end = min(start + n_take, len(cols))
+            if end > start:
+                global_policy_vec[start:end] = action_vec[: end - start]
+                assigned = max(assigned, end - start)
 
-        if not matched_any:
-            node_cols = [c for c in cols if f"N{node+1}" in c]
-            if node_cols:
-                for idx, value in enumerate(action_vec[:len(node_cols)]):
-                    node_policy_vec[col_to_idx[node_cols[idx]]] = value
-            else:
-                for idx, value in enumerate(action_vec[:len(cols)]):
-                    node_policy_vec[idx] = value
+        logging.info(
+            f"Rollout plot: node {node}, action_len={action_vec.shape[0]}, "
+            f"n_design={n_d}, assigned={assigned}."
+        )
+        running_offset += max(n_d, 0)
 
-        if not np.isnan(node_policy_vec).all():
-            policy_rows.append(node_policy_vec)
-
-    if not policy_rows:
-        return np.full(len(cols), np.nan, dtype=float)
-
-    return np.vstack(policy_rows)
+    return global_policy_vec
 
 
 def rollout_with_policy_plot(cfg, G, policy_data=None, save=True, path='rollout_with_policy'):
@@ -279,7 +267,19 @@ def rollout_with_policy_plot(cfg, G, policy_data=None, save=True, path='rollout_
         pp.map_lower(sns.scatterplot, data=reconstructed_df, edgecolor="k", c="b", linewidth=0.5)
 
     policy_vec = _rollout_policy_from_graph(cfg, G) if policy_data is None else policy_data
-    pp = add_policy(pp, policy_vec, cfg=cfg, color="r", marker="o", size=90)
+    policy_arr = np.ravel(np.asarray(policy_vec, dtype=float))
+    if policy_arr.shape[0] < len(cols):
+        policy_arr = np.hstack([policy_arr, np.full(len(cols) - policy_arr.shape[0], np.nan)])
+    else:
+        policy_arr = policy_arr[:len(cols)]
+
+    policy_df = pd.DataFrame([policy_arr], columns=cols)
+    logging.info(
+        f"Rollout plot: overlay vector non-NaN count = "
+        f"{int(np.sum(~np.isnan(policy_arr)))}/{policy_arr.shape[0]}"
+    )
+    if not policy_df.isna().all().all():
+        pp = add_policy(pp, policy_df, cfg=cfg, color="r", marker="o", size=90)
 
     if save:
         pp.savefig(path + ".svg", dpi=DEFAULT_DPI)

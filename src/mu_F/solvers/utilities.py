@@ -101,10 +101,10 @@ def rejection_sample_initial_guess(n_starts, n_d, bounds, constraints, max_time 
 
    feasible_guesses = deque()
    n_req = n_starts
-   start_time = time.time()
    
    constraints = jax.vmap(partial(lambda x, g: jnp.vstack([g[i](x) for i in range(len(g))]), g=constraints), in_axes=0, out_axes=0)
 
+   start_time = time.time()
    while len(feasible_guesses) < n_starts and (time.time() - start_time) < max_time:
       
       # Generate sobol sequences and then reject infeasible
