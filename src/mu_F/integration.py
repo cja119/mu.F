@@ -481,7 +481,7 @@ class subproblem_model(ABC):
         # evaluate feasibility downstream
         if (self.backward_constraints is not None) and (self.G.out_degree(self.unit_index) > 0):
             start_time = time.time()
-            backward_constraint_evals = self.backward_constraints.evaluate(outputs, aux_args) # backward constraints (rank 3 tensor, n_d \times n_theta \times n_g)
+            backward_constraint_evals, backward_warmstarts = self.backward_constraints.evaluate(outputs, aux_args) # backward constraints (rank 3 tensor, n_d \times n_theta \times n_g)
             end_time = time.time()
             execution_time = end_time - start_time
             if backward_constraint_evals.ndim == 1:
@@ -491,6 +491,7 @@ class subproblem_model(ABC):
             logging.info(f'execution_time_backward_constraints: {execution_time}')
         else:
             backward_constraint_evals = None
+            backward_warmstarts = None
 
         # evaluate feasibility decentralised
         if self.forward_decentralised is not None and self.G.in_degree(self.unit_index) > 0:
@@ -525,8 +526,22 @@ class subproblem_model(ABC):
         # Evaluate rewards
         if node_cost_evals is not None:
             if self.G.out_degree(self.unit_index) > 0:
+                # filter to feasible outputs only before evaluating ctg surrogate
+                pre_ctg_cons = jnp.concatenate([c for c in [process_constraint_evals, forward_constraint_evals, backward_constraint_evals, decentralised_constraint_evals, decentralised_root_constraint_evals] if c is not None], axis=-1)
+                _, _, cond = apply_feasibility([outputs], [pre_ctg_cons], self.cfg, self.unit_index, self.cfg.formulation).get_feasible(return_indices=True)
+                feasible_mask = cond[0].squeeze()
+                feasible_idx = jnp.where(feasible_mask)[0]
+                logging.info(f'ctg_feasible_count: {len(feasible_idx)} / {outputs.shape[0]}')
+
                 start_time = time.time()
-                ctg_function_evals = self.backward_cost_to_go.evaluate(outputs, aux_args)
+                if len(feasible_idx) > 0:
+                    outputs_feasible = outputs[feasible_idx]
+                    warmstarts_feasible = {succ: backward_warmstarts[succ][feasible_idx] for succ in backward_warmstarts} if backward_warmstarts is not None else None
+                    ctg_evals_feasible = self.backward_cost_to_go.evaluate(outputs_feasible, aux_args, warmstarts=warmstarts_feasible)
+                    ctg_function_evals = jnp.zeros(outputs.shape[0]).at[feasible_idx].set(ctg_evals_feasible.reshape(-1))
+                else:
+                    ctg_function_evals = jnp.zeros(outputs.shape[0])
+                del backward_warmstarts
                 if ctg_function_evals.ndim == 1:
                     ctg_function_evals = ctg_function_evals.reshape(-1,1)
                 if ctg_function_evals.ndim == 2:
@@ -684,6 +699,6 @@ def get_ctg_training_data(graph, node, model, cfg):
     # Concatenate all feasible samples
     x_feasible = jnp.vstack(x_feasible_list) if x_feasible_list else jnp.empty((0, x_d_list[0].shape[1]))
     y_feasible = jnp.vstack(y_feasible_list) if y_feasible_list else jnp.empty((0, y_ctg_list[0].shape[1]))
-
+    
     graph.nodes[node]["ctg_func_training"] = dataset(X=x_feasible, y=y_feasible)
     return graph

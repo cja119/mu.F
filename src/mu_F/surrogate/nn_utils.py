@@ -487,6 +487,34 @@ def create_minibatches(dataset, batch_size, num_devices=1):
     return [minibatches[batch] for batch in range(min(num_devices, len(minibatches)))]
 
 
+def _ann_mapp(y):
+    # if this quantity is <= 0 the sample predicts feasibility
+    if y.ndim < 2: y = y.reshape(1, -1)
+    return jnp.array([0.5]) - softmax(y, axis=-1)[0, 0]
+
+def _ann_forward_std_regressor(params, x, model):
+    if x.ndim < 2: x = x.reshape(1, -1)
+    return model.apply(params, x)
+
+def _ann_forward_unstd_regressor(params, x, x_mean, x_std, y_mean, y_std, model):
+    if x.ndim < 2: x = x.reshape(1, -1)
+    return model.apply(params, (x - x_mean) / x_std) * y_std + y_mean
+
+def _ann_forward_std_classifier(params, x, model):
+    if x.ndim < 2: x = x.reshape(1, -1)
+    if x.shape[0] >= x.shape[1]: x = x.T
+    return _ann_mapp(model.apply(params, x))
+
+def _ann_forward_unstd_classifier(params, x, x_mean, x_std, model):
+    if x.ndim < 2: x = x.reshape(1, -1)
+    return _ann_mapp(model.apply(params, (x - x_mean) / x_std))
+
+_ann_forward_std_regressor_jit    = jit(_ann_forward_std_regressor,    static_argnames=('model',))
+_ann_forward_unstd_regressor_jit  = jit(_ann_forward_unstd_regressor,  static_argnames=('model',))
+_ann_forward_std_classifier_jit   = jit(_ann_forward_std_classifier,   static_argnames=('model',))
+_ann_forward_unstd_classifier_jit = jit(_ann_forward_unstd_classifier, static_argnames=('model',))
+
+
 def build_ann(cfg, model_data, model_class):
 
     # Determine the input and output dimensions
@@ -498,64 +526,23 @@ def build_ann(cfg, model_data, model_class):
     model = NeuralNetworkEstimator(hidden_units=model_data['hidden_units'], output_units=model_data['output_units'], activation_functions=model_data['activation_function'])
     params = get_initial_params_serial(jax.random.PRNGKey(0), x_mean.reshape(1,-1), model)
     params = from_bytes(params, model_data['serialized_params'])
-    opt_model = partial(model.apply, params)
 
     if model_class == 'regressor':
         y_standardisation = model_data['standardisation_metrics_output']
-        y_mean = y_standardisation.mean
-        y_std = y_standardisation.std
+        y_mean = jnp.array(y_standardisation.mean)
+        y_std = jnp.array(y_standardisation.std)
 
-        y_mean = jnp.array(y_mean)
-        y_std = jnp.array(y_std)
-
-        @jit
-        def project(y):
-            return y * y_std + y_mean
-        
         if cfg['solvers']['standardised']:
-            @jit
-            def query_standardised_model(x):
-                if x.ndim <2: x = x.reshape(1,-1)
-                return opt_model(x)
-            return query_standardised_model    
-
+            return partial(_ann_forward_std_regressor_jit, params, model=model)
         else:
-            @jit
-            def standardise(x):
-                return (x - x_mean) / x_std
-            @jit
-            def query_unstandardised_model(x):
-                if x.ndim <2 : x = x.reshape(1,-1)
-                return project(opt_model(standardise(x)))
-            return query_unstandardised_model
+            return partial(_ann_forward_unstd_regressor_jit, params, x_mean, x_std, y_mean, y_std, model=model)
 
-    
     elif model_class == 'classifier':
-
-        def mapp_(y):
-            if y.ndim <2 : y = y.reshape(1,-1)
-            return jnp.array([0.5]) - softmax(y, axis=-1)[0,0]    # if this quantity is less than or equal to zero, then the sample predicts feasibility.
-
         if cfg['solvers']['standardised']:
-            @jit
-            def query_standardised_classifier(x):
-                if x.ndim <2: x = x.reshape(1,-1)
-                if x.shape[0]>= x.shape[1]: x= x.T
-                return mapp_(opt_model(x))
-            return query_standardised_classifier
-        
+            return partial(_ann_forward_std_classifier_jit, params, model=model)
         else:
-            @jit
-            def standardise(x):
-                return (x - x_mean) / x_std
-            @jit
-            def query_unstandardised_classifier(x):
-                if x.ndim <2 : x = x.reshape(1,-1)
-                return mapp_(opt_model(standardise(x))) 
-    
-            
-            return query_unstandardised_classifier
-    
+            return partial(_ann_forward_unstd_classifier_jit, params, x_mean, x_std, model=model)
+
     else:
         raise NotImplementedError(f"Model class {model_class} not implemented")
 

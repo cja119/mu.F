@@ -5,6 +5,7 @@ from typing import Callable
 import jax.numpy as jnp
 import numpy as np
 from jax import jit
+from functools import lru_cache
 from scipy.stats import beta
 
 def standardise_inputs(graph, succ_inputs, out_node, input_indices):
@@ -36,18 +37,28 @@ def standardise_model_decisions(graph, decisions, out_node):
         return [(decision - mean[:].reshape(1,-1)) / std[:].reshape(1,-1) for decision in decisions]
     
 
+@lru_cache(maxsize=None)
+def _cached_masked_classifier(classifier, ndim, fix_ind_tuple, aux_ind_tuple):
+    fix_ind = np.array(fix_ind_tuple)
+    aux_ind = np.array(aux_ind_tuple)
+    def masked_classifier(x, y):
+        input_ = construct_input(x, y, fix_ind, aux_ind, ndim)
+        return classifier(input_.reshape(1,-1)).squeeze()
+    return jit(masked_classifier)
+
+
 def mask_classifier(classifier: Callable, ndim, fix_ind, aux_ind):
     """
     Masks the classifier
     - y corresponds to those indices that are fixed
     - x corresponds to those indices that are optimised
     """
-
-    def masked_classifier(x, y):
-        input_ = construct_input(x, y, fix_ind, aux_ind, ndim)
-        return classifier(input_.reshape(1,-1)).squeeze()
-    
-    return jit(masked_classifier)
+    return _cached_masked_classifier(
+        classifier,
+        ndim,
+        tuple(int(i) for i in fix_ind),
+        tuple(int(i) for i in aux_ind)
+    )
 
 
 def construct_input(

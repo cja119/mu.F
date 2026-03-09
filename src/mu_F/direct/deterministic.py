@@ -94,8 +94,7 @@ class DeterministicMonolithic(SolveDirect):
         """
         problem_data = self._prepare_model(self.G)
         solver = self._load_solver()
-
-        return solver(
+        solver, solution =  solver(
             problem_data["objective_fn"],
             problem_data["constraints"],
             problem_data["var_bounds"],
@@ -103,10 +102,31 @@ class DeterministicMonolithic(SolveDirect):
             problem_data["eq_lhs"], 
             problem_data["eq_rhs"],
         )
+
+        self._log_outputs(solution)
+        return solver, solution
     
+    def _log_outputs(self, solution):
+
+        status = 'succesfully' if self._get_status(solution) else 'unsuccessfully'
+
+        logging.info(f"Monolithic solver finished {status}, objective value {solution['f']}")
+        
+        des_0 = 0
+        for node in self.G.nodes():
+            des_slice = des_0, des_0 + self.G.nodes[node]["n_design_args"]
+            des_vals = solution['x'][des_slice[0]:des_slice[1]]
+            logging.info(f"Design variables for node {node}: {des_vals}")
+            des_0 = des_slice[1]
+
+        return None
+
     def _get_solution(self, solver_output):
-        return solver_output['x']
-    
+        return solver_output['x'], solver_output['f']
+
+    def _get_status(self, solver_output):
+        return 1 if all(out >= 0 for out in solver_output['g'].nz) else 0
+
     def _load_solver(self):
         """
         Loads in solver object

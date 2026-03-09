@@ -12,6 +12,7 @@ from sklearn.model_selection import KFold, GridSearchCV
 
 import jax.numpy as jnp
 from jax import jit
+from functools import partial
 
 from mu_F.surrogate.data_utils import binary_classifier_data_preparation, standardisation_metrics
 
@@ -174,12 +175,24 @@ def get_model_data(x_mean, x_std, support_vectors, coefficients, intercept, kern
                                         'kernel_param': kernel_param}}
     return model_data
 
+@jit
+def _svm_fn_standardised(x, sv, coef, intercept, kp):
+    # defining multivariate -> univariate fn (no batching support)
+    x = x.reshape(1, -1)
+    return (jnp.dot(coef, rbf_kernel(sv, x, epsilon=kp)) + intercept).reshape(-1, 1)
+
+@jit
+def _svm_fn_unstandardised(x, sv, coef, intercept, kp, x_mean, x_std):
+    # Compute the decision function
+    x_ = ((x.reshape(-1,) - x_mean.reshape(-1,)) / x_std.reshape(-1,)).reshape(1, -1)
+    return (jnp.dot(coef, rbf_kernel(sv, x_, epsilon=kp)) + intercept).reshape(-1, 1)
+
+
 def build_svm(cfg, model_data):
 
     x_standardisation = model_data['standardisation_metrics_input']
     x_mean = x_standardisation.mean
     x_std = x_standardisation.std
-
 
     # Define the SVM model
     support_vectors = model_data['serialized_params']['support_vectors']
@@ -188,24 +201,9 @@ def build_svm(cfg, model_data):
     kernel_param = model_data['serialized_params']['kernel_param']
 
     if cfg['solvers']['standardised']:
-        @jit
-        def svm_standardised(x):
-            # defining multivariate -> univariate fn (no batching support )
-            x = x.reshape(1, -1)
-            decision = jnp.dot(coefficients, rbf_kernel(support_vectors, x,epsilon=kernel_param)) + intercept
-            return decision.reshape(-1,1)
-        return svm_standardised
-        
+        return partial(_svm_fn_standardised, sv=support_vectors, coef=coefficients, intercept=intercept, kp=kernel_param)
     else:
-        @jit
-        def svm_unstandardised(x):
-            # Compute the decision function
-            x_ = (x.reshape(-1,) - x_mean.reshape(-1,)) / x_std.reshape(-1,)
-            x_ = x_.reshape(1, -1)
-            decision = jnp.dot(coefficients, rbf_kernel(support_vectors, x_,epsilon=kernel_param)) + intercept
-            # Apply the sign function to get the predicted class
-            return decision.reshape(-1,1)
-        return svm_unstandardised
+        return partial(_svm_fn_unstandardised, sv=support_vectors, coef=coefficients, intercept=intercept, kp=kernel_param, x_mean=x_mean, x_std=x_std)
         
 
 

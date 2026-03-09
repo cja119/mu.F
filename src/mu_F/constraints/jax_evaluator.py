@@ -46,14 +46,15 @@ def initial_guess(cfg, bounds):
     return generate_initial_guess(cfg.n_starts, n_d, bounds)
 
 def solve(solver, initial_guesses):
-    obj_r, e  = [], []
+    obj_r, e, params_r = [], [], []
 
     for solve, init in zip(solver, initial_guesses):
-        objective, error = solve(init)
+        objective, error, params = solve(init)
         obj_r.append(objective)
         e.append(error)
-    
-    return {'objective': jnp.array(obj_r), 'error': jnp.array(e)}
+        params_r.append(params)
+
+    return {'objective': jnp.array(obj_r), 'error': jnp.array(e), 'params': jnp.array(params_r)}
     
 
 def load_solver(objective_func, bounds):
@@ -175,9 +176,9 @@ def evaluate(outputs, aux, graph, node, cfg):
         objective, bounds = prepare_backward_problem(outputs, graph, node, cfg)
         # enabling tracing
         if objective is None or bounds is None:
-            return jnp.zeros((outputs.shape[0], 1))
+            return jnp.zeros((outputs.shape[0], 1)), None
         # function body
-        else: 
+        else:
             succ_fn_evaluations = {}
             for succ in graph.successors(node):
                 backward_solver = [
@@ -193,15 +194,14 @@ def evaluate(outputs, aux, graph, node, cfg):
                 succ_fn_evaluations[succ]['objective'].reshape(-1, 1)
                 for succ in graph.successors(node)
             ]
-            return shaping_function(jnp.hstack(fn_evaluations), cfg)
+            warmstart_params = {succ: succ_fn_evaluations[succ]['params'] for succ in graph.successors(node)}
+            return shaping_function(jnp.hstack(fn_evaluations), cfg), warmstart_params
 
     is_graph_wide = bool(graph.graph["solve_post_processing_problem"])
-    return lax.cond(
-        is_graph_wide,
-        false_fun=node_local_branch,
-        true_fun=graph_wide_branch,
-        operand=(outputs, aux)
-    )
+    if is_graph_wide:
+        return graph_wide_branch((outputs, aux)), None
+    else:
+        return node_local_branch((outputs, aux))
 
 
 def jax_pmap_evaluator(outputs, aux, cfg, graph, node):
@@ -237,13 +237,17 @@ def backward_constraint_evaluator(outputs, aux, cfg, graph, node, pool):
     output_batches = create_batches(batch_sizes, outputs)
     aux_batches = create_batches(batch_sizes, jnp.repeat(jnp.expand_dims(aux, axis=1), outputs.shape[1], axis=1))
     # evaluate the constraints
-    results = []
+    results, warmstarts = [], []
     for i, (output_batch, aux_batch) in enumerate(zip(output_batches, aux_batches)):
-        results.append(backward_surrogate_pmap_batch_evaluator(output_batch, aux_batch, cfg, graph, node))
-    # concatenate the results
+        evals, params = backward_surrogate_pmap_batch_evaluator(output_batch, aux_batch, cfg, graph, node)
+        results.append(evals)
+        if params is not None:
+            warmstarts.append(params)
+    # concatenate the results, keeping warmstarts keyed by successor node
+    warmstarts = {succ: jnp.vstack([w[succ] for w in warmstarts]) for succ in warmstarts[0]} if warmstarts else None
 
     del output_batches, aux_batches, batch_sizes
 
-    return jnp.vstack(results)
+    return jnp.vstack(results), warmstarts
 
     

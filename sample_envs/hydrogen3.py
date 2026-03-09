@@ -36,9 +36,9 @@ ENV_PARAMS = FrozenDict({
 })
 
 SHAPE_DICT = {
-    "X_SIZE": 4,
-    "U_SIZE": 4,
-    "F_SIZE": 4,
+    "X_SIZE": 2,
+    "U_SIZE": 2,
+    "F_SIZE": 2,
     "G_SIZE": 3,
     "Z_SIZE": 1,
     "L_SIZE": 1,
@@ -65,13 +65,13 @@ def simulator(
     # Implement the simulation logic
     _hydrogen_storage = x[..., 0]
     _train_1_throughput = x[..., 1]
-    _train_2_throughput = x[..., 2]
-    _train_3_throughput = x[..., 3]
+    _train_2_throughput = x[..., 1]
+    _train_3_throughput = x[..., 1]
     _renewable_energy = jnp.take(weather_map, node)  # z[..., 0] if z is not None else param_dict["renewable_energy_value"]
     ramp_t1 = u[..., 0]
-    ramp_t2 = u[..., 1]
-    ramp_t3 = u[..., 2]
-    hydrogen_throughput = u[..., 3]
+    ramp_t2 = u[..., 0]
+    ramp_t3 = u[..., 0]
+    hydrogen_throughput = u[..., 1]
 
     # Find the new throughput, saturating at the maximum throughput capacity
     train_1_throughput = jnp.clip(_train_1_throughput + ramp_t1, a_min=0.0, a_max=18.8*param_dict["train_throughput_capacity"])
@@ -143,7 +143,7 @@ def simulator(
     penalty = jnp.square(ramp_t1) + jnp.square(ramp_t2) + jnp.square(ramp_t3)
 
     reward = jnp.broadcast_to(-sum([train_1_throughput, train_2_throughput, train_3_throughput, - _lambda * penalty]), hydrogen_storage.shape)
-    outputs = jnp.stack([hydrogen_storage, train_1_throughput, train_2_throughput, train_3_throughput], axis=-1)
+    outputs = jnp.stack([hydrogen_storage, train_1_throughput], axis=-1)
 
     constraints = jnp.stack(
         [

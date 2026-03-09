@@ -175,15 +175,16 @@ def ray_casadi_multi_start(problem_id, problem_data, cfg, ctg = None):
 
   # determine if there are any constraints
   if len(g_fn) > 0:
-    reject_time = cfg['case_study']['reject_time']
-    initial_guess = rejection_sample_initial_guess(n_starts, n_d, bounds, g_fn, max_time=reject_time, seed=problem_id)
+    if not problem_data.get('warm_start', False):
+      reject_time = cfg['case_study']['reject_time']
+      initial_guess = rejection_sample_initial_guess(n_starts, n_d, bounds, g_fn, max_time=reject_time, seed=problem_id)
     casadify_constraints_fn, _ = casadify_constraints(g_fn, initial_guess[0].reshape(1,-1), n_d)
     optimizer_func = partial(casadi_nlp_optimizer_gcons, constraints=casadify_constraints_fn, lhs=lhs, rhs=rhs)
   else:
     casadify_constraints_fn = None
     optimizer_func = casadi_nlp_optimizer_no_gcons
 
-  # run multi start and store solutions
+  # run multi start and store solutions (n_starts=1 when warm_start is set, since initial_guess is shape (1, n_d))
   solutions = []
   for i in range(n_starts):
       ig = np.array(initial_guess[i,:]).squeeze()
@@ -234,7 +235,7 @@ def multi_start_solve_bounds_nonlinear_program(initial_guess, objective_func, bo
 
     
 
-    return min_obj.squeeze(), solutions[1].error[arg_min].squeeze()
+    return min_obj.squeeze(), solutions[1].error[arg_min].squeeze(), solutions.params[arg_min]
 
 
 def solve_nonlinear_program_bounds_jax_uncons(init, xs, objective_func, bounds_, tol):

@@ -57,8 +57,8 @@ class constraint_evaluator(ABC):
     def evaluate_process(self, design, inputs, aux, outputs):
         return self.constraint_evaluator(design, inputs, outputs, aux)
     
-    def evaluate_coupling(self, inputs, aux):
-        return self.constraint_evaluator(inputs, aux)
+    def evaluate_coupling(self, inputs, aux, **kwargs):
+        return self.constraint_evaluator(inputs, aux, **kwargs)
     
     def evaluate_global(self):
         return self.constraint_evaluator()

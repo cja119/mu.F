@@ -504,27 +504,28 @@ class backward_constraint_evaluator_general(forward_constraint_evaluator):
         if self.pool == 'ray':
             self.evaluation_method = self.ray_evaluation
     
-    def __call__(self, outputs, aux):
-        return self.evaluate(outputs)
+    def __call__(self, outputs, aux, **kwargs):
+        return self.evaluate(outputs, **kwargs)
 
-    def evaluate(self, outputs):
+    def evaluate(self, outputs, aux=None, warmstarts=None):
         """
         Evaluates the constraints by iterating sequentially over the design and the uncertain params
         inputs: samples in the extended design space
         outputs: the constraint evaluations
         """
-        return self.wrapper(outputs)
-    
-    
-    def wrapper(self, outputs):
-        """ first prepare the problem set up, 
+        return self.wrapper(outputs, warmstarts=warmstarts)
+
+
+    def wrapper(self, outputs, warmstarts=None):
+        """ first prepare the problem set up,
         then evaluate the constraints in parallel using ray.
         """
 
         solver_inputs = []
         # get solvers for each problem
         for i in range(outputs.shape[0]):
-            solver_inputs.append(self.evaluate_parallel(i, outputs[i,:].reshape(1,-1)))        
+            warmstart_i = {succ: warmstarts[succ][i] for succ in warmstarts} if warmstarts is not None else None
+            solver_inputs.append(self.evaluate_parallel(i, outputs[i,:].reshape(1,-1), warmstart=warmstart_i))        
 
         if len(list(solver_inputs[0].values())) > 1:
             raise NotImplementedError("Case of uncertainty in forward pass not yet implemented/optimised for parallel evaluation.")
@@ -1342,23 +1343,38 @@ class backward_cost_to_go_evaluator(backward_constraint_evaluator_general):
         return problem_data
     
         
-    def evaluate_parallel(self, i, outputs):
+    def evaluate_parallel(self, i, outputs, warmstart=None):
 
         """
         Evaluates the constraints
         """
         problem_data = self.prepare_forward_problem(outputs)
-        solver_object = self.load_solver()  # solver type has been defined elsewhere in the case study/graph construction. 
+        solver_object = self.load_solver()  # solver type has been defined elsewhere in the case study/graph construction.
         succ_fn_input_i = {succ: {} for succ in self.graph.successors(self.node)}
 
         solved_successful = 0
         problems = sum([len(problem_data[pred]) for pred in self.graph.successors(self.node)])
- 
+
         # iterate over successors and evaluate the constraints
         for succ in self.graph.successors(self.node):
-            for p in range(len(problem_data[succ])): 
+            for p in range(len(problem_data[succ])):
                 forward_solver = solver_object.from_method(self.cfg.solvers.forward_coupling, solver_object.solver_type, problem_data[succ][p]['objective_func'], problem_data[succ][p]['bounds'], problem_data[succ][p]['constraints'])
-                initial_guess = forward_solver.initial_guess()
+                if warmstart is not None and succ in warmstart:
+                    # Warmstart from JAX solver is in reduced (design-only) space.
+                    # Pad to full NLP dimension (extendedDS_bounds) with zeros.
+                    lb_vec = np.squeeze(np.array(problem_data[succ][p]['bounds'][0]))
+                    n_full = int(lb_vec.size)
+                    n_d_succ = self.graph.nodes[succ]['n_design_args']
+                    input_idx = np.array([n_d_succ + inp for inp in self.graph.edges[self.node, succ]['input_indices']], dtype=int)
+                    aux_idx = np.array(list(self.graph.edges[self.node, succ]['auxiliary_indices']), dtype=int)
+                    all_fixed = np.concatenate([input_idx, aux_idx]) if (len(input_idx) > 0 or len(aux_idx) > 0) else np.array([], dtype=int)
+                    design_idx = np.delete(np.arange(n_full), all_fixed)
+                    full_ig = np.zeros(n_full)
+                    full_ig[design_idx] = np.array(warmstart[succ]).reshape(-1)
+                    initial_guess = full_ig.reshape(1, -1)
+                    forward_solver.solver.problem_data['data']['warm_start'] = True
+                else:
+                    initial_guess = forward_solver.initial_guess()
                 forward_solver.solver.problem_data['data']['initial_guess'] = initial_guess
                 forward_solver.solver.problem_data['data']['eq_rhs'] = problem_data[succ][p]['eq_rhs']
                 forward_solver.solver.problem_data['data']['eq_lhs'] = problem_data[succ][p]['eq_lhs']
