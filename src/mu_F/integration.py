@@ -145,14 +145,13 @@ class apply_decomposition:
                 profiler.save_device_memory_profile(f"memory{node}_post_backend_clear.prof")
 
         if mode == 'rollout':
+            from mu_F.visualisation.methods import _rollout_policy_from_graph
             cols = list(cfg.case_study.design_space_dimensions)
-            rollout_row = {}
-            for n in graph.nodes:
-                rollout_row.update(graph.nodes[n].get("rollout_action_named", {}))
-            rollout_df = pd.DataFrame([{c: rollout_row.get(c, float('nan')) for c in cols}])
+            policy_vec = _rollout_policy_from_graph(cfg, graph)
+            rollout_df = pd.DataFrame([dict(zip(cols, policy_vec))])
             fname = f'rollout_policy_iterate_{iterate}.xlsx'
             rollout_df.to_excel(fname)
-            logging.info(f"Saved rollout policy ({len(cols)}-d) to {fname}: {rollout_row}")
+            logging.info(f"Saved rollout policy ({len(cols)}-d) to {fname}: {dict(zip(cols, policy_vec))}")
 
         return graph
 

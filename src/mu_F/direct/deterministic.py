@@ -119,7 +119,7 @@ class DeterministicMonolithic(SolveDirect):
         des_0 = 0
         for node in self.G.nodes():
             n_des = self.G.nodes[node]["n_design_args"]
-            des_vals = solution['x'][des_0:des_0 + n_des]
+            des_vals = solution['x'][des_0:des_0 + n_des].full().flatten()
             logging.info(f"Design variables for node {node}: {des_vals}")
 
             # Mirror _get_rollout_action_columns priority from integration.py
@@ -145,9 +145,12 @@ class DeterministicMonolithic(SolveDirect):
             self.G.nodes[node]["rollout_action_columns"] = action_cols
             self.G.nodes[node]["rollout_action_named"] = named
 
-            for col, val in named.items():
-                if col in rollout_row:
-                    rollout_row[col] = val
+            # Assign positionally into rollout_row (process_space_names and
+            # design_space_dimensions use different naming conventions after make_markov)
+            for idx, val in enumerate(des_vals):
+                col_idx = des_0 + idx
+                if col_idx < len(cols):
+                    rollout_row[cols[col_idx]] = float(val)
 
             des_0 += n_des
 
