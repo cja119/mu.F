@@ -142,7 +142,7 @@ def simulator(
     _lambda = param_dict["lambda"]
     penalty = jnp.square(ramp_t1) + jnp.square(ramp_t2) + jnp.square(ramp_t3)
 
-    reward = jnp.broadcast_to(-sum([train_1_throughput, train_2_throughput, train_3_throughput, - _lambda * penalty]), hydrogen_storage.shape)
+    reward = jnp.broadcast_to(-sum([train_1_throughput, train_2_throughput, train_3_throughput, 0.1 * _hydrogen_storage, - _lambda * penalty]), hydrogen_storage.shape)
     outputs = jnp.stack([hydrogen_storage, train_1_throughput], axis=-1)
 
     constraints = jnp.stack(

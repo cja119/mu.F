@@ -5,6 +5,7 @@ Classes for solving the problem as a monolithic NLP
 
 import logging
 
+import pandas as pd
 from jax import lax
 import jax.numpy as jnp
 import networkx as nx
@@ -111,13 +112,49 @@ class DeterministicMonolithic(SolveDirect):
         status = 'succesfully' if self._get_status(solution) else 'unsuccessfully'
 
         logging.info(f"Monolithic solver finished {status}, objective value {solution['f']}")
-        
+
+        cols = list(self.cfg.case_study.design_space_dimensions)
+        rollout_row = {c: float('nan') for c in cols}
+
         des_0 = 0
         for node in self.G.nodes():
-            des_slice = des_0, des_0 + self.G.nodes[node]["n_design_args"]
-            des_vals = solution['x'][des_slice[0]:des_slice[1]]
+            n_des = self.G.nodes[node]["n_design_args"]
+            des_vals = solution['x'][des_0:des_0 + n_des]
             logging.info(f"Design variables for node {node}: {des_vals}")
-            des_0 = des_slice[1]
+
+            # Mirror _get_rollout_action_columns priority from integration.py
+            process_names = self.cfg.case_study.process_space_names
+            node_dims = process_names[node] if isinstance(process_names, (list, tuple)) else process_names
+            if not isinstance(node_dims, (list, tuple)):
+                node_dims = [node_dims]
+            if len(node_dims) == n_des:
+                action_cols = [str(c) for c in node_dims]
+            else:
+                node_ds_cols = [c for c in cols if f"N{node+1}" in str(c)]
+                if len(node_ds_cols) == n_des:
+                    action_cols = node_ds_cols
+                elif len(cols) == n_des:
+                    action_cols = list(cols)
+                else:
+                    action_cols = [f"node_{node}_action_{i}" for i in range(n_des)]
+
+            named = {col: float(val) for col, val in zip(action_cols, des_vals)}
+
+            # Store on graph nodes so _rollout_policy_from_graph works on this graph
+            self.G.nodes[node]["rollout_action"] = [float(v) for v in des_vals]
+            self.G.nodes[node]["rollout_action_columns"] = action_cols
+            self.G.nodes[node]["rollout_action_named"] = named
+
+            for col, val in named.items():
+                if col in rollout_row:
+                    rollout_row[col] = val
+
+            des_0 += n_des
+
+        rollout_df = pd.DataFrame([rollout_row])
+        fname = 'monolithic_policy.xlsx'
+        rollout_df.to_excel(fname)
+        logging.info(f"Saved monolithic policy ({len(cols)}-d) to {fname}")
 
         return None
 

@@ -1,5 +1,6 @@
 from abc import ABC
 
+import pandas as pd
 from jax.random import PRNGKey, choice
 from hydra.utils import get_original_cwd
 
@@ -142,7 +143,17 @@ class apply_decomposition:
                 profiler.save_device_memory_profile(f"memory{node}.prof")
                 clear_caches()
                 profiler.save_device_memory_profile(f"memory{node}_post_backend_clear.prof")
-       
+
+        if mode == 'rollout':
+            cols = list(cfg.case_study.design_space_dimensions)
+            rollout_row = {}
+            for n in graph.nodes:
+                rollout_row.update(graph.nodes[n].get("rollout_action_named", {}))
+            rollout_df = pd.DataFrame([{c: rollout_row.get(c, float('nan')) for c in cols}])
+            fname = f'rollout_policy_iterate_{iterate}.xlsx'
+            rollout_df.to_excel(fname)
+            logging.info(f"Saved rollout policy ({len(cols)}-d) to {fname}: {rollout_row}")
+
         return graph
 
     

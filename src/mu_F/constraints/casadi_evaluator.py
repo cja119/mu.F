@@ -1175,13 +1175,22 @@ class current_cost_surrogate(current_constraint_surrogate):
         input_indices = np.copy(np.array([n_design_args + input_ for input_ in range(n_input_args)]))
         aux_indices = np.copy(np.array([input_ for input_ in range(ndim - n_aux_args, ndim)]))
 
+        # Standardise predecessor inputs before passing to CTG surrogate.
+        if self.cfg.solvers.standardised:
+            ctg_inputs = standardise_inputs(
+                graph, inputs, node,
+                jnp.hstack([input_indices, aux_indices]).astype(int)
+            ).reshape(1, -1)
+        else:
+            ctg_inputs = inputs.reshape(1, -1)
+
         # Then we need to redefine the objective function for our q-learning target.
         problem_data['objective_func'] = {'f0': {
-            'params': self.graph.nodes[node]["ctg_surrogate_serialised"], # TODO <- Need to change how the name is saved for the q function surrogate. 
+            'params': self.graph.nodes[node]["ctg_surrogate_serialised"], # TODO <- Need to change how the name is saved for the q function surrogate.
             'args': [i for i in range(n_d)],
-            'model_class': 'regression', 'model_surrogate': 'ctg_surrogate', 
+            'model_class': 'regression', 'model_surrogate': 'ctg_surrogate',
             'model_type': self.cfg.surrogate.regressor_selection},
-            'obj_fn': partial(lambda x, f1, y: mask_classifier(f1, ndim, input_indices, aux_indices)(x.reshape(1,-1)[:,:n_d],y).reshape(-1,1), y=inputs.reshape(1,-1))}
+            'obj_fn': partial(lambda x, f1, y: mask_classifier(f1, ndim, input_indices, aux_indices)(x.reshape(1,-1)[:,:n_d],y).reshape(-1,1), y=ctg_inputs)}
 
             
         return problem_data
@@ -1330,15 +1339,24 @@ class backward_cost_to_go_evaluator(backward_constraint_evaluator_general):
                 ndim = graph.nodes[succ]['n_design_args'] + graph.nodes[succ]['n_input_args'] + graph.graph['n_aux_args']
                 input_indices = np.copy(np.array([n_d + input_ for input_ in graph.edges[node, succ]['input_indices']]))
                 aux_indices = np.copy(np.array([input_ for input_ in graph.edges[node, succ]['auxiliary_indices']]))
-                n_d_k = self.graph.nodes[succ]['n_design_args'] + sum([self.graph.edges[n,succ]['n_input_args'] for n in self.graph.predecessors(succ) if n!=self.node]) + self.graph.graph['n_aux_args']    
-                
+                n_d_k = self.graph.nodes[succ]['n_design_args'] + sum([self.graph.edges[n,succ]['n_input_args'] for n in self.graph.predecessors(succ) if n!=self.node]) + self.graph.graph['n_aux_args']
+
+                # Standardise predecessor inputs before passing to the successor's CTG surrogate.
+                if self.cfg.solvers.standardised:
+                    ctg_succ_input = standardise_inputs(
+                        graph, succ_input.reshape(1, -1), succ,
+                        jnp.hstack([input_indices, aux_indices]).astype(int)
+                    ).reshape(1, -1)
+                else:
+                    ctg_succ_input = succ_input.reshape(1, -1)
+
                 # Then we need to redefine the objective function for our q-learning target.
                 problem_data[succ][p]['objective_func'] = {'f0': {
-                    'params': self.graph.nodes[succ]["ctg_surrogate_serialised"], # TODO <- Need to change how the name is saved for the q function surrogate. 
+                    'params': self.graph.nodes[succ]["ctg_surrogate_serialised"], # TODO <- Need to change how the name is saved for the q function surrogate.
                     'args': [i for i in range(n_d_k)],
-                    'model_class': 'regression', 'model_surrogate': 'ctg_surrogate', 
+                    'model_class': 'regression', 'model_surrogate': 'ctg_surrogate',
                     'model_type': self.cfg.surrogate.regressor_selection},
-                    'obj_fn': partial(lambda x, f1, y,: mask_classifier(f1, ndim, input_indices, aux_indices)(x.reshape(1,-1)[:,:n_d_k],y).reshape(-1,1), y=succ_input.reshape(1,-1))}
+                    'obj_fn': partial(lambda x, f1, y,: mask_classifier(f1, ndim, input_indices, aux_indices)(x.reshape(1,-1)[:,:n_d_k],y).reshape(-1,1), y=ctg_succ_input)}
 
         return problem_data
     
