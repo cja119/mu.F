@@ -14,8 +14,8 @@ ENV_PARAMS = FrozenDict(
         "cstr_ode": {
             "case_study": "cstr_ode",
             "N": 100,
-            "tsim": 25,
-            "SP": {"Ca": tuple([0.85] * 10 + [0.9] * 10)},
+            "tsim": 26,
+            "SP": {"Ca": tuple([0.85] * 25 + [0.9] * 25)},
             "a_space": {"low": (295,), "high": (302,)},
             "o_space": {"low": (0.7, 300, 0.8), "high": (1.0, 350, 0.9)},
             "x0": (0.8, 330, 0.8),
@@ -49,7 +49,7 @@ def simulator(
     param_dict, node, x: jnp.ndarray, u: jnp.ndarray, z: jnp.ndarray = None
 ) -> jnp.ndarray:
     import importlib
-        
+
     mod = importlib.import_module("pcgym.model_classes")
     ModelCls = getattr(mod, param_dict["case_study"])   # e.g. "cstr"
     model = ModelCls(int_method="jax")
@@ -60,7 +60,7 @@ def simulator(
     dxdt = model(x, u).squeeze()
     dgdt = jnp.concatenate([jnp.atleast_1d(c(param_dict, x, u)) for c in CONS_HOLDER[param_dict["case_study"]]], axis=0)
     sp_ca = jnp.asarray(param_dict["SP"]["Ca"])
-    rwd = jnp.square(jnp.take(sp_ca, node) - x[0])
+    rwd = jnp.square(jnp.take(sp_ca, node) - x[0]) * 1000
 
     return jnp.concatenate([jnp.ravel(dxdt), jnp.ravel(dgdt), jnp.ravel(rwd)], axis=0)
 

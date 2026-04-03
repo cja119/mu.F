@@ -103,6 +103,6 @@ dispatcher = {
     "tsit5": Tsit5(),
     "dopri8": diffrax.Dopri8(),
     "Kvaerno5": diffrax.Kvaerno5(),
-    "pid": diffrax.PIDController(rtol=1e-3, atol=1e-3),
+    "pid": diffrax.PIDController(rtol=1e-2, atol=1e-2),
 }
 

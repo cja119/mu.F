@@ -547,10 +547,11 @@ class subproblem_model(ABC):
                 if len(feasible_idx) > 0:
                     outputs_feasible = outputs[feasible_idx]
                     warmstarts_feasible = {succ: backward_warmstarts[succ][feasible_idx] for succ in backward_warmstarts} if backward_warmstarts is not None else None
-                    ctg_evals_feasible = self.backward_cost_to_go.evaluate(outputs_feasible, aux_args, warmstarts=warmstarts_feasible)
-                    ctg_function_evals = jnp.zeros(outputs.shape[0]).at[feasible_idx].set(ctg_evals_feasible.reshape(-1))
+                    ctg_evals_feasible, ctg_success = self.backward_cost_to_go.evaluate(outputs_feasible, aux_args, warmstarts=warmstarts_feasible)
+                    ctg_evals_flagged = jnp.where(ctg_success.reshape(-1), ctg_evals_feasible.reshape(-1), jnp.nan)
+                    ctg_function_evals = jnp.full(outputs.shape[0], jnp.nan).at[feasible_idx].set(ctg_evals_flagged)
                 else:
-                    ctg_function_evals = jnp.zeros(outputs.shape[0])
+                    ctg_function_evals = jnp.full(outputs.shape[0], jnp.nan)
                 del backward_warmstarts
                 if ctg_function_evals.ndim == 1:
                     ctg_function_evals = ctg_function_evals.reshape(-1,1)
@@ -703,8 +704,9 @@ def get_ctg_training_data(graph, node, model, cfg):
         # Convert boolean mask to integer indices if needed
         if feasible_idx.dtype == bool:
             feasible_idx = jnp.where(feasible_idx)[0]
-        x_feasible_list.append(x_batch[feasible_idx])
-        y_feasible_list.append(y_ctg_batch[feasible_idx])
+        valid_mask = (~jnp.any(jnp.isnan(y_ctg_batch[feasible_idx]), axis=-1)).ravel()
+        x_feasible_list.append(x_batch[feasible_idx][valid_mask])
+        y_feasible_list.append(y_ctg_batch[feasible_idx][valid_mask])
 
     # Concatenate all feasible samples
     x_feasible = jnp.vstack(x_feasible_list) if x_feasible_list else jnp.empty((0, x_d_list[0].shape[1]))

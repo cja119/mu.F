@@ -9,7 +9,7 @@ from functools import partial
 import time
 
 from mu_F.solvers.utilities import (
-    build_constraint_functions, build_objective_function, casadify_constraints,
+    build_constraint_functions, build_objective_function, casadify_constraints, casadify_reverse_constraints,
     unpack_problem_data, unpack_results, clean_up, casadify_reverse, rejection_sample_initial_guess
 )
 
@@ -56,6 +56,15 @@ def callable_casadi_nlp_optimizer_gcons(objective, constraints, bounds, initial_
 
     objective_fn = casadify_reverse(objective, initial_guess.shape[-1])
     constraint_fn, _ = casadify_constraints(constraints, initial_guess, initial_guess.shape[-1])
+
+    return casadi_nlp_optimizer_gcons(objective_fn, constraint_fn, bounds, initial_guess, lhs, rhs)
+
+def callable_casadi_nlp_optimizer_mono(objective, constraints, bounds, initial_guess, lhs, rhs):
+    if initial_guess.ndim == 1:
+        initial_guess = jnp.expand_dims(initial_guess, axis=0)
+
+    objective_fn = casadify_reverse(objective, initial_guess.shape[-1])
+    constraint_fn, _ = casadify_reverse_constraints(constraints, initial_guess, initial_guess.shape[-1])
 
     return casadi_nlp_optimizer_gcons(objective_fn, constraint_fn, bounds, initial_guess, lhs, rhs)
 
@@ -122,7 +131,7 @@ def casadi_nlp_optimizer_gcons(objective, constraints, bounds, initial_guess, lh
     nlp = {'x':x , 'f':F(x), 'g': G(x)}
 
     # Define the IPOPT solver
-    options = {"ipopt": {"hessian_approximation": "limited-memory"}, 'ipopt.print_level':1, 'print_time':0, 'ipopt.max_iter': 150} 
+    options = {"ipopt": {"hessian_approximation": "limited-memory"}, 'ipopt.print_level':0, 'print_time':0, 'ipopt.max_iter': 150} 
     solver = nlpsol('solver', 'ipopt', nlp, options)
 
     # Solve the NLP

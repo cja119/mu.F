@@ -18,5 +18,5 @@ integration:
   t0: 0
   tf: 0.25
   dt0: Null
-  max_steps: 10000
+  max_steps: 50000
   vmap_chunk_size: 0

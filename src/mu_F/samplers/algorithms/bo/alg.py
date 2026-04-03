@@ -8,6 +8,7 @@ from gpytorch.kernels import RBFKernel
 from gpytorch.distributions import MultivariateNormal
 import numpy as np
 import sobol_seq
+from mu_F.utils import savefig_with_svg_limit
 
 import logging
 
@@ -147,7 +148,6 @@ def fit_gpytorch_model(likelihood, model, train_x, train_y):
     # Load the best model and likelihood
     model.load_state_dict(best_model)
     likelihood.load_state_dict(best_likelihood)
-
     likelihood.eval()
     model.eval()
 
@@ -200,7 +200,7 @@ def plot(train_x, train_y, model, likelihood, ub, lb):
     plt.xlabel('Unit 1 Backoff, $\epsilon_1$')
     plt.ylabel('Unit 2 Backoff , $\epsilon_2$')
     plt.legend()
-    plt.savefig('Bayesian optimization iterations.svg')
+    savefig_with_svg_limit(plt.savefig, 'Bayesian optimization iterations.svg')
 
    
 

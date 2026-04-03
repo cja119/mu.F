@@ -174,3 +174,5 @@ outputs/
 /jobs
 /test_*.py
 /*.py
+.idea/
+**/*.xlsx

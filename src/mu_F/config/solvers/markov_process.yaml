@@ -31,19 +31,19 @@ backward_coupling:
       disp: False
   
 forward_coupling:
-  max_solution_time: 1. 
+  max_solution_time: 5. 
   parallelised: True
   penalty_method: False
   n_starts: 4
   n_rejects: 10
   rejection_margin: 10
   casadi_ipopt_options:
-    maxiter: 500
+    maxiter: 2000
     verbose: False
     tol: 1e-6
     options:
       verbose: 0
-      maxiter: 1000
+      maxiter: 2000
       disp: False
 
 post:

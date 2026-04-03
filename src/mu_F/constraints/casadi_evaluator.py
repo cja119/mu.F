@@ -314,7 +314,7 @@ class forward_constraint_evaluator(coupling_surrogate_constraint_base):
                 results[prec].append(self.evaluation_method(solver_reshape, self.cfg.max_devices, s_i[prec][p]))
 
 
-            return jnp.concatenate([jnp.array(v).reshape(-1,1) for v in results.values()], axis=-1)
+            return jnp.concatenate([jnp.array([jnp.ravel(jnp.array(vi)) for vi in v]).reshape(-1,1) for v in results.values()], axis=-1)
             
     
     def evaluate_parallel(self, i, inputs, auxs):
@@ -541,7 +541,7 @@ class backward_constraint_evaluator_general(forward_constraint_evaluator):
                 # evaluate inputs for in parallel for each evaluation of uncertainty
                 results[succ].append(self.evaluation_method(solver_reshape, self.cfg.max_devices, s_i[succ][p]))
 
-            return jnp.concatenate([jnp.array(v).reshape(-1,1) for v in results.values()], axis=-1)
+            return jnp.concatenate([jnp.array([jnp.ravel(jnp.array(vi)) for vi in v]).reshape(-1,1) for v in results.values()], axis=-1)
             
     
     def prepare_forward_problem(self, outputs):
@@ -1419,16 +1419,49 @@ class backward_cost_to_go_evaluator(backward_constraint_evaluator_general):
             results = ray.get([sol.remote(d['id'], d['data'], d['data']['cfg']) for sol, d in  solve]) # set off and then synchronize before moving on
             sfs = [d['data']['succ'] for _, d in solve]
             for j, result in enumerate(results):
-                result_dict[evals + j] = self.rescale_cost(solver_processing.solve_digest(*result)['objective'], sfs[j]) 
+                digest = solver_processing.solve_digest(*result)
+                result_dict[evals + j] = (self.rescale_cost(digest['objective'], sfs[j]), digest.get('success', False))
             evals += j+1
-       
+
         del solver_batches, results
-    
-        return jnp.concatenate([jnp.array([value]).reshape(1,-1) for _, value in result_dict.items()], axis=0)
+
+        costs = jnp.concatenate([jnp.array([cost]).reshape(1,-1) for _, (cost, _) in result_dict.items()], axis=0)
+        success_flags = jnp.array([success for _, (_, success) in result_dict.items()])
+        return costs, success_flags
+
+    def wrapper(self, outputs, warmstarts=None):
+        """Override to unpack (costs, flags) tuple from ray_evaluation and return both."""
+        solver_inputs = []
+        for i in range(outputs.shape[0]):
+            warmstart_i = {succ: warmstarts[succ][i] for succ in warmstarts} if warmstarts is not None else None
+            solver_inputs.append(self.evaluate_parallel(i, outputs[i,:].reshape(1,-1), warmstart=warmstart_i))
+
+        if len(list(solver_inputs[0].values())) > 1:
+            raise NotImplementedError("Case of uncertainty in forward pass not yet implemented/optimised for parallel evaluation.")
+
+        all_costs = {succ: [] for succ in self.graph.successors(self.node)}
+        all_flags = {succ: [] for succ in self.graph.successors(self.node)}
+        for succ in self.graph.successors(self.node):
+            solver_reshape = []
+            for p in range(len(solver_inputs[0][succ])):
+                for s_i in solver_inputs:
+                    solver_reshape.append((s_i[succ][p].solver, s_i[succ][p].problem_data))
+                result = self.evaluation_method(solver_reshape, self.cfg.max_devices, s_i[succ][p])
+                if isinstance(result, tuple):
+                    costs, flags = result
+                else:
+                    costs = result
+                    flags = jnp.ones(jnp.ravel(jnp.array(costs)).shape[0], dtype=bool)
+                all_costs[succ].append(jnp.ravel(jnp.array(costs)))
+                all_flags[succ].append(jnp.ravel(jnp.array(flags)))
+
+        costs = jnp.concatenate([jnp.vstack(v).reshape(-1, 1) for v in all_costs.values()], axis=-1)
+        flags = jnp.concatenate([jnp.vstack(v).reshape(-1) for v in all_flags.values()], axis=-1)
+        return costs, flags
 
     def serial_evaluation(self, solver, max_devices, solver_processing):
         res = super().serial_evaluation(solver, max_devices, solver_processing)
-        return self.rescale_cost(res, self.node) # Surrogate pathway negates objective by default, so we reflip the sign.   
+        return self.rescale_cost(res, self.node) # Surrogate pathway negates objective by default, so we reflip the sign.
 
     def rescale_cost(self, y, node):
         if not self.cfg.solvers.standardised:

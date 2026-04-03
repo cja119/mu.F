@@ -98,7 +98,7 @@ def main(cfg: DictConfig) -> None:
         # run the decomposition
         G = decomposition(cfg, G, precedence_order, mode, max_devices).run()
         # finished decomposition                    
-    elif cfg.method in ['direct', 'monolithic']:
+    elif cfg.method in ['direct', 'single_shooting', 'multiple_shooting']:
         # run the decomposition
         outs = apply_direct_method(cfg, G, method=cfg.method)
         logging.info(f"Direct method {cfg.method} completed with outputs: {outs}")

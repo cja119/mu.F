@@ -6,6 +6,7 @@ import seaborn as sns
 from scipy.interpolate import griddata
 import logging
 import re
+from mu_F.utils import savefig_with_svg_limit
 
 DEFAULT_DPI = 20
 
@@ -65,7 +66,8 @@ def init_plot(cfg, G, pp= None, init=True, save=True):
             ax.axhline(y=DS_bounds[y_var].iloc[0], ls='--', linewidth=3, c='black')
             ax.axhline(y=DS_bounds[y_var].iloc[1], ls='--', linewidth=3, c='black')
 
-    if save: pp.savefig("initial_forward_pass.svg", dpi=DEFAULT_DPI)
+    if save:
+        savefig_with_svg_limit(pp.savefig, "initial_forward_pass.svg", dpi=DEFAULT_DPI)
 
     return pp
 
@@ -146,7 +148,8 @@ def decomposition_plot(cfg, G, pp, save=True, path='decomposed_pair_grid_plot'):
                 print(f"Plotting {x_var} vs {y_var}")
                 sns.scatterplot(x=x_var, y=y_var, data=is_, edgecolor="k", c='r', alpha=0.8, ax=ax)
         
-    if save: pp.savefig(path +'.svg', dpi=DEFAULT_DPI)
+    if save:
+        savefig_with_svg_limit(pp.savefig, path + '.svg', dpi=DEFAULT_DPI)
 
     return pp
 
@@ -157,7 +160,7 @@ def reconstruction_with_policy_plot(cfg, G, reconstructed_df, policy_data, save=
     pp.map_lower(sns.scatterplot, data=reconstructed_df, edgecolor="k", c="b", linewidth=0.5)
     pp = add_policy(pp, policy_data, cfg=cfg, color="r", marker="X", size=80)
     if save:
-        pp.savefig(path + ".svg", dpi=DEFAULT_DPI)
+        savefig_with_svg_limit(pp.savefig, path + ".svg", dpi=DEFAULT_DPI)
     return pp
 
 
@@ -282,7 +285,7 @@ def rollout_with_policy_plot(cfg, G, policy_data=None, save=True, path='rollout_
         pp = add_policy(pp, policy_df, cfg=cfg, color="r", marker="o", size=90)
 
     if save:
-        pp.savefig(path + ".svg", dpi=DEFAULT_DPI)
+        savefig_with_svg_limit(pp.savefig, path + ".svg", dpi=DEFAULT_DPI)
 
     return pp
 
@@ -293,7 +296,8 @@ def reconstruction_plot(cfg, G, reconstructed_df, save=True, path='reconstructed
     pp = decomposition_plot(cfg, G, pp, save =False)
     pp.map_lower(sns.scatterplot, data=reconstructed_df, edgecolor="k", c="b", linewidth=0.5)
 
-    if save: pp.savefig(path + ".svg", dpi=DEFAULT_DPI)
+    if save:
+        savefig_with_svg_limit(pp.savefig, path + ".svg", dpi=DEFAULT_DPI)
 
     return pp
 
@@ -317,7 +321,7 @@ def design_space_plot(cfg, G, joint_data_direct, path):
 
     pp.map_lower(sns.scatterplot, data=joint_data_direct, edgecolor="k", c="b", linewidth=0.5)
     # Save the updated figure
-    pp.savefig(path + ".svg", dpi=DEFAULT_DPI)
+    savefig_with_svg_limit(pp.savefig, path + ".svg", dpi=DEFAULT_DPI)
 
     return 
 
@@ -342,7 +346,8 @@ def design_space_plot_plus_polytope(cfg, G, pp, joint_data_direct, path, save=Tr
 
     pp.map_lower(sns.scatterplot, data=joint_data_direct, edgecolor="k", c="b", linewidth=0.5)
     # Save the updated figure
-    if save: pp.savefig(path + ".svg", dpi=DEFAULT_DPI)
+    if save:
+        savefig_with_svg_limit(pp.savefig, path + ".svg", dpi=DEFAULT_DPI)
 
     return pp
 
@@ -405,7 +410,7 @@ def post_process_upper_solution(cfg, G, args):
     ax.set_xlabel(r'$z_1$')
     ax.set_ylabel(r'$z_2$')
 
-    plt.savefig("post_process_upper_solution.svg", dpi=DEFAULT_DPI)
+    savefig_with_svg_limit(plt.savefig, "post_process_upper_solution.svg", dpi=DEFAULT_DPI)
 
     logging.info("Difference between predicted max point wise error and actual max point wise error: %s",
                  np.max(zi) - value_fn)
@@ -476,4 +481,8 @@ def plot_contour(func, x_range, y_range, value_fn, path, num_points=200, levels=
                  np.max(Z) - value_fn)
 
     # Display the plot
-    plt.savefig(os.path.join(path, "post_process_upper_solution.svg"), dpi=DEFAULT_DPI)
+    savefig_with_svg_limit(
+        plt.savefig,
+        os.path.join(path, "post_process_upper_solution.svg"),
+        dpi=DEFAULT_DPI,
+    )

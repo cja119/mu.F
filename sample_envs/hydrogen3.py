@@ -60,7 +60,7 @@ def simulator(
             0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         ]
     )
-    weather_map = 11.88 * jnp.linspace(0.75, 0.25, 10)
+    #weather_map = 11.88 * jnp.linspace(0.75, 0.25, 10)
     
     # Implement the simulation logic
     _hydrogen_storage = x[..., 0]
@@ -108,7 +108,14 @@ def simulator(
         hydrogen_throughput, param_dict["fuelcell_efficiency"]
     )
 
-    hydrogen_storage = hydrogen_storage_eq(_hydrogen_storage, hydrogen_throughput)
+    hydrogen_consumption = hydrogen_consumption_eq(
+        train_1_throughput,
+        train_2_throughput,
+        train_3_throughput,
+        param_dict["vector_molar_efficiency"],
+    )
+
+    hydrogen_storage = hydrogen_storage_eq(_hydrogen_storage, hydrogen_throughput, hydrogen_consumption)
 
     # Calculate constraints
     lower_h2_storage_cons = hydrogen_storage_lower_cons(
@@ -176,28 +183,23 @@ def energy_fuelcell_eq(hydrogen_throughput, fuelcell_efficiency):
 
 
 @jax.jit
-def hydrogen_storage_eq(hydrogen_storage_prev, hydrogen_delta):
+def hydrogen_storage_eq(hydrogen_storage_prev, hydrogen_delta, hydrogen_consumption):
     """Update hydrogen storage based on stored hydrogen and throughput"""
     # GJ + GJ = GJ
-    return hydrogen_storage_prev + hydrogen_delta
+    return hydrogen_storage_prev + hydrogen_delta - hydrogen_consumption
 
 
-@partial(jax.jit, static_argnums=(3, 4, 5))
-def hydrogen_delta_eq(
-    vector_throughput,
-    energy_electrolysis,
-    energy_fuelcell,
-    vector_molar_efficiency,
-    electrolyser_efficiency,
-    fuelcell_efficiency,
+@partial(jax.jit, static_argnums=(3,))
+def hydrogen_consumption_eq(
+    train_1_throughput,
+    train_2_throughput,
+    train_3_throughput,
+    molar_efficiency
+
 ):
     """Calculate hydrogen removed based on vector throughput"""
     # (GJ / h) / (-) - - (GJ / h) / (-) - (GJ / h) / (-) = GJ / h
-    return (
-        vector_throughput / vector_molar_efficiency
-        - energy_electrolysis / electrolyser_efficiency
-        - energy_fuelcell / fuelcell_efficiency
-    )
+    return (train_1_throughput + train_2_throughput + train_3_throughput) / molar_efficiency
 
 
 @partial(jax.jit, static_argnums=(1, 2, 3, 4))

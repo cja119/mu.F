@@ -1,10 +1,74 @@
 import cloudpickle as pickle
+from pathlib import Path
 
 import inspect
 from functools import wraps
 from abc import ABC
 import jax.numpy as jnp
 from typing import List
+
+
+SVG_MAX_BYTES = 500 * 1024 * 1024
+
+
+from pathlib import Path
+
+
+def enforce_svg_size_limit(path, max_bytes=SVG_MAX_BYTES, delete_oversize=False):
+    """Return file size if an SVG exceeds the configured limit (no exception)."""
+    p = Path(path)
+    if not p.exists() or p.suffix.lower() != ".svg":
+        return None
+
+    size = p.stat().st_size
+    if size <= max_bytes:
+        return size
+
+    if delete_oversize:
+        p.unlink(missing_ok=True)
+
+    return size
+
+
+def savefig_with_svg_limit(save_callable, path, *args, max_svg_bytes=SVG_MAX_BYTES, **kwargs):
+    """Save a figure and enforce the global SVG size limit, falling back to PNG if exceeded."""
+    p = Path(path)
+
+    save_callable(p, *args, **kwargs)
+
+    if p.suffix.lower() != ".svg":
+        return None
+
+    size = enforce_svg_size_limit(p, max_bytes=max_svg_bytes)
+    if size is None or size <= max_svg_bytes:
+        return None
+
+    png_path = p.with_suffix(".png")
+
+    p.unlink(missing_ok=True)
+
+    png_kwargs = dict(kwargs)
+    png_kwargs.pop("format", None)
+    png_kwargs.pop("dpi", None)
+
+    png_kwargs.setdefault("bbox_inches", "tight")
+    png_kwargs.setdefault("pad_inches", 0.05)
+
+    dpi = 300
+    if size > 5 * max_svg_bytes:
+        dpi = 150
+    elif size > 2 * max_svg_bytes:
+        dpi = 200
+
+    save_callable(
+        png_path,
+        *args,
+        format="png",
+        dpi=dpi,
+        **png_kwargs,
+    )
+
+    return None
 
 def save_graph(G, mode):
     """

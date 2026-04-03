@@ -15,6 +15,7 @@ import pandas as pd
 
 # Local Application Imports
 from mu_F.visualisation.methods import plotting_format, reconstruction_plot, add_policy
+from mu_F.utils import savefig_with_svg_limit
 
 # -------------------------------------------------------------------------------- #
 # ------------------------------ Global Constants -------------------------------- #
@@ -171,5 +172,9 @@ def _add_policy_to_plot(cfg, graph, actions, out_dir):
                 policy_vec[col_idx] = float(value)
 
     vis = add_policy(vis, policy_vec, cfg=cfg, color="r", marker="o", size=60)
-    vis.savefig(out_dir + "reconstructed_with_policy.svg", dpi=300)
+    savefig_with_svg_limit(
+        vis.savefig,
+        out_dir + "reconstructed_with_policy.svg",
+        dpi=300,
+    )
     return vis

@@ -171,7 +171,7 @@ def build_objective_function(cfg, problem_data, n_d):
 def casadify_constraints(constraints, dummy_initial_guess, n_d):
     # define the constraints function
     constraints = partial(lambda x, g: jnp.vstack([g[i](x) for i in range(len(g))]), g=constraints)
-    n_g = constraints(dummy_initial_guess[0].reshape(1,-1)).reshape(-1,1).shape[0]  
+    n_g = constraints(dummy_initial_guess[0].reshape(1,-1)).reshape(-1,1).shape[0]
     if n_g > n_d:
       constraints_fn = casadify_forward(constraints, n_d)
     else:
@@ -179,6 +179,14 @@ def casadify_constraints(constraints, dummy_initial_guess, n_d):
 
     return constraints_fn, n_g
 
+def casadify_reverse_constraints(constraints, dummy_initial_guess, n_d):
+    # define the constraints function
+    constraints = partial(lambda x, g: jnp.vstack([g[i](x) for i in range(len(g))]), g=constraints)
+    n_g = constraints(dummy_initial_guess[0].reshape(1,-1)).reshape(-1,1).shape[0]
+
+    constraints_fn = casadify_reverse(constraints, n_d)
+
+    return constraints_fn, n_g
 
 def unpack_problem_data(problem_data):
     initial_guess = problem_data['initial_guess']
