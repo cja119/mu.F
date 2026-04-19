@@ -13,6 +13,12 @@ os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count={}".format(
     multiprocessing.cpu_count()
 )
 
+# Pin Ray to a job-unique local tmpdir. Keeps Ray off NFS (avoids stale lock / slow metadata)
+# and avoids colliding with other jobs on the same node.
+_ray_tmp = os.environ.get("TMPDIR", "/tmp")
+os.environ["RAY_TMPDIR"] = os.path.join(_ray_tmp, f"ray_{os.getpid()}")
+os.makedirs(os.environ["RAY_TMPDIR"], exist_ok=True)
+
 import logging
 import hydra
 from omegaconf import DictConfig

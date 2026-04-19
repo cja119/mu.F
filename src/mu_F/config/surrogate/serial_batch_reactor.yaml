@@ -16,6 +16,7 @@ surrogate_forward:
     min_delta: 0.00001
     patience: 50
     batch_size: 264 #64
+    weight_decay: 0.0
   gp:
     kernel: 'Matern'
     n_restarts_optimizer: 10
@@ -62,6 +63,7 @@ classifier_args:
     min_delta: 0.00001
     patience: 50
     batch_size: 264 #64
+    weight_decay: 0.0
 
 
 probability_map_args:
@@ -91,6 +93,7 @@ probability_map_args:
     min_delta: 0.00001
     patience: 50
     batch_size: 264 #64
+    weight_decay: 0.0
 
   
 probability_map_args:

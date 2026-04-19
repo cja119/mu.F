@@ -115,7 +115,7 @@ class MultipleShooting(SolveDirect):
 
         problem_data["objective_fn"] = make_objective(rewards)
         problem_data["constraints"] = constraints + eql_cons
-        problem_data["var_bounds"] = get_bounds_ms(self.cfg, total_inp)
+        problem_data["var_bounds"] = get_bounds_ms(self.cfg, graph, total_inp)
         problem_data["eq_rhs"] = jnp.concatenate([jnp.inf * jnp.ones((n_g, 1)), jnp.zeros((n_e, 1))], axis=0)
         problem_data["eq_lhs"] = jnp.zeros((n_g+n_e, 1))
         problem_data["num_vars"] = curr_idx

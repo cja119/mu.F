@@ -218,11 +218,22 @@ def get_bounds(cfg):
     return jnp.array(bounds)
 
 
-def get_bounds_ms(cfg, total_inp):
+def get_bounds_ms(cfg, graph, total_inp):
 
     base = get_bounds(cfg)
-    inp_lbs = -jnp.inf * jnp.ones(total_inp)
-    inp_ubs = jnp.inf * jnp.ones(total_inp)
+
+    non_root = next(n for n in graph.nodes if graph.in_degree(n) > 0)
+    ext = graph.nodes[non_root]["extendedDS_bounds"]
+    if ext not in (None, "None"):
+        n_inp_per = graph.nodes[non_root]["n_input_args"]
+        inp_lbs = jnp.array(ext[0][0, -n_inp_per:])
+        inp_ubs = jnp.array(ext[1][0, -n_inp_per:])
+        reps = total_inp // n_inp_per
+        inp_lbs = jnp.tile(inp_lbs, reps)
+        inp_ubs = jnp.tile(inp_ubs, reps)
+    else:
+        inp_lbs = -jnp.inf * jnp.ones(total_inp)
+        inp_ubs = jnp.inf * jnp.ones(total_inp)
 
     return jnp.concatenate([base, jnp.stack([inp_lbs, inp_ubs])], axis=1)
 

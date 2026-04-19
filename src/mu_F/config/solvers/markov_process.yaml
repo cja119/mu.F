@@ -13,6 +13,7 @@ standardised: True
 
 backward_coupling:
   n_starts: 4
+  n_sobol_screen: 16384
   jax_opt_options:
     error_tol: 1e-6
     ftol0: 0.001
@@ -31,10 +32,11 @@ backward_coupling:
       disp: False
   
 forward_coupling:
-  max_solution_time: 5. 
+  max_solution_time: 5.
   parallelised: True
   penalty_method: False
   n_starts: 4
+  n_sobol_screen: 16384
   n_rejects: 10
   rejection_margin: 10
   casadi_ipopt_options:

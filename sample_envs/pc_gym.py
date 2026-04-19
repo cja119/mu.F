@@ -117,9 +117,7 @@ def make_pc_constraints(constraint_fns, param_dict):
     def cons(state, control):
         ctrl = jnp.ravel(control)
         vals = [cf(param_dict, state, ctrl) for cf in constraint_fns]
-        return jnp.concatenate(vals, axis=0).reshape(
-            -1,
-        )
+        return jnp.concatenate(vals, axis=0).reshape(-1,)
 
     return cons
 

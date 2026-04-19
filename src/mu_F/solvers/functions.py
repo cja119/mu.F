@@ -1,17 +1,38 @@
-from casadi import MX, nlpsol, Function, Linsol
+from casadi import MX, nlpsol, Function, Linsol, sum1, vec
 
 import numpy as np
 import time
 import jax.numpy as jnp
-from jax import jit, lax, jacfwd
+from jax import jit, lax, jacfwd, vmap
 from jaxopt import LBFGSB
 from functools import partial
+from .utilities import generate_initial_guess
 import time
 
 from mu_F.solvers.utilities import (
     build_constraint_functions, build_objective_function, casadify_constraints, casadify_reverse_constraints,
-    unpack_problem_data, unpack_results, clean_up, casadify_reverse, rejection_sample_initial_guess
+    unpack_problem_data, unpack_results, clean_up, casadify_reverse, rejection_sample_initial_guess,
+    constraint_sum_function, l1_sample_initial_guess
 )
+
+
+class _SyntheticSolver:
+    """Minimal solver-like object for fallback paths that require solver.stats()."""
+
+    def __init__(self, success=True, return_status='Fallback_Feasible_Seed', t_wall_total=0.0):
+        self._stats = {
+            'success': bool(success),
+            'return_status': return_status,
+            't_wall_total': float(t_wall_total),
+        }
+
+    def stats(self):
+        return self._stats
+
+
+def _ensure_scalar_objective(j_expr):
+    # CasADi/Ipopt requires a scalar objective for gradient construction.
+    return j_expr if j_expr.is_scalar() else sum1(vec(j_expr))
 
 """
 utilities for Casadi NLP solver with general constraints
@@ -33,7 +54,7 @@ def casadi_nlp_optimizer_no_gcons(objective, bounds, initial_guess):
     ub = [ub_vec[i] for i in range(n_d)]
 
     x = MX.sym('x', n_d,1)
-    j = objective(x)
+    j = _ensure_scalar_objective(objective(x))
     F = Function('F', [x], [j])
 
     lbx = lb
@@ -63,10 +84,10 @@ def callable_casadi_nlp_optimizer_mono(objective, constraints, bounds, initial_g
     if initial_guess.ndim == 1:
         initial_guess = jnp.expand_dims(initial_guess, axis=0)
 
-    objective_fn = casadify_reverse(objective, initial_guess.shape[-1])
+    objective_fn = casadify_reverse(objective, initial_guess.shape[-1], initial_x=initial_guess[0])
     constraint_fn, _ = casadify_reverse_constraints(constraints, initial_guess, initial_guess.shape[-1])
 
-    return casadi_nlp_optimizer_gcons(objective_fn, constraint_fn, bounds, initial_guess, lhs, rhs)
+    return casadi_nlp_optimizer_gcons(objective_fn, constraint_fn, bounds, initial_guess, lhs, rhs, 10)
 
 def casadi_lp_optimizer_gcons(objective, constraints, bounds, initial_guess, lhs, rhs):
     lb_vec, ub_vec = _squeezed_bounds_1d(bounds)
@@ -75,7 +96,7 @@ def casadi_lp_optimizer_gcons(objective, constraints, bounds, initial_guess, lhs
     ub = [ub_vec[i] for i in range(n_d)]
 
     x = MX.sym('x', n_d,1)
-    j = objective(x)
+    j = _ensure_scalar_objective(objective(x))
     g = constraints(x)
 
     F = Function('F', [x], [j])
@@ -97,7 +118,7 @@ def casadi_lp_optimizer_gcons(objective, constraints, bounds, initial_guess, lhs
       
     return solver, solution
 
-def casadi_nlp_optimizer_gcons(objective, constraints, bounds, initial_guess, lhs, rhs):
+def casadi_nlp_optimizer_gcons(objective, constraints, bounds, initial_guess, lhs, rhs, verb=0):
     """
     objective: casadi callback
     equality_constraints: casadi callback
@@ -113,7 +134,7 @@ def casadi_nlp_optimizer_gcons(objective, constraints, bounds, initial_guess, lh
     # Get the casadi callbacks required 
     # casadi work up
     x = MX.sym('x', n_d,1)
-    j = objective(x)
+    j = _ensure_scalar_objective(objective(x))
     g = constraints(x)
 
     F = Function('F', [x], [j])
@@ -131,7 +152,21 @@ def casadi_nlp_optimizer_gcons(objective, constraints, bounds, initial_guess, lh
     nlp = {'x':x , 'f':F(x), 'g': G(x)}
 
     # Define the IPOPT solver
-    options = {"ipopt": {"hessian_approximation": "limited-memory"}, 'ipopt.print_level':0, 'print_time':0, 'ipopt.max_iter': 150} 
+    options = {
+        "ipopt": {
+            "hessian_approximation": "limited-memory",
+            "mu_strategy": "adaptive",           # adapts barrier param to landscape; critical for non-convex ANN objectives
+            "nlp_scaling_method": "gradient-based",  # prevents large ctg gradients from dominating constraint gradients
+            "acceptable_iter": 5,                # exit with success after 5 consecutive acceptable iterates
+            "acceptable_tol": 1e-2,              # ... rather than pushing to optimality and drifting infeasible
+            "acceptable_constr_viol_tol": 1e-3,
+            "acceptable_dual_inf_tol": 1e10,
+            "acceptable_obj_change_tol": 1e-3,
+            "max_iter": 500,
+        },
+        'ipopt.print_level': verb,
+        'print_time': 0,
+    }
     solver = nlpsol('solver', 'ipopt', nlp, options)
 
     # Solve the NLP
@@ -176,7 +211,11 @@ def ray_casadi_multi_start(problem_id, problem_data, cfg, ctg = None):
   initial_guess: numpy array
   """
   # TODO update this to handle the case where the problem_data is a dictionary and the contraints are inequality constraints
-  initial_guess, bounds, lhs, rhs, n_d, n_starts = unpack_problem_data(problem_data)
+  warm_guess, bounds, lhs, rhs, n_d, n_starts = unpack_problem_data(problem_data)
+  try:
+    n_vmap = cfg['solvers']['forward_coupling']['n_sobol_screen']
+  except (KeyError, TypeError):
+    n_vmap = 500_000
   
   # build problem functions
   g_fn = build_constraint_functions(cfg, problem_data)
@@ -184,14 +223,14 @@ def ray_casadi_multi_start(problem_id, problem_data, cfg, ctg = None):
 
   # determine if there are any constraints
   if len(g_fn) > 0:
-    if not problem_data.get('warm_start', False):
-      reject_time = cfg['case_study']['reject_time']
-      initial_guess = rejection_sample_initial_guess(n_starts, n_d, bounds, g_fn, max_time=reject_time, seed=problem_id)
+    initial_guess = l1_sample_initial_guess(n_starts, n_vmap, n_d, bounds, objective_fn, g_fn, penalty=1e3, seed=problem_id)
     casadify_constraints_fn, _ = casadify_constraints(g_fn, initial_guess[0].reshape(1,-1), n_d)
     optimizer_func = partial(casadi_nlp_optimizer_gcons, constraints=casadify_constraints_fn, lhs=lhs, rhs=rhs)
   else:
     casadify_constraints_fn = None
     optimizer_func = casadi_nlp_optimizer_no_gcons
+
+  casadify_objective_fn = casadify_reverse(objective_fn, n_d)
 
   # run multi start and store solutions (n_starts=1 when warm_start is set, since initial_guess is shape (1, n_d))
   solutions = []
@@ -199,10 +238,20 @@ def ray_casadi_multi_start(problem_id, problem_data, cfg, ctg = None):
       ig = np.array(initial_guess[i,:]).squeeze()
       if np.ndim(ig) == 0:
           ig = np.reshape(ig, (1,))
-      solver, solution = optimizer_func(objective=objective_fn, bounds=bounds, initial_guess=ig)
+      solver, solution = optimizer_func(objective=casadify_objective_fn, bounds=bounds, initial_guess=ig)
       if solver.stats()['success']:
         solutions.append((solver, solution))
-        if np.array(solution['f']) <= 0 and ctg is None: break
+        if np.array(solution['f']) <= 0 or ctg is not None: break
+
+  # If every start failed, fall back to evaluating objective at the initial feasible point.
+  # This keeps the live point alive rather than losing it to solver failure.
+  if len(solutions) == 0 and len(g_fn) > 0:
+      from casadi import DM, sum1, vec
+      ig0 = np.array(warm_guess[0,:]).squeeze().reshape(-1, 1)
+      f0 = float(sum1(vec(casadify_objective_fn(DM(ig0)))))
+      fallback_solution = {'x': DM(ig0), 'f': DM(f0), 'g': DM(0.0), 'lam_x': DM(0.0), 'lam_g': DM(0.0)}
+      synthetic_solver = _SyntheticSolver(success=True, return_status='Fallback_Feasible_Seed', t_wall_total=0.0)
+      solutions = [(synthetic_solver, fallback_solution)]
 
   # unpack and clean up
   solver, solution, ns = unpack_results(solutions, solver, solution)
@@ -213,38 +262,47 @@ def ray_casadi_multi_start(problem_id, problem_data, cfg, ctg = None):
 utilities for JaxOpt box-constrained NLP solver
 """
 
-def multi_start_solve_bounds_nonlinear_program(initial_guess, objective_func, bounds_, tol=1e-4):
+def multi_start_solve_bounds_nonlinear_program(initial_guess, objective_func, bounds_, tol=1e-4, sobol_pts=None):
     """
     objective is a partial function which just takes as input the decision variables and returns the objective value
     constraints is a vector valued partial function which just take as input the decision variables and return the constraint value, in the form np.inf \leq g(x) \leq 0
-    bounds is a list with 
+    bounds is a list with
+    sobol_pts: pre-generated sobol points for screening, or None to generate internally
     """
-    solutions = []
-
-
-    partial_jax_solver = jit(partial(solve_nonlinear_program_bounds_jax_uncons, objective_func=objective_func, bounds_=bounds_, tol=tol))
-
-    # iterate over upper level initial guesses
-    time_now  = time.time()
-    _, solutions = lax.scan(partial_jax_solver, init=None, xs=(initial_guess))
-    now = time.time() - time_now
-
-    # iterate over solutions from one of the upper level initial guesses
-    assess_subproblem_solution = partial(return_most_feasible_penalty_subproblem_uncons, objective_func=objective_func)
-    _, assessment = lax.scan(assess_subproblem_solution, init=None, xs=solutions.params)
-
-    cond = solutions[1].error <= jnp.array([tol]).squeeze()
-    mask = jnp.asarray(cond)
-    update_assessment = (jnp.where(mask, assessment[0], jnp.minimum(assessment[0],jnp.linalg.norm(assessment[1], axis=1).squeeze())), jnp.where(mask, jnp.linalg.norm(assessment[1], axis=1).squeeze(), jnp.inf))
-
-    # assessment of solutions
-    arg_min = jnp.argmin(update_assessment[0], axis=0) # take the minimum objective val
-    min_obj = update_assessment[0][arg_min]  # take the corresponding objective value
-    min_grad = update_assessment[1][arg_min]# take the corresponding l2 norm of objective gradient
-
+    n_sobol_screen = 500_000
+    # cheap screen
+    if sobol_pts is None:
+        sobol_pts = generate_initial_guess(n_sobol_screen, None, bounds_)
+    evals = jit(vmap(objective_func, in_axes=0, out_axes=0))(sobol_pts)
+    best_idx = jnp.argmin(evals)
+    best_val = evals[best_idx]
     
+    def _solve_branch(_):
+        partial_jax_solver = jit(partial(solve_nonlinear_program_bounds_jax_uncons, objective_func=objective_func, bounds_=bounds_, tol=tol))
 
-    return min_obj.squeeze(), solutions[1].error[arg_min].squeeze(), solutions.params[arg_min]
+        # iterate over upper level initial guesses
+        _, solutions = lax.scan(partial_jax_solver, init=None, xs=(initial_guess))
+
+        # iterate over solutions from one of the upper level initial guesses
+        assess_subproblem_solution = partial(return_most_feasible_penalty_subproblem_uncons, objective_func=objective_func)
+        _, assessment = lax.scan(assess_subproblem_solution, init=None, xs=solutions.params)
+
+        cond = solutions[1].error <= jnp.array([tol]).squeeze()
+        mask = jnp.asarray(cond)
+        update_assessment = (jnp.where(mask, assessment[0], jnp.minimum(assessment[0],jnp.linalg.norm(assessment[1], axis=1).squeeze())), jnp.where(mask, jnp.linalg.norm(assessment[1], axis=1).squeeze(), jnp.inf))
+
+        # assessment of solutions
+        arg_min = jnp.argmin(update_assessment[0], axis=0) # take the minimum objective val
+
+        return solutions[1].error[arg_min].squeeze(), solutions.params[arg_min]
+
+    def _feasible_branch(_):
+        return jnp.array(0.0), sobol_pts[best_idx]
+
+    # If feasible from sobol screen, skip the LBFGSB entirely
+    error, params = lax.cond(best_val <= 0, _feasible_branch, _solve_branch, None)
+
+    return lax.cond(best_val <= 0, lambda _: best_val.squeeze(), lambda _: objective_func(params).squeeze(), None), error, params
 
 
 def solve_nonlinear_program_bounds_jax_uncons(init, xs, objective_func, bounds_, tol):

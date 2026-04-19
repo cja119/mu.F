@@ -155,7 +155,12 @@ def hyperparameter_selection(cfg: DictConfig, D, num_folds: int, model_type, rng
     else:
         raise NotImplementedError(f"Model type {model_type} not implemented")
 
-    best_params, _, _ = train(surrogate_cfg, best_model, standard_D, standard_D, model_type=model_type) # train on standardised data
+    # Hold out one fold for early stopping validation (consistent with CV above)
+    kf_final = KFold(n_splits=num_folds, shuffle=True, random_state=0)
+    train_idx, val_idx = next(kf_final.split(standard_D.X))
+    train_D = Dataset(standard_D.X[train_idx], standard_D.y[train_idx])
+    val_D = Dataset(standard_D.X[val_idx], standard_D.y[val_idx])
+    best_params, _, _ = train(surrogate_cfg, best_model, train_D, val_D, model_type=model_type)
 
     opt_model = partial(best_model.apply, best_params)
     x_mean = jnp.array(x_scalar.mean_)
@@ -280,30 +285,30 @@ class NeuralNetworkEstimator(nn.Module):
         return x 
 
 
-def train_one_step_regressor(state, model, batch):
-    @jit
-    def loss_fn(params):
-        y_pred = model.apply(params, batch['X'])
-        loss = jnp.mean(jnp.square(batch['y'] - y_pred))
-        return loss
+@partial(jit, static_argnames=('model',))
+def _loss_fn_regressor(params, model, batch):
+    y_pred = model.apply(params, batch['X'])
+    return jnp.mean(jnp.square(batch['y'] - y_pred))
 
-    grad_fn = jax.value_and_grad(loss_fn)
-    loss, grad = grad_fn(state.params)
+
+@partial(jit, static_argnames=('model',))
+def _loss_fn_classifier(params, model, batch):
+    #labels must be a one hot encoded array
+    y_pred = model.apply(params, batch['X'])
+    return jnp.mean(optax.softmax_cross_entropy_with_integer_labels(jnp.expand_dims(y_pred, axis=1), batch['y']))  #  turns labels to 0 and 1, rather than -1 and 1, with zero indicating the negative class and 1 the positive class
+
+
+_grad_fn_regressor  = jax.value_and_grad(_loss_fn_regressor)
+_grad_fn_classifier = jax.value_and_grad(_loss_fn_classifier)
+
+
+def train_one_step_regressor(state, model, batch):
+    loss, grad = _grad_fn_regressor(state.params, model, batch)
     return loss, grad
 
 
 def train_one_step_classifier(state, model, batch):
-
-    @jit
-    def loss_fn(params):
-        #labels must be a one hot encoded array
-        y_pred = model.apply(params, batch['X'])
-        loss = jnp.mean(optax.softmax_cross_entropy_with_integer_labels(jnp.expand_dims(y_pred, axis=1), batch['y'] )) #  turns labels to 0 and 1, rather than -1 and 1, with zero indicating the negative class and 1 the positive class
-        return loss
-
-    grad_fn = jax.value_and_grad(loss_fn)
-    loss, grad = grad_fn(state.params)
-    
+    loss, grad = _grad_fn_classifier(state.params, model, batch)
     return loss, grad
 
 
@@ -332,7 +337,7 @@ def train(cfg, model, data, valid_data, model_type):
     else:
         lr = cfg.learning_rate
 
-    tx = optax.adam(lr)
+    tx = optax.adamw(lr, weight_decay=getattr(cfg, 'weight_decay', 0.0))
 
     # initialise parameters
     params = get_initial_params(jax.random.PRNGKey(0), data, model)

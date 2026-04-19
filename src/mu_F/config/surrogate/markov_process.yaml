@@ -18,6 +18,9 @@ classifier_args:
     probability: [False]
   ann:
     hidden_size_options:
+      - [100, 100]
+      - [100, 50]
+      - [200, 200]
       - [50, 50]
       - [25, 10]
       - [10, 10]
@@ -26,11 +29,12 @@ classifier_args:
 
     decaying_lr_and_clip_param: True
     learning_rate: 0.01
-    terminal_lr: 0.00001  
+    terminal_lr: 0.00001
     num_epochs: 1000 # 10 #50 # 50 # 500
     min_delta: 0.000001
     patience: 50
     batch_size: 264 #64
+    weight_decay: 0.0
 
 
 forward_evaluation_surrogate: false
@@ -44,7 +48,10 @@ surrogate_forward: # This is for the q-function surrogate
   drop_uncertain_params: False
   ann:
     hidden_size_options:
-      - [50, 25] #- [100, 25]
+      - [100, 100]
+      - [100, 50]
+      - [100, 100, 50]
+      - [50, 25]
       - [50, 50]
       - [25, 10]
     activation_functions:
@@ -52,8 +59,9 @@ surrogate_forward: # This is for the q-function surrogate
 
     decaying_lr_and_clip_param: True
     learning_rate: 0.01
-    terminal_lr: 0.00001  
+    terminal_lr: 0.00001
     num_epochs: 1000 # 10 #50 # 50 # 500
     min_delta: 0.00001
     patience: 50
     batch_size: 264 #64
+    weight_decay: 0.0

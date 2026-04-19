@@ -94,6 +94,23 @@ def generate_initial_guess(n_starts, n_d, bounds, seed=None):
     sobol_samples = qmc.Sobol(d=n_d, scramble=True, seed=seed).random(n_starts)
     return jnp.array(lower_bound) + (jnp.array(upper_bound) - jnp.array(lower_bound)) * sobol_samples
 
+
+def constraint_sum_function(constraint_functions, penalty):
+    # -ve feasible so take max with 0 to only penalise infeasible points
+    return lambda x: jnp.sum(jnp.stack([jnp.maximum(0, penalty * g(x)).reshape(-1)[0] for g in constraint_functions.values()]))
+
+def l1_penalty_fn(function, constraint_sum, guess):
+    return function(guess) + constraint_sum(guess)
+
+def l1_sample_initial_guess(n_starts, n_vmap, n_d, bounds, objective_fn, constraint_functions, penalty, seed=None):
+    constraint_sum = constraint_sum_function(constraint_functions, penalty)
+    random_floats = qmc.Sobol(d=n_d, scramble=True, seed=seed).random(n_vmap)
+    guesses = jnp.array(bounds[0]) + (jnp.array(bounds[1]) - jnp.array(bounds[0])) * random_floats
+    penalty_fn = partial(l1_penalty_fn, objective_fn, constraint_sum)
+    vmap_evals = jax.jit(jax.vmap(penalty_fn, in_axes=0, out_axes=0))(guesses).reshape(-1)
+    sorted_indices = jnp.argsort(vmap_evals)
+    return guesses[sorted_indices][:n_starts,:]
+
 def rejection_sample_initial_guess(n_starts, n_d, bounds, constraints, max_time = 0.5, seed=None):
    """
    We use this function as a brief pre-solve step to get the NLP solver to start with some feasible points.
@@ -165,7 +182,8 @@ def build_objective_function(cfg, problem_data, n_d):
   else:
       objective_func = lambda x: x.reshape(-1,)[obj_data['obj_fn']].reshape(1,1)
 
-  return casadify_reverse(objective_func, n_d)
+  return objective_func
+
 
 
 def casadify_constraints(constraints, dummy_initial_guess, n_d):
@@ -184,7 +202,7 @@ def casadify_reverse_constraints(constraints, dummy_initial_guess, n_d):
     constraints = partial(lambda x, g: jnp.vstack([g[i](x) for i in range(len(g))]), g=constraints)
     n_g = constraints(dummy_initial_guess[0].reshape(1,-1)).reshape(-1,1).shape[0]
 
-    constraints_fn = casadify_reverse(constraints, n_d)
+    constraints_fn = casadify_reverse(constraints, n_d, initial_x=dummy_initial_guess[0])
 
     return constraints_fn, n_g
 

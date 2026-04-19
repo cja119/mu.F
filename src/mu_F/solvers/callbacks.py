@@ -1,10 +1,78 @@
 import time
 from typing import Callable
+import functools
 
 import jax.numpy as jnp
 import numpy as np
 from casadi import DM, Callback, Function, Sparsity
 from jax import jvp, jit, vjp
+from functools import partial
+
+
+def _shape_sig(v):
+    """Recursively compute a hashable shape descriptor for a value"""
+    if hasattr(v, 'shape') and hasattr(v, 'dtype'):
+        return ('array', v.shape, str(v.dtype))
+    elif isinstance(v, dict):
+        return ('dict', tuple(sorted((_shape_sig(k), _shape_sig(vv)) for k, vv in v.items())))
+    elif isinstance(v, (list, tuple)):
+        return (type(v).__name__, tuple(_shape_sig(vv) for vv in v))
+    else:
+        return ('other', type(v).__name__)
+
+
+def _fn_shape_signature(fn):
+    """Compute a hashable signature for a callable based on function identity + arg shapes.
+
+    For a functools.partial (the common case from build_svm / build_ann), the
+    signature is (id of the base function, shapes of positional args, shapes of
+    keyword args).  Two partials wrapping the same module-level @jit function
+    with the same array shapes will hash identically, allowing _vjp_fun /
+    _jvp_fun to reuse the same compiled XLA kernel rather than recompiling per
+    evaluator.
+    """
+    if isinstance(fn, functools.partial):
+        return (
+            id(fn.func),
+            tuple(_shape_sig(a) for a in fn.args),
+            tuple((k, _shape_sig(v)) for k, v in sorted(fn.keywords.items())),
+        )
+    return id(fn)
+
+
+class HashableCallable:
+    """Wraps a callable so it can be used as a JAX static argument.
+
+    functools.partial objects that close over numpy arrays are not hashable,
+    which causes _vjp_fun / _jvp_fun (static_argnums=0) to crash.
+
+    Hashing is based on function identity + argument shapes rather than a
+    unique counter.  Two surrogates with the same architecture (same underlying
+    @jit function, same array shapes) share a single compiled VJP/JVP kernel
+    instead of triggering one 2-minute XLA recompilation per evaluator.
+    """
+    def __init__(self, fn: Callable):
+        self._fn = fn
+        self._sig = _fn_shape_signature(fn)
+
+    def __call__(self, *args, **kwargs):
+        return self._fn(*args, **kwargs)
+
+    def __hash__(self):
+        return hash(self._sig)
+
+    def __eq__(self, other):
+        return isinstance(other, HashableCallable) and self._sig == other._sig
+
+
+@partial(jit, static_argnums=(0,))
+def _vjp_fun(forward_fn, primals, tangents):
+    return vjp(forward_fn, primals)[1](tangents)[0]
+
+
+@partial(jit, static_argnums=(0,))
+def _jvp_fun(forward_fn, primals, tangents):
+    return jvp(forward_fn, (primals,), (tangents,))[1]
 
 
 # --- JAX-CasADi Callback Wrappers ---
@@ -14,14 +82,14 @@ from jax import jvp, jit, vjp
 
 
 class JaxCasADiEvaluator(Callback):
-    def __init__(self, functn: Callable, nd: int, name="TensorFlowEvaluatorwReverse", opts={}):
+    def __init__(self, functn: Callable, nd: int, name="TensorFlowEvaluatorwReverse", opts={}, initial_x=None):
         super().__init__()
         self.nd = nd
         self.output_shape = None
         self.refs = [] # List to hold references to reverse callbacks
-        self._forward_pass = jit(functn)
+        self._forward_pass = HashableCallable(functn)
         # Determine output shape and dimension by tracing (dummy run)
-        dummy_x = jnp.zeros((nd, 1))
+        dummy_x = jnp.array(initial_x).reshape(nd, 1) if initial_x is not None else jnp.zeros((nd, 1))
         dummy_y = self._forward_pass(dummy_x)
         self.output_shape = dummy_y.shape
         self.n_out_dim = self.output_shape[0]
@@ -33,7 +101,7 @@ class JaxCasADiEvaluator(Callback):
 
     def get_n_in(self): return 1 # Single input variable (x)
     def get_n_out(self): return 1 # Single output variable (y)
-
+ 
     def get_sparsity_in(self, i):
         assert i == 0
         return Sparsity.dense(self.nd, 1)
@@ -44,15 +112,9 @@ class JaxCasADiEvaluator(Callback):
 
     def eval(self, arg):
         """ Computes the forward pass y = f(x). """
-        # CasADi input (arg[0]) is a DMatrix
-        x_numpy = np.array(arg[0]).reshape(self.nd, 1)
-        x_tf = jnp.array(x_numpy)
-
-        # Execute the compiled tf.function
-        y_tf = jnp.reshape(self._forward_pass(x_tf), (self.n_out_dim, 1))
-
-        # Convert back to CasADi DMatrix
-        return [DM([y_tf[i] for i in range(self.n_out_dim)])]
+        x_jnp = jnp.array(arg[0]).reshape(self.nd, 1)
+        y_jnp = self._forward_pass(x_jnp).reshape(-1)
+        return [DM(np.array(y_jnp))]
 
     def has_reverse(self, nadj): return nadj == 0
     
@@ -64,13 +126,7 @@ class JaxCallbackForward(JaxCasADiEvaluator):
         super().__init__(functn, nd, name, opts)
         self.counter = 0
         self.time = 0
-        self.forward_pass = jit(functn)
-
-        @jit
-        def forward_propagation(primals, tangents):
-            return jvp(self.forward_pass, (primals,), (tangents,))[1]
-        
-        self.forward_sensitivities = forward_propagation
+        self.forward_sensitivities = partial(_jvp_fun, self._forward_pass)
 
     def eval(self, arg):
         self.counter += 1
@@ -136,18 +192,11 @@ class JaxCallbackForward(JaxCasADiEvaluator):
     
 
 class JaxCallbackReverse(JaxCasADiEvaluator):
-    def __init__(self, functn: Callable, nd: int, name="JaxEvaluatorwReverse", opts={}):
-        super().__init__(functn, nd, name, opts)
+    def __init__(self, functn: Callable, nd: int, name="JaxEvaluatorwReverse", opts={}, initial_x=None):
+        super().__init__(functn, nd, name, opts, initial_x=initial_x)
         self.counter = 0
         self.time = 0
-        self.forward_pass = jit(functn)
-
-        @jit 
-        def vjp_fun(primals, tangents):
-            vjp_jax = vjp(self._forward_pass, primals)[1](tangents)
-            return vjp_jax[0]
-
-        self.reverse_pass = vjp_fun
+        self.reverse_pass = partial(_vjp_fun, self._forward_pass)
 
     def eval(self, arg):
         self.counter += 1
@@ -224,11 +273,11 @@ def casadify_forward(functn, nd):
     return JaxCallbackForward(functn, nd)
     
 
-def casadify_reverse(functn, nd):
+def casadify_reverse(functn, nd, initial_x=None):
     """Casadify a JAX function via JAX-CasADi wrappers
     functn: a JAX function
     nd: the number of input dimensions to the function
     ny: the number of output dimensions
     """
 
-    return JaxCallbackReverse(functn, nd)
+    return JaxCallbackReverse(functn, nd, initial_x=initial_x)

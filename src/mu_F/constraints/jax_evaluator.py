@@ -34,12 +34,9 @@ def shaping_function(x, cfg):
         return x
 
 
-def construct_solver(objective_func, bounds, tol):
-    bounds = bounds
-    objective_func = objective_func
-    bounds = bounds
-    solver = partial(multi_start_solve_bounds_nonlinear_program, objective_func=objective_func, bounds_=(bounds[0], bounds[1]), tol=tol)
-    return solver   
+def construct_solver(objective_func, bounds, tol, sobol_pts=None):
+    solver = partial(multi_start_solve_bounds_nonlinear_program, objective_func=objective_func, bounds_=(bounds[0], bounds[1]), tol=tol, sobol_pts=sobol_pts)
+    return solver
 
 def initial_guess(cfg, bounds):
     n_d = len(bounds[0])
@@ -62,6 +59,26 @@ def load_solver(objective_func, bounds):
     Loads the solver
     """
     return construct_solver(objective_func, bounds)
+
+
+def get_backward_bounds(graph, node, cfg):
+    """
+    Extracts decision bounds per successor from the graph structure.
+    Does not depend on outputs — safe to call outside pmap.
+    """
+    if node is None:
+        return None
+    backward_bounds = {}
+    for succ in graph.successors(node):
+        n_d = graph.nodes[succ]['n_design_args']
+        input_indices = np.copy(np.array([n_d + input_ for input_ in graph.edges[node, succ]['input_indices']]))
+        aux_indices = np.copy(np.array([input_ for input_ in graph.edges[node, succ]['auxiliary_indices']]))
+        decision_bounds = graph.nodes[succ]["extendedDS_bounds"].copy()
+        if cfg.solvers.standardised:
+            decision_bounds = standardise_model_decisions(graph, decision_bounds, succ)
+        decision_bounds = [jnp.delete(bound, np.hstack([input_indices, aux_indices]).astype(int), axis=1) for bound in decision_bounds]
+        backward_bounds[succ] = decision_bounds
+    return backward_bounds
 
 
 def prepare_backward_problem(outputs, graph, node, cfg):
@@ -151,10 +168,11 @@ def prepare_global_problem(inputs, aux, graph, cfg):
 
 
 
-def evaluate(outputs, aux, graph, node, cfg):
+def evaluate(outputs, aux, graph, node, cfg, sobol_pts_dict=None):
     """
     Evaluates the constraints.
     Handles both graph-wide and node-local (backward) problems.
+    sobol_pts_dict: dict mapping successor node -> pre-generated sobol points array, or None
     """
 
     evaluate_method = solve
@@ -181,8 +199,9 @@ def evaluate(outputs, aux, graph, node, cfg):
         else:
             succ_fn_evaluations = {}
             for succ in graph.successors(node):
+                succ_sobol = sobol_pts_dict.get(succ) if sobol_pts_dict is not None else None
                 backward_solver = [
-                    construct_solver(objective[succ][i], bounds[succ][i], tol=cfg.solvers.backward_coupling.jax_opt_options.error_tol)
+                    construct_solver(objective[succ][i], bounds[succ][i], tol=cfg.solvers.backward_coupling.jax_opt_options.error_tol, sobol_pts=succ_sobol)
                     for i in range(outputs.shape[0])
                 ]
                 initial_guesses = [
@@ -204,11 +223,17 @@ def evaluate(outputs, aux, graph, node, cfg):
         return node_local_branch((outputs, aux))
 
 
-def jax_pmap_evaluator(outputs, aux, cfg, graph, node):
+def jax_pmap_evaluator(outputs, aux, sobol_pts_tuple, cfg, graph, node, successor_order=None):
     """
     p-map constraint evaluation call - called by backward_surrogate_pmap_batch_evaluator
+    sobol_pts_tuple: tuple of pre-generated sobol arrays (one per successor), passed as pmap arg
     """
-    constraint_evaluator = partial(evaluate, graph=graph, node=node, cfg=cfg)
+    # reconstruct the dict from the ordered tuple
+    sobol_pts_dict = None
+    if successor_order is not None and sobol_pts_tuple is not None:
+        sobol_pts_dict = {succ: pts for succ, pts in zip(successor_order, sobol_pts_tuple)}
+
+    constraint_evaluator = partial(evaluate, graph=graph, node=node, cfg=cfg, sobol_pts_dict=sobol_pts_dict)
 
     return constraint_evaluator(outputs, aux)
 
@@ -217,9 +242,22 @@ def backward_surrogate_pmap_batch_evaluator(outputs, aux, cfg, graph, node):
     """
     Evaluates the constraints on a batch using jax-pmap - called by the backward_constraint_evaluator
     """
-    feasibility_call = partial(jax_pmap_evaluator, cfg=cfg, graph=graph, node=node)
-    
-    return pmap(feasibility_call, in_axes=(0,0), out_axes=0, devices=[device for i, device in enumerate(devices('cpu')) if i<outputs.shape[0]])(outputs, aux)  #, axis_name='i'
+    # Pre-generate sobol points per successor outside pmap — bounds depend only on graph structure
+    n_sobol_screen = getattr(cfg.solvers.backward_coupling, 'n_sobol_screen', 16_384)
+    backward_bounds = get_backward_bounds(graph, node, cfg)
+    sobol_pts_tuple = ()
+    successor_order = None
+    if backward_bounds is not None:
+        successor_order = list(backward_bounds.keys())
+        sobol_pts_tuple = tuple(
+            generate_initial_guess(n_sobol_screen, None, bounds)
+            for bounds in backward_bounds.values()
+        )
+
+    feasibility_call = partial(jax_pmap_evaluator, cfg=cfg, graph=graph, node=node, successor_order=successor_order)
+
+    # sobol_pts_tuple passed as pmap arg with in_axes=None so it's a dynamic input, not a traced constant
+    return pmap(feasibility_call, in_axes=(0, 0, None), out_axes=0, devices=[device for i, device in enumerate(devices('cpu')) if i<outputs.shape[0]])(outputs, aux, sobol_pts_tuple)
    
  
 
