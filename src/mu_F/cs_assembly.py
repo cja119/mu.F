@@ -10,7 +10,6 @@ from mu_F.unit_evaluators.constructor import unit_evaluation, post_process_evalu
 from mu_F.constraints.functions import COST_holder, CS_holder, post_process_visualiser
 from mu_F.graph.graph_assembly import graph_constructor, markov_graph_constructor
 from mu_F.graph.methods import CS_edge_holder, vmap_CS_edge_holder
-from mu_F.solvers.constructor import solver_construction
 from mu_F.surrogate.surrogate import surrogate
 from mu_F.constraints.constructor import constraint_evaluator
 from mu_F.post_processes.constructor import post_process_sampling_scheme, post_process_local_sip_scheme
@@ -86,8 +85,10 @@ def case_study_allocation(G, cfg, dict_of_edge_fn, constraint_dictionary, solver
     if cost_dictionary is not None:
         G.add_arg_to_nodes('node_cost', cost_dictionary)
     
-    G.add_arg_to_nodes('forward_coupling_solver', solvers['forward_coupling_solver'])
-    G.add_arg_to_nodes('backward_coupling_solver', solvers['backward_coupling_solver'])
+    # The legacy `forward_coupling_solver` / `backward_coupling_solver` graph
+    # attributes carried the casadi `solver_construction` factory — no longer
+    # used after Phase 3f.  Septal is the sole backend and is imported directly
+    # by each evaluator.
     if cfg.method != 'decomposition_constraint_tuner':
         b_off = [0 for _ in range(len(cfg.case_study.adjacency_matrix))]
         G.add_arg_to_nodes('constraint_backoff', b_off)
@@ -169,9 +170,15 @@ def aux_filter(cfg, G):
         return {edge: lambda x: [x[0][:,:-G.G.graph['n_aux_args']], x[1][:,:-G.G.graph['n_aux_args']]] for edge in G.G.edges}
 
 def solver_constructor(cfg, G):
-
-    return  {'forward_coupling_solver': {node: solver_construction for node in G.G.nodes },  # if G.G.in_degree()[node] > 0 (this is better, but raises errors downstream, so we'll roll with it for now) 
-            'backward_coupling_solver': {node: solver_construction for node in G.G.nodes}}# if G.G.out_degree()[node] > 0 (this is better, but raises errors downstream, so we'll roll with it for now) 
+    """
+    Legacy hook — returned a dict of `solver_construction` factories per node.
+    Retained as a no-op stub so call sites don't break; the dict is consumed
+    into a graph attribute that no evaluator reads after Phase 3f.
+    """
+    return {
+        'forward_coupling_solver':  {node: None for node in G.G.nodes},
+        'backward_coupling_solver': {node: None for node in G.G.nodes},
+    }
 
 def make_markov(cfg):
     if cfg.case_study.case_study == 'markov_process':

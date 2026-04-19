@@ -1,6 +1,7 @@
 
 import logging
 
+import numpy as np
 import pandas as pd
 from jax import lax
 import jax.numpy as jnp
@@ -121,17 +122,25 @@ def make_objective(reward_fns):
     return obj
 
 
-def log_outputs(cfg, graph, solution, solved):
-    
-    status = 'succesfully' if solved else 'unsuccessfully'
-    logging.info(f"Monolithic solver finished {status}, objective value {solution['f']}")
+def log_outputs(cfg, graph, result, solved):
+    """
+    `result` is a septal `SQPResult` (no casadi DM wrapping — use numpy-style
+    indexing on `result.decision_variables` / `result.objective` directly).
+    """
+    status = 'successfully' if solved else 'unsuccessfully'
+    logging.info(
+        f"Monolithic solver finished {status}, "
+        f"objective value {float(result.objective):.6e}"
+    )
     cols = list(cfg.case_study.design_space_dimensions)
     rollout_row = {c: float('nan') for c in cols}
+
+    x_star = np.asarray(result.decision_variables).reshape(-1)
 
     des_0 = 0
     for node in graph.nodes():
         n_des = graph.nodes[node]["n_design_args"]
-        des_vals = solution['x'][des_0:des_0 + n_des].full().flatten()
+        des_vals = x_star[des_0:des_0 + n_des]
         logging.info(f"Design variables for node {node}: {des_vals}")
 
         # Mirror _get_rollout_action_columns priority from integration.py

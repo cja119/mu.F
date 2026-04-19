@@ -19,8 +19,7 @@ from omegaconf import OmegaConf
 
 # Local application imports
 from mu_F.control.utils import ALL_CONSTANTS
-from mu_F.constraints.casadi_evaluator import current_cost_surrogate as CTG_Surrogate
-from mu_F.constraints.casadi_evaluator import current_constraint_surrogate as Constraint_Surrogate
+from mu_F.constraints.constructor import constraint_evaluator
 from mu_F.control.utils import _trajectory_plots, _add_policy_to_plot
 
 # --- Global Constantss ---
@@ -67,12 +66,12 @@ class Controller:
 
         # First try the Q-network
         with suppress_output():
-            v, cost, status = self.q_network(node=self._node)(u[jnp.newaxis, :], None)
+            v, cost, status = self.ctg_network(node=self._node)(u[jnp.newaxis, :], None)
             cons = False
 
         # If Q-network optimisation fails for this node, fall back to constraint surrogate
         if not bool(jnp.all(status)):
-            v, status = self.constraint_surrogate(node=self._node)(u[jnp.newaxis, :], None)
+            v, _cost, status = self.constraint_surrogate(node=self._node)(u[jnp.newaxis, :], None)
             cons = True
 
         # Logging the action taken
@@ -113,11 +112,24 @@ class Controller:
 
 
     def _init_policy(self):
-        # Initialise the surrogate models for the agent
-        ctg_network = partial(
-            CTG_Surrogate, cfg=self.cfg, graph=self.graph, pool=POOL
-            )
-        constraint_surrogate = partial(
-            Constraint_Surrogate, cfg=self.cfg, graph=self.graph, pool=POOL
-            )
+        """
+        Build node-parameterised rollout evaluators routed through the
+        constraint dispatcher.
+
+        Routes through the septal-backed constraint evaluator so `ctg_network`
+        and `constraint_surrogate` both hit the current rollout path.
+        """
+        def _make(constraint_type: str):
+            def _per_node(node):
+                evaluator = constraint_evaluator(
+                    self.cfg, self.graph, node=node,
+                    constraint_type=constraint_type,
+                )
+                # `evaluate_coupling` forwards to the underlying (possibly
+                # `partial`'d) evaluator with signature (inputs, aux).
+                return evaluator.evaluate
+            return _per_node
+
+        ctg_network          = _make('cost_rollout')
+        constraint_surrogate = _make('constraint_rollout')
         return ctg_network, constraint_surrogate

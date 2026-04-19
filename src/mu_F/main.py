@@ -39,27 +39,6 @@ def _set_log(level):
         raise ValueError(f"Invalid log level: {level}")
     logging.basicConfig(level=numeric_level, format="%(asctime)s [%(levelname)s] %(message)s")
 
-def _set_ray(method, max_devices):
-    import ray
-    from hydra.utils import get_original_cwd
-    import jax
-    if not method == 'direct'  and not method == 'monolithic':
-        ray.init(
-            _node_ip_address="127.0.0.1",  
-            include_dashboard=False, 
-            runtime_env={"working_dir": get_original_cwd(), 'excludes': ['/multirun/', '/outputs/', '/config/', '../.git/']},
-            num_cpus=min(max_devices, multiprocessing.cpu_count())) 
-        logging.info(f"Ray initialized with {ray.available_resources()['CPU']} CPUs.")
-    return None
-        
-
-def _kill_ray():
-    import ray
-    if ray.is_initialized():
-        ray.shutdown()
-        logging.info("Ray shutdown successfully.")
-    return None
-
 def _set_jax(max_devices):
     import jax
     import os
@@ -78,7 +57,6 @@ def _set_jax(max_devices):
 def main(cfg: DictConfig) -> None:
     # Configure logging level from config
     _set_log(cfg.log_level)
-    _set_ray(cfg.method, cfg.max_devices)
     max_devices = _set_jax(cfg.max_devices)
 
     from mu_F.direct.constructor import apply_direct_method
@@ -115,9 +93,7 @@ def main(cfg: DictConfig) -> None:
     else:
         # raise an error
         raise ValueError("Method not recognised")
-    
-    _kill_ray()
-        
+
     # Log the function evaluations for each node in the graph.
     for node in G.nodes():
         logging.info(f"Function evaluations for node {node}: {G.nodes[node]['fn_evals']}")

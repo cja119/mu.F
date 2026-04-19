@@ -150,7 +150,7 @@ class post_process_sampling_scheme(post_process_base):
         nuisance_constraint_evaluator = self.solver_methods['lower_level_solver']
         # train the model
         self.train_model(str_='post_process_lower_')
-        evaluation_function = nuisance_constraint_evaluator(cfg=self.cfg, graph=self.graph, pool=None).evaluate
+        evaluation_function = nuisance_constraint_evaluator(cfg=self.cfg, graph=self.graph).evaluate
         
         boolean = False
         while not boolean:
@@ -177,7 +177,7 @@ class post_process_sampling_scheme(post_process_base):
         nuisance_constraint_evaluator = self.solver_methods['upper_level_solver']
         # train the model
         self.train_classification_model(str_='post_process_upper_')
-        evaluation_function = nuisance_constraint_evaluator(cfg=self.cfg, graph=self.graph, pool='ray').evaluate
+        evaluation_function = nuisance_constraint_evaluator(cfg=self.cfg, graph=self.graph).evaluate
         # in the upper level we have no parameters to recursively evaluate, so we just solve to find an optimum.
         optimum = evaluation_function()
         logging.info(f"Local optimum found: {optimum}")

@@ -11,14 +11,14 @@ import jax.numpy as jnp
 import networkx as nx
 
 from mu_F.direct.base import SolveDirect
-from mu_F.solvers.functions import callable_casadi_nlp_optimizer_mono
+from mu_F.solvers.septal import septal_monolithic_solver
 from mu_F.direct.utils import *
 
 
 class SingleShooting(SolveDirect):
     def __init__(self, cfg, G):
         super().__init__(cfg, G)
-        self._solver = callable_casadi_nlp_optimizer_mono
+        self._solver = septal_monolithic_solver
         assert (
             cfg.formulation.lower() == "deterministic"
         ), "Stochastic optimistaion is unsupported. Run in deterministic setting"
@@ -28,21 +28,21 @@ class SingleShooting(SolveDirect):
 
     def solve(self):
         """
-        Solves the problem using the loaded solver
+        Solves the problem using the loaded solver.  Returns septal's native
+        `SQPResult` unchanged — no adapter tuple.
         """
         problem_data = self._prepare_model(self.G)
         solver = self._load_solver()
-        solver, solution =  solver(
+        result = solver(
             problem_data["objective_fn"],
             problem_data["constraints"],
             problem_data["var_bounds"],
             initial_guess(problem_data["var_bounds"]),
-            problem_data["eq_lhs"], 
+            problem_data["eq_lhs"],
             problem_data["eq_rhs"],
         )
-
-        self._log_outputs(solution, solver.stats())
-        return solver, solution
+        self._log_outputs(result)
+        return result
 
     # --- Private Methods --- #
     
@@ -111,15 +111,17 @@ class SingleShooting(SolveDirect):
 
         return problem_data
     
-    def _log_outputs(self, solution, solver_stats=None):
-        solved = bool(solver_stats.get("success", False)) if isinstance(solver_stats, dict) else self._get_status(solution)
-        return log_outputs(self.cfg, self.G, solution, solved)
+    def _log_outputs(self, result):
+        """Hand the septal `SQPResult` to the shared logger."""
+        return log_outputs(self.cfg, self.G, result, bool(result.success))
 
-    def _get_solution(self, solver_output):
-        return solver_output['x'], solver_output['f']
+    def _get_solution(self, result):
+        """Return `(decision_variables, objective)` straight off the SQPResult."""
+        return result.decision_variables, result.objective
 
-    def _get_status(self, solver_output):
-        return 1 if all(out >= 0 for out in solver_output['g'].nz) else 0
+    def _get_status(self, result):
+        """`1` if septal reports converged KKT, else `0`."""
+        return 1 if bool(result.success) else 0
 
     def _load_solver(self):
         """

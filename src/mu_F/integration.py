@@ -2,7 +2,6 @@ from abc import ABC
 
 import pandas as pd
 from jax.random import PRNGKey, choice
-from hydra.utils import get_original_cwd
 
 import jax.numpy as jnp
 import numpy as np
@@ -11,16 +10,8 @@ import jax.profiler as profiler
 from jax import clear_caches
 
 import time
-import multiprocessing
-import ray
 import gc
 import os
-import signal
-import subprocess
-import threading
-import glob
-import shutil
-import psutil
 
 from mu_F.constraints.constructor import constraint_evaluator
 from mu_F.unit_evaluators.constructor import subproblem_unit_wrapper
@@ -34,119 +25,6 @@ from mu_F.utils import dataset as dataset
 from mu_F.utils import data_processing as data_processor
 from mu_F.utils import apply_feasibility
 from mu_F.utils import save_graph
-
-
-class _TimeoutExceeded(Exception):
-    pass
-
-
-def _call_with_timeout(fn, timeout_s, *args, **kwargs):
-    """Run fn on the main thread with a SIGALRM-based timeout.
-
-    Returns True if fn completed within timeout_s, else False. Must be invoked
-    from the main thread of the main interpreter — SIGALRM cannot be installed
-    elsewhere. Threading is intentionally avoided because ray.init / ray.shutdown
-    install per-thread state and signal handlers; running them off the main
-    thread leaves the GCS connection in an unusable state.
-    """
-    def _handler(signum, frame):
-        raise _TimeoutExceeded()
-
-    prev_handler = signal.signal(signal.SIGALRM, _handler)
-    signal.alarm(int(max(1, timeout_s)))
-    try:
-        fn(*args, **kwargs)
-        return True
-    except _TimeoutExceeded:
-        return False
-    finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, prev_handler)
-
-
-def _force_kill_ray_processes():
-    """Find and SIGKILL any lingering Ray processes owned by this user."""
-    my_uid = os.getuid()
-    my_pid = os.getpid()
-    killed = 0
-    for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'uids']):
-        try:
-            if proc.info['uids'].real != my_uid or proc.info['pid'] == my_pid:
-                continue
-            cmdline = ' '.join(proc.info['cmdline'] or [])
-            name = proc.info['name'] or ''
-            # Match Ray worker/raylet/gcs/plasma/dashboard processes
-            if any(tok in cmdline for tok in ('ray::', 'raylet', 'gcs_server', 'plasma_store', 'dashboard_agent', 'default_worker.py')) \
-               or name in ('raylet', 'gcs_server', 'plasma_store'):
-                proc.kill()
-                killed += 1
-        except (psutil.NoSuchProcess, psutil.AccessDenied, KeyError):
-            continue
-    if killed:
-        logging.warning(f"Force-killed {killed} lingering Ray processes.")
-    return killed
-
-
-def _clean_ray_tmp():
-    """Remove leftover Ray session directories in the current RAY_TMPDIR / /tmp/ray."""
-    tmp_root = os.environ.get('RAY_TMPDIR', '/tmp/ray')
-    for path in glob.glob(os.path.join(tmp_root, 'session_*')):
-        try:
-            shutil.rmtree(path, ignore_errors=True)
-        except Exception:
-            pass
-
-
-def _restart_ray_workers(cfg):
-    """Shutdown and restart Ray between DP nodes to free accumulated XLA compilation memory.
-
-    Uses a timeout + force-kill fallback because ray.shutdown() can hang indefinitely
-    when workers are stuck in a bad state (common after many restart cycles with JAX).
-    """
-    if not ray.is_initialized():
-        return
-    method = getattr(cfg, 'method', '')
-    if method in ('direct', 'monolithic'):
-        return
-
-    shutdown_timeout_s = getattr(cfg, 'ray_shutdown_timeout_s', 30)
-    init_timeout_s = getattr(cfg, 'ray_init_timeout_s', 60)
-
-    # 1. Try clean shutdown with timeout (main-thread SIGALRM — see _call_with_timeout)
-    clean = _call_with_timeout(ray.shutdown, shutdown_timeout_s)
-    if not clean:
-        logging.warning(f"ray.shutdown() did not return within {shutdown_timeout_s}s — falling back to force-kill.")
-        _force_kill_ray_processes()
-        # Re-issue shutdown now that worker processes are gone, so ray's
-        # in-process state (global_worker, _global_node) gets cleared by ray
-        # itself rather than us poking private attributes.
-        try:
-            ray.shutdown()
-        except Exception:
-            pass
-
-    # 2. Clean any leftover session directories that could confuse the next init
-    _clean_ray_tmp()
-
-    # 3. Start fresh with a timeout on init too
-    def _do_init():
-        ray.init(
-            _node_ip_address="127.0.0.1",
-            include_dashboard=False,
-            runtime_env={"working_dir": get_original_cwd(), 'excludes': ['/multirun/', '/outputs/', '/config/', '../.git/']},
-            num_cpus=min(cfg.max_devices, multiprocessing.cpu_count()))
-
-    init_ok = _call_with_timeout(_do_init, init_timeout_s)
-    if not init_ok:
-        logging.error(f"ray.init() did not return within {init_timeout_s}s — last-resort force kill + retry once.")
-        _force_kill_ray_processes()
-        _clean_ray_tmp()
-        # One retry
-        init_ok = _call_with_timeout(_do_init, init_timeout_s)
-        if not init_ok:
-            raise RuntimeError("Ray failed to restart after force-kill and retry; aborting this iterate.")
-
-    logging.info("Ray workers restarted to free XLA compilation memory.")
 
 
 def _get_rollout_action_columns(cfg, node, n_actions):
@@ -223,10 +101,8 @@ class apply_decomposition:
                 logging.info("Rollout cost thus far: " + str(r_cost))
 
             else:
-                #if cfg.solvers.evaluation_mode.forward == 'ray':  ray.init(runtime_env={"working_dir": get_original_cwd(), 'excludes': ['/multirun/', '/outputs/', '/config/']})
-                # define model for deus
-                
-                # create problem sheet according to cfg 
+                # create problem sheet according to cfg
+
                 problem_sheet = create_problem_description_deus(cfg, model, graph, node, mode) 
                 # solve extended DS using NS
                 solver =  construct_deus_problem(DEUS, problem_sheet, model)
@@ -263,7 +139,6 @@ class apply_decomposition:
                 gc.collect()
                 profiler.save_device_memory_profile(f"memory{node}.prof")
                 clear_caches()
-                _restart_ray_workers(cfg)
                 profiler.save_device_memory_profile(f"memory{node}_post_backend_clear.prof")
 
         if mode == 'rollout':
@@ -507,34 +382,34 @@ class subproblem_model(ABC):
         self.cfg, self.G = cfg, G
 
         # subproblem construction
-        self.process_constraints = constraint_evaluator(cfg, G, unit_index, pool=None, constraint_type='process')
-        if cfg.case_study.eval_cost: 
-            self.node_costs = constraint_evaluator(cfg, G, unit_index, pool=None, constraint_type='node_cost')
-            self.backward_cost_to_go = constraint_evaluator(cfg, G, unit_index, pool=cfg.solvers.evaluation_mode.cost_to_go, constraint_type='backward_cost_to_go')
+        self.process_constraints = constraint_evaluator(cfg, G, unit_index, constraint_type='process')
+        if cfg.case_study.eval_cost:
+            self.node_costs = constraint_evaluator(cfg, G, unit_index, constraint_type='node_cost')
+            self.backward_cost_to_go = constraint_evaluator(cfg, G, unit_index, constraint_type='backward_cost_to_go')
         if mode == 'forward':
-            self.forward_constraints = constraint_evaluator(cfg, G, unit_index, pool=cfg.solvers.evaluation_mode.forward, constraint_type='forward')
+            self.forward_constraints = constraint_evaluator(cfg, G, unit_index, constraint_type='forward')
             self.backward_constraints = None
             self.forward_decentralised = None
             self.root_node_constraint = None
         elif mode == 'rollout':
-            self.rollout_costs = constraint_evaluator(cfg, G, unit_index, pool=cfg.solvers.evaluation_mode.cost_to_go, constraint_type='cost_rollout')  
-            self.rollout_constraints = constraint_evaluator(cfg, G, unit_index, pool=cfg.solvers.evaluation_mode.cost_to_go, constraint_type='constraint_rollout')
+            self.rollout_costs = constraint_evaluator(cfg, G, unit_index, constraint_type='cost_rollout')
+            self.rollout_constraints = constraint_evaluator(cfg, G, unit_index, constraint_type='constraint_rollout')
         elif mode == 'backward':
-            self.backward_constraints = constraint_evaluator(cfg, G, unit_index, pool=cfg.solvers.evaluation_mode.backward, constraint_type='backward')
+            self.backward_constraints = constraint_evaluator(cfg, G, unit_index, constraint_type='backward')
             self.forward_constraints = None
             self.forward_decentralised = None
             self.root_node_constraint = None
-        elif (mode in ['forward-backward','backward-forward']):
-            self.forward_constraints = constraint_evaluator(cfg, G, unit_index, pool=cfg.solvers.evaluation_mode.forward, constraint_type='forward')
-            if self.cfg.method == 'decomposition_constraint_tuner': 
+        elif (mode in ['forward-backward', 'backward-forward']):
+            self.forward_constraints = constraint_evaluator(cfg, G, unit_index, constraint_type='forward')
+            if self.cfg.method == 'decomposition_constraint_tuner':
                 self.backward_constraints = None
-                self.forward_decentralised = constraint_evaluator(cfg, G, unit_index, pool=cfg.solvers.evaluation_mode.forward, constraint_type='forward_decentralized')
-                if (mode == 'backward-forward'):
-                    self.root_node_constraint = constraint_evaluator(cfg, G, unit_index, pool=cfg.solvers.evaluation_mode.forward, constraint_type='root_node_decentralized')
+                self.forward_decentralised = constraint_evaluator(cfg, G, unit_index, constraint_type='forward_decentralized')
+                if mode == 'backward-forward':
+                    self.root_node_constraint = constraint_evaluator(cfg, G, unit_index, constraint_type='root_node_decentralized')
                 else:
                     self.root_node_constraint = None
-            else: 
-                self.backward_constraints = constraint_evaluator(cfg, G, unit_index, pool=cfg.solvers.evaluation_mode.backward, constraint_type='backward')
+            else:
+                self.backward_constraints = constraint_evaluator(cfg, G, unit_index, constraint_type='backward')
                 self.forward_decentralised = None
                 self.root_node_constraint = None
         else:
@@ -706,8 +581,6 @@ class subproblem_model(ABC):
         return cons_g
     
     def s(self, d, p):
-        #if (self.forward_constraints is not None) and (self.G.in_degree(self.unit_index) > 0) and (self.cfg.solvers.evaluation_mode.forward == 'ray'):
-        #   ray.init(runtime_env={"working_dir": get_original_cwd(), 'excludes': ['/multirun/', '/outputs/', '/config/', '../.git/']}, num_cpus=10)  # , ,
         # evaluate feasibility and then update classifier data and number of function evaluations
         g = self.evaluate_subproblem_batch(d, self.max_devices, p)
         # shape parameters for returning constraint evaluations to DEUS
