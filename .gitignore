@@ -176,7 +176,7 @@ outputs/
 /*.py
 .idea/
 **/*.xlsx
-*.py
 *.png
 .*
 *.json
+/scripts

@@ -1,5 +1,19 @@
 """
-Utility functions for constraints
+Utility functions for constraints.
+
+Two groups in this file:
+
+1. **Generic helpers** — standardisation, classifier masking, successor-input
+   extraction, likelihood-bound computations.  Read by every evaluator.
+
+2. **Evaluator scaffolding** — config glue (`shaping_function`), cfg-driven
+   Sobol starts (`initial_guess`), per-direction bounds extraction
+   (`get_backward_bounds`, `get_forward_bounds`).  Plus re-exports of
+   `generate_initial_guess`, `determine_batches`, `create_batches` from
+   `mu_F.solvers.utilities` so evaluator code has a single import site.
+
+The evaluator scaffolding lived in `constraints/pmap_scaffolding.py` until
+this file absorbed it.
 """
 from typing import Callable
 import jax.numpy as jnp
@@ -7,6 +21,12 @@ import numpy as np
 from jax import jit
 from functools import lru_cache
 from scipy.stats import beta
+
+from mu_F.solvers.utilities import (
+    generate_initial_guess,
+    determine_batches,
+    create_batches,
+)
 
 def standardise_inputs(graph, succ_inputs, out_node, input_indices):
     """
@@ -165,4 +185,76 @@ def upper_bound_fn(
 
     return 1 - F_LB
 
-    
+
+
+def shaping_function(x, cfg):
+    """
+    Sign-flip the objective according to `cfg.samplers.notion_of_feasibility`.
+
+    "positive = feasible" negates so that minimisation drives towards the
+    feasible region; "negative = feasible" leaves the sign alone.
+    """
+    if cfg.samplers.notion_of_feasibility == 'positive':
+        return -x
+    elif cfg.samplers.notion_of_feasibility == 'negative':
+        return x
+    raise ValueError(
+        f"Unknown notion_of_feasibility: {cfg.samplers.notion_of_feasibility!r}"
+    )
+
+
+def initial_guess(cfg_solvers, bounds):
+    """Draw `cfg_solvers.n_starts` Sobol points inside `bounds`."""
+    n_d = len(bounds[0])
+    return generate_initial_guess(cfg_solvers.n_starts, n_d, bounds)
+
+
+def get_backward_bounds(graph, node, cfg):
+    """
+    Per-successor reduced-space decision bounds.
+
+    Drops the indices held fixed by the (node -> succ) edge (inputs + aux)
+    from `extendedDS_bounds`, optionally applying `classifier_x_scalar`
+    standardisation first.  Safe to hoist outside pmap (static w.r.t. sample
+    data).
+    """
+    if node is None:
+        return None
+    backward_bounds = {}
+    for succ in graph.successors(node):
+        n_d = graph.nodes[succ]['n_design_args']
+        input_indices = np.copy(np.array(
+            [n_d + inp for inp in graph.edges[node, succ]['input_indices']]
+        ))
+        aux_indices = np.copy(np.array(
+            [inp for inp in graph.edges[node, succ]['auxiliary_indices']]
+        ))
+        decision_bounds = graph.nodes[succ]["extendedDS_bounds"].copy()
+        if cfg.solvers.standardised:
+            decision_bounds = standardise_model_decisions(graph, decision_bounds, succ)
+        decision_bounds = [
+            jnp.delete(bound, np.hstack([input_indices, aux_indices]).astype(int), axis=1)
+            for bound in decision_bounds
+        ]
+        backward_bounds[succ] = decision_bounds
+    return backward_bounds
+
+
+def get_forward_bounds(graph, node, cfg):
+    """
+    Per-predecessor decision bounds (pred's full NLP space — no reduction).
+
+    Static w.r.t. the inputs flowing through the edge; same role as
+    `get_backward_bounds` but for the forward direction.
+    """
+    if node is None:
+        return None
+    forward_bounds = {}
+    for pred in graph.predecessors(node):
+        decision_bounds = graph.nodes[pred]["extendedDS_bounds"].copy()
+        if cfg.solvers.standardised:
+            decision_bounds = standardise_model_decisions(graph, decision_bounds, pred)
+        lb = jnp.asarray(decision_bounds[0]).reshape(-1)
+        ub = jnp.asarray(decision_bounds[1]).reshape(-1)
+        forward_bounds[pred] = [lb, ub]
+    return forward_bounds
