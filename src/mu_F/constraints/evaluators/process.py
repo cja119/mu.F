@@ -179,13 +179,9 @@ class forward_root_constraint_decentralised_evaluator(ConstraintEvaluatorBase):
         return self.shaping_function(g_vals.reshape(-1, 1))
 
     def prepare_forward_problem(self, v_2):
-        if self.cfg.solvers.standardised:
-            inputs = jnp.vstack([
-                self.standardise_model_decisions([v for v in v_2[i]], self.node)
-                for i in range(v_2.shape[0])
-            ])
-        else:
-            inputs = v_2
+        # Inputs passed through in real units; the node's classifier
+        # callable self-scales.
+        inputs = v_2
         node_constraints = vmap(
             partial(
                 lambda x, b: -self.graph.nodes[self.node]["classifier"](x) - b,
@@ -194,24 +190,3 @@ class forward_root_constraint_decentralised_evaluator(ConstraintEvaluatorBase):
             in_axes=0, out_axes=0,
         )
         return node_constraints, inputs
-
-    def standardise_model_decisions(self, decisions, in_node):
-        # Three-tier fallback preserved from the casadi-path original:
-        #   1. node-level classifier scaler (preferred),
-        #   2. generic `x_scalar`,
-        #   3. identity (no scaler available).
-        try:
-            mean = self.graph.nodes[in_node]['classifier_x_scalar'].mean
-            std  = self.graph.nodes[in_node]['classifier_x_scalar'].std
-            return [
-                (decision - m) / s
-                for i, (m, s, decision) in enumerate(zip(mean, std, decisions))
-                if i < len(decisions)
-            ]
-        except Exception:
-            try:
-                mean = self.graph.nodes[in_node]['x_scalar'].mean
-                std  = self.graph.nodes[in_node]['x_scalar'].std
-                return [(decision - mean) / std for decision in decisions]
-            except Exception:
-                return decisions

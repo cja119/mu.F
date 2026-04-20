@@ -199,13 +199,9 @@ def build_svm(cfg, model_data):
     coefficients = model_data['serialized_params']['coefficients']
     intercept = model_data['serialized_params']['intercept']
     kernel_param = model_data['serialized_params']['kernel_param']
-
-    if cfg['solvers']['standardised']:
-        return partial(_svm_fn_standardised, sv=support_vectors, coef=coefficients, intercept=intercept, kp=kernel_param)
-    else:
-        return partial(_svm_fn_unstandardised, sv=support_vectors, coef=coefficients, intercept=intercept, kp=kernel_param, x_mean=x_mean, x_std=x_std)
-        
-
-
-
-
+    
+    return partial(
+        _svm_fn_unstandardised,
+        sv=support_vectors, coef=coefficients, intercept=intercept,
+        kp=kernel_param, x_mean=x_mean, x_std=x_std,
+    )

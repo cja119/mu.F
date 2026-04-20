@@ -5,8 +5,10 @@
 # Every evaluator in `constraints.evaluators.*` reads `cfg.solvers.tol`,
 # `cfg.solvers.n_starts` and `cfg.solvers.n_sobol_screen`.
 
-standardised: false
+standardised: false  # DEPRECATED: no effect — every surrogate self-scales
 
 n_starts: 4           # multi-start count for Sobol initial guesses
 n_sobol_screen: 16384 # pre-generated Sobol points used to seed each shard
 tol: 1.0e-6           # SQP KKT tolerance (stationarity + feasibility)
+
+use_vmap: false       # set true to swap pmap for jit(vmap(...)) in the pmap-backed evaluators

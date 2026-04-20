@@ -183,11 +183,12 @@ def surrogate_training_forward(cfg, graph, node, iterate:int=0):
         # train the model
         forward_evaluator_surrogate = surrogate(graph, node, cfg, ('regression', cfg.surrogate.regressor_selection, 'forward_evaluation_surrogate'), iterate, data_str='None') # data_str is None as forward_regressor data handling independent of data_str
         forward_evaluator_surrogate.fit(node=successor)
-        if cfg.solvers.standardised:
-            query_model = forward_evaluator_surrogate.get_model('standardised_model')
-        else:
-            query_model = forward_evaluator_surrogate.get_model('unstandardised_model')
-        
+        # Always store the self-scaling variant: takes real-world inputs,
+        # standardises internally with its own trained scaler.  Evaluator
+        # code no longer needs to coordinate scalers across surrogates —
+        # every callable on the graph speaks real units.
+        query_model = forward_evaluator_surrogate.get_model('unstandardised_model')
+
         # store the trained model in the graph
         graph.edges[node, successor]["forward_surrogate"] = query_model
         graph.nodes[node]['x_scalar'] = forward_evaluator_surrogate.trainer.get_model_object('standardisation_metrics_input')
@@ -213,10 +214,8 @@ def probability_map_construction(cfg, graph, node, iterate):
     # train the model
     ls_surrogate = surrogate(graph, node, cfg, ('regression', 'ANN', 'probability_map_surrogate'), iterate, data_str='probability_map_training')
     ls_surrogate.fit(node=None)
-    if cfg.surrogate.probability_map_args.standardised:
-        query_model = ls_surrogate.get_model('standardised_model')
-    else:
-        query_model = ls_surrogate.get_model('unstandardised_model')
+    # Always use the self-scaling variant; see `surrogate_training_forward`.
+    query_model = ls_surrogate.get_model('unstandardised_model')
     
     # store the trained model in the graph
     graph.nodes[node]["probability_map"] = query_model
@@ -355,13 +354,16 @@ def classifier_construction(cfg, graph, node, iterate):
     # train the model
     ls_surrogate = surrogate(graph, node, cfg, ('classification', cfg.surrogate.classifier_selection, 'live_set_surrogate'), iterate, data_str='classifier_training')
     ls_surrogate.fit(node=node)
-    if cfg.solvers.standardised:
-        query_model = ls_surrogate.get_model('standardised_model')
-    else:
-        query_model = ls_surrogate.get_model('unstandardised_model')
-    
+    # Always store the self-scaling variant (takes real-world inputs,
+    # standardises internally using its own trained scaler).  Evaluators
+    # never apply classifier_x_scalar externally under the new contract.
+    query_model = ls_surrogate.get_model('unstandardised_model')
+
     # store the trained model in the graph
     graph.nodes[node]["classifier"] = query_model
+    # `classifier_x_scalar` is kept on the graph for diagnostics only —
+    # nothing in the constraint-evaluator path reads it any more.  The
+    # scaler is baked into the `classifier` callable's closure.
     graph.nodes[node]['classifier_x_scalar'] = ls_surrogate.trainer.get_model_object('standardisation_metrics_input')
     graph.nodes[node]['classifier_serialised'] = ls_surrogate.get_serailised_model_data()
 
@@ -488,7 +490,10 @@ class subproblem_model(ABC):
         # evaluate feasibility downstream
         if (self.backward_constraints is not None) and (self.G.out_degree(self.unit_index) > 0):
             start_time = time.time()
-            backward_constraint_evals, backward_warmstarts = self.backward_constraints.evaluate(outputs, aux_args) # backward constraints (rank 3 tensor, n_d \times n_theta \times n_g)
+            # backward returns `(evals, _)` — the second slot is reserved
+            # for parity with older signatures and is now unconditionally
+            # None.
+            backward_constraint_evals, _ = self.backward_constraints.evaluate(outputs, aux_args) # backward constraints (rank 3 tensor, n_d \times n_theta \times n_g)
             end_time = time.time()
             execution_time = end_time - start_time
             if backward_constraint_evals.ndim == 1:
@@ -498,7 +503,6 @@ class subproblem_model(ABC):
             logging.info(f'execution_time_backward_constraints: {execution_time}')
         else:
             backward_constraint_evals = None
-            backward_warmstarts = None
 
         # evaluate feasibility decentralised
         if self.forward_decentralised is not None and self.G.in_degree(self.unit_index) > 0:
@@ -543,13 +547,11 @@ class subproblem_model(ABC):
                 start_time = time.time()
                 if len(feasible_idx) > 0:
                     outputs_feasible = outputs[feasible_idx]
-                    warmstarts_feasible = {succ: backward_warmstarts[succ][feasible_idx] for succ in backward_warmstarts} if backward_warmstarts is not None else None
                     ctg_evals_feasible, ctg_success = self.backward_cost_to_go.evaluate(outputs_feasible, aux_args)
                     ctg_evals_flagged = jnp.where(ctg_success.reshape(-1), ctg_evals_feasible.reshape(-1), jnp.nan)
                     ctg_function_evals = jnp.full(outputs.shape[0], jnp.nan).at[feasible_idx].set(ctg_evals_flagged)
                 else:
                     ctg_function_evals = jnp.full(outputs.shape[0], jnp.nan)
-                del backward_warmstarts
                 if ctg_function_evals.ndim == 1:
                     ctg_function_evals = ctg_function_evals.reshape(-1,1)
                 if ctg_function_evals.ndim == 2:
@@ -670,13 +672,12 @@ def ctg_surrogate_construction(cfg, graph, node, iterate):
     # train the model
     ctg_surrogate = surrogate(graph, node, cfg, ('regression', cfg.surrogate.regressor_selection, 'ctg_surrogate'), iterate)
     ctg_surrogate.fit(node=None)
-    if cfg.solvers.standardised:
-        query_model = ctg_surrogate.get_model('standardised_model')
-    else:
-        query_model = ctg_surrogate.get_model('unstandardised_model')
+    # Always use the self-scaling variant; see `classifier_construction`.
+    query_model = ctg_surrogate.get_model('unstandardised_model')
 
     # store the trained model in the graph
     graph.nodes[node]["ctg_surrogate"] = query_model
+    # Kept for diagnostics; no evaluator reads it under the new contract.
     graph.nodes[node]['ctg_surrogate_x_scalar'] = ctg_surrogate.trainer.get_model_object('standardisation_metrics_input')
     graph.nodes[node]['ctg_surrogate_serialised'] = ctg_surrogate.get_serailised_model_data()
 

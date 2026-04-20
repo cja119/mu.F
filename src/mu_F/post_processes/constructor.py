@@ -35,13 +35,13 @@ class post_process_base(ABC):
         str_root = 'classifier' if cfg_dict.model_class == 'classification' else 'regressor'
         ls_surrogate = self.training_methods(self.graph, None, self.cfg, (cfg_dict.model_class, cfg_dict.model_selection, cfg_dict.type), self.iterate, str_ + str_root + '_training')
         ls_surrogate.fit(node=None)
-        if self.cfg.solvers.standardised:
-            query_model = ls_surrogate.get_model('standardised_model')
-        else:
-            query_model = ls_surrogate.get_model('unstandardised_model')
-        
+        # Always store the self-scaling variant (see
+        # `integration.classifier_construction`).
+        query_model = ls_surrogate.get_model('unstandardised_model')
+
         # store the trained model in the graph
         self.graph.graph[str_ + str_root] = query_model
+        # Kept for diagnostics; no evaluator reads it.
         self.graph.graph[str_ + str_root + "_x_scalar"] = ls_surrogate.trainer.get_model_object('standardisation_metrics_input')
         self.graph.graph[str_ + str_root + "_serialised"] = ls_surrogate.get_serailised_model_data()
 

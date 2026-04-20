@@ -16,175 +16,241 @@ vector.  Each sample becomes one combined solve.
 The returned evaluation is the node classifier's optimal value + backoff
 (positive = feasible), matching the casadi path's `-objective` return.
 
-Un-ported variant left over from Phase 3f; this module closes that gap.
+### BaseEvaluator port
+
+Single sub-problem per node (`_keys() = [node]`).  The sample-dependent
+measured-input vector `v` is threaded as the parametric `p` argument, so
+one factory serves every sample.  Loop over samples happens in
+`evaluate(...)`, which reuses the compiled factory across all of them.
 """
 from __future__ import annotations
 
 import jax.numpy as jnp
 import numpy as np
 
-from mu_F.constraints.utils import standardise_model_decisions
-from mu_F.solvers.septal import (
-    construct_constrained_solver,
-    solve_constrained,
+from mu_F.constraints.evaluators.base import (
+    BaseEvaluator,
+    build_factory,
+    build_penalty_screener,
+    pick_best,
+    pick_x0_batch,
+    precompute_sobol_pool,
 )
 
 
 __all__ = [
-    "prepare_forward_decentralised_problem",
-    "evaluate_forward_decentralised",
+    "ForwardDecentralisedEvaluator",
     "forward_constraint_decentralised_evaluator",
 ]
 
 
-# ---------------------------------------------------------------------------
-# Problem builder (single sample)
-# ---------------------------------------------------------------------------
+# =============================================================================
+# ForwardDecentralisedEvaluator — one instance per (cfg, graph, node)
+# =============================================================================
 
-def prepare_forward_decentralised_problem(inputs, aux, graph, node, cfg):
+class ForwardDecentralisedEvaluator(BaseEvaluator):
     """
-    Build the decentralised forward sub-problem for ONE sample.
+    Stateful decentralised forward evaluator.
 
-    Parameters
-    ----------
-    inputs : (1, n_inputs_of_node) — measured inputs for this sample
-    aux    : (1, n_aux)            — auxiliary vars (unused here but carried
-                                     through for signature parity)
-    graph, node, cfg : as usual.
-
-    Returns
-    -------
-    objective_func : Callable      f(x) -> scalar
-    constraint_func : Callable     g(x) -> (n_g,)
-    bounds : [lb, ub]              each shape (n_d_concat,)
+    Single concatenated NLP per node; the per-sample measured input `v`
+    is lifted to the parametric `p` so one compiled factory serves every
+    sample.
     """
-    preds = list(graph.predecessors(node))
-    if not preds:
-        return None, None, None
 
-    # Per-predecessor decision dimensions and slice offsets.
-    pred_dims = [
-        graph.nodes[p]['n_design_args']
-        + graph.nodes[p]['n_input_args']
-        + graph.graph['n_aux_args']
-        for p in preds
-    ]
-    slice_starts = [0] + list(np.cumsum(pred_dims[:-1]))
-    slice_ends   = list(np.cumsum(pred_dims))
-    pred_slices  = [(int(s), int(e)) for s, e in zip(slice_starts, slice_ends)]
+    def __init__(self, cfg, graph, node):
+        self.bounds: dict        = {}
+        self.n_d: dict           = {}
+        self.n_g: dict           = {}
+        self.n_fix: dict         = {}
+        self.objective_fn: dict  = {}
+        self.constraint_fn: dict = {}
+        # Slice layout on the concatenated decision vector — needed at
+        # inspection time, kept for parity with the legacy API.
+        self.pred_slices: dict   = {}
 
-    # Per-predecessor live callables + scalar backoffs.
-    pred_classifiers = [graph.nodes[p]['classifier'] for p in preds]
-    pred_forward_sg  = [graph.edges[p, node]['forward_surrogate'] for p in preds]
-    pred_backoffs    = [
-        jnp.sum(jnp.asarray(graph.nodes[p]['constraint_backoff']))
-        for p in preds
-    ]
+        super().__init__(cfg, graph, node)
 
-    # Bounds — concat extendedDS_bounds across preds, optionally standardised.
-    lb_parts, ub_parts = [], []
-    for p in preds:
-        decision_bounds = graph.nodes[p]["extendedDS_bounds"].copy()
-        if cfg.solvers.standardised:
-            decision_bounds = standardise_model_decisions(graph, decision_bounds, p)
-        lb_parts.append(jnp.asarray(decision_bounds[0]).reshape(-1))
-        ub_parts.append(jnp.asarray(decision_bounds[1]).reshape(-1))
-    lb = jnp.concatenate(lb_parts)
-    ub = jnp.concatenate(ub_parts)
+        self._shard = self.evaluate
 
-    # Node-level classifier + backoff.
-    node_classifier = graph.nodes[node]['classifier']
-    node_backoff    = jnp.sum(jnp.asarray(graph.nodes[node]['constraint_backoff']))
+    # ------------------------------------------------------------------
+    # BaseEvaluator contract
+    # ------------------------------------------------------------------
 
-    # Baked measured-input vector for this sample — same treatment as casadi path.
-    v = jnp.asarray(inputs).reshape(1, -1)
+    def _keys(self) -> list:
+        if self.node is None or not list(self.graph.predecessors(self.node)):
+            return []
+        return [self.node]
 
-    def objective(x):
-        # Stack per-predecessor forward-surrogate outputs, concat with `v`,
-        # pipe through the node's classifier, negate + subtract backoff.
-        fwd_pieces = [
-            pred_forward_sg[i](x.reshape(1, -1)[:, s:e]).reshape(1, -1)
-            for i, (s, e) in enumerate(pred_slices)
+    def _build_for_key(self, key) -> None:
+        preds = list(self.graph.predecessors(key))
+
+        # Per-predecessor decision dimensions and slice offsets.
+        pred_dims = [
+            self.graph.nodes[p]['n_design_args']
+            + self.graph.nodes[p]['n_input_args']
+            + self.graph.graph['n_aux_args']
+            for p in preds
         ]
-        combined = jnp.hstack([v] + fwd_pieces)
-        return (-node_classifier(combined).reshape(()) - node_backoff).reshape(())
+        slice_starts = [0] + list(np.cumsum(pred_dims[:-1]))
+        slice_ends   = list(np.cumsum(pred_dims))
+        pred_slices  = [(int(s), int(e)) for s, e in zip(slice_starts, slice_ends)]
 
-    def constraint(x):
-        # Per-predecessor classifier + backoff stacked into a vector g(x) <= 0.
-        pieces = []
-        for i, (s, e) in enumerate(pred_slices):
-            val = (
-                pred_classifiers[i](x.reshape(1, -1)[:, s:e]).reshape(-1)
-                + pred_backoffs[i]
-            )
-            pieces.append(val)
-        return jnp.concatenate(pieces)
+        # Per-predecessor callables + backoffs.
+        pred_classifiers = [self.graph.nodes[p]['classifier'] for p in preds]
+        pred_forward_sg  = [self.graph.edges[p, key]['forward_surrogate'] for p in preds]
+        pred_backoffs    = [
+            jnp.sum(jnp.asarray(self.graph.nodes[p]['constraint_backoff']))
+            for p in preds
+        ]
 
-    return objective, constraint, [lb, ub]
+        # Bounds — concat extendedDS_bounds across preds, in real-world units.
+        lb_parts, ub_parts = [], []
+        for p in preds:
+            decision_bounds = self.graph.nodes[p]["extendedDS_bounds"].copy()
+            lb_parts.append(jnp.asarray(decision_bounds[0]).reshape(-1))
+            ub_parts.append(jnp.asarray(decision_bounds[1]).reshape(-1))
+        lb = jnp.concatenate(lb_parts)
+        ub = jnp.concatenate(ub_parts)
+        bounds = [lb, ub]
+        n_d = int(lb.size)
 
+        # Node-level classifier + backoff.
+        node_classifier = self.graph.nodes[key]['classifier']
+        node_backoff    = jnp.sum(jnp.asarray(self.graph.nodes[key]['constraint_backoff']))
 
-# ---------------------------------------------------------------------------
-# Sample-by-sample evaluator
-# ---------------------------------------------------------------------------
+        # Determine `p` dimension by probing the first predecessor's
+        # forward surrogate at its midpoint: `p` is the measured-input
+        # vector for this node, whose width is the sum of per-edge
+        # forward-surrogate output widths.
+        def _fwd_width(p_idx: int) -> int:
+            sl_s, sl_e = pred_slices[p_idx]
+            x_probe = 0.5 * (lb[sl_s:sl_e] + ub[sl_s:sl_e])
+            return int(pred_forward_sg[p_idx](x_probe.reshape(1, -1)).reshape(-1).size)
 
-def evaluate_forward_decentralised(inputs, aux, cfg, graph, node):
-    """
-    Solve the decentralised forward sub-problem for every sample.
+        fwd_widths = [_fwd_width(i) for i in range(len(preds))]
+        n_fix = int(sum(fwd_widths))
 
-    Returns `(evaluations, success_flags)` each of shape `(N_samples, 1)`.
-    The evaluation returned is `classifier_node(x*) + backoff` (positive =
-    feasible), matching the sign convention of the legacy casadi path.
-    """
-    n_samples = inputs.shape[0]
-    evals, flags = [], []
+        def objective(x, p):
+            # Stack per-predecessor forward-surrogate outputs, concat with
+            # `p` (measured input for this node), pipe through the node's
+            # classifier, negate + subtract backoff.
+            fwd_pieces = [
+                pred_forward_sg[i](x.reshape(1, -1)[:, s:e]).reshape(1, -1)
+                for i, (s, e) in enumerate(pred_slices)
+            ]
+            combined = jnp.hstack([p.reshape(1, -1)] + fwd_pieces)
+            return (-node_classifier(combined).reshape(()) - node_backoff).reshape(())
 
-    for i in range(n_samples):
-        objective, constraint, bounds = prepare_forward_decentralised_problem(
-            inputs[i, :].reshape(1, -1),
-            aux[i, :].reshape(1, -1) if aux is not None else jnp.zeros((1, 0)),
-            graph, node, cfg,
-        )
-        if objective is None or bounds is None:
-            evals.append(jnp.zeros((1,)))
-            flags.append(jnp.zeros((1,), dtype=bool))
-            continue
+        def constraint(x, p):
+            # Per-predecessor classifier + backoff stacked into g(x) <= 0.
+            pieces = []
+            for i, (s, e) in enumerate(pred_slices):
+                val = (
+                    pred_classifiers[i](x.reshape(1, -1)[:, s:e]).reshape(-1)
+                    + pred_backoffs[i]
+                )
+                pieces.append(val)
+            return jnp.concatenate(pieces)
 
-        lb, ub = bounds
-        # Probe constraint width at midpoint.
-        x_probe = 0.5 * (lb + ub)
-        n_g = int(constraint(x_probe).reshape(-1).shape[0])
+        # Probe constraint width at midpoint — septal needs explicit n_g.
+        x_probe_all = 0.5 * (lb + ub)
+        p_probe     = jnp.zeros(n_fix)
+        n_g = int(constraint(x_probe_all, p_probe).reshape(-1).shape[0])
 
-        solver = construct_constrained_solver(
+        self.factories[key] = build_factory(
             objective, constraint, bounds,
-            tol=cfg.solvers.tol,
-            constraint_lhs=jnp.full((n_g,), -jnp.inf),
-            constraint_rhs=jnp.zeros((n_g,)),
+            n_decision=n_d,
+            n_params=n_fix,
+            n_constraints=n_g,
+            tol=self.tol,
         )
-        # Deterministic midpoint start — matches the single-shot casadi pattern.
-        x0 = x_probe.reshape(1, -1)
-        result = solve_constrained([solver], [x0])
+        self.screeners[key] = build_penalty_screener(
+            objective, constraint, self.screen_penalty,
+        )
+        self.sobol_pool[key] = precompute_sobol_pool(
+            bounds, n_d, self.n_sobol_screen,
+        )
 
-        # Flip sign so we return `classifier + backoff` (positive = feasible),
-        # consistent with casadi `ray_evaluation` which also negated.
-        evals.append((-result['objective']).reshape(-1))
-        flags.append(result['converged'].reshape(-1))
+        self.bounds[key]        = bounds
+        self.n_d[key]           = n_d
+        self.n_g[key]           = n_g
+        self.n_fix[key]         = n_fix
+        self.pred_slices[key]   = pred_slices
+        self.objective_fn[key]  = objective
+        self.constraint_fn[key] = constraint
 
-    return (
-        jnp.concatenate(evals).reshape(-1, 1),
-        jnp.concatenate(flags).reshape(-1, 1),
-    )
+    # ------------------------------------------------------------------
+    # Evaluate — loops over samples; each iteration reuses the compiled
+    # factory with a new `p`.
+    # ------------------------------------------------------------------
+
+    def evaluate(self, inputs, aux):
+        """
+        Solve the decentralised forward NLP for every sample.
+
+        Returns `(evaluations, success_flags)` each shape `(N_samples, 1)`.
+        The evaluation returned is `classifier_node(x*) + backoff`
+        (positive = feasible).
+        """
+        key = self.node
+        if self._keys() == []:
+            n = inputs.shape[0]
+            return jnp.zeros((n, 1)), jnp.zeros((n, 1), dtype=bool)
+
+        n_fix = self.n_fix[key]
+        n_samples = inputs.shape[0]
+
+        evals, flags = [], []
+        for i in range(n_samples):
+            # `p` is this sample's measured input (node-level) — width may
+            # differ from n_fix by padding if inputs include aux tails; pad
+            # / trim to the factory's n_fix width.
+            v = inputs[i].reshape(-1)
+            p = jnp.zeros(n_fix).at[:min(v.size, n_fix)].set(v[:n_fix])
+
+            x0_batch = pick_x0_batch(
+                self.sobol_pool[key], self.screeners[key], p, self.n_starts,
+            )
+            p_batch = jnp.broadcast_to(
+                p.reshape(1, -1), (self.n_starts, n_fix),
+            )
+
+            result = self.factories[key].solve_batch(x0_batch, p_batch)
+            best_f, best_c, _ = pick_best(result)
+
+            # Flip sign so we return `classifier + backoff` (positive =
+            # feasible), consistent with the casadi `ray_evaluation`.
+            evals.append((-best_f).reshape(-1))
+            flags.append(best_c.reshape(-1))
+
+        return (
+            jnp.concatenate(evals).reshape(-1, 1),
+            jnp.concatenate(flags).reshape(-1, 1),
+        )
 
 
-# ---------------------------------------------------------------------------
-# Top-level — the name used by `constraints.constructor` dispatch.
-# ---------------------------------------------------------------------------
+# =============================================================================
+# Evaluator cache + top-level entry point
+# =============================================================================
+
+_FWDDEC_EVALUATOR_CACHE: dict = {}
+
+
+def _get_evaluator(cfg, graph, node) -> ForwardDecentralisedEvaluator:
+    key = (id(graph), node)
+    evaluator = _FWDDEC_EVALUATOR_CACHE.get(key)
+    if evaluator is None:
+        evaluator = ForwardDecentralisedEvaluator(cfg, graph, node)
+        _FWDDEC_EVALUATOR_CACHE[key] = evaluator
+    return evaluator
+
 
 def forward_constraint_decentralised_evaluator(inputs, aux, cfg, graph, node):
     """
     Drop-in replacement for the legacy casadi class of the same name.
 
-    Serial for now — each sample builds its own concatenated NLP and solves
-    via septal.  A pmap shard would be straightforward (same pattern as
-    `forward.forward_pmap_batch_evaluator`) if typical batch sizes warrant it.
+    Serial across samples for now — each sample reuses the compiled
+    factory with a new `p`.  A pmap shard would be straightforward if
+    typical batch sizes warrant it.
     """
-    return evaluate_forward_decentralised(inputs, aux, cfg, graph, node)
+    return _get_evaluator(cfg, graph, node).evaluate(inputs, aux)

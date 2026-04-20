@@ -28,33 +28,88 @@ from mu_F.solvers.utilities import (
     create_batches,
 )
 
-def standardise_inputs(graph, succ_inputs, out_node, input_indices):
-    """
-    Standardises the inputs
-    """
-    if out_node is not None:
-        standardiser = graph.nodes[out_node]['classifier_x_scalar']
-    else:
-        standardiser = graph.graph['classifier_x_scalar']
 
-    if standardiser is None: return succ_inputs
-    else:
-        mean, std = standardiser.mean, standardiser.std
-        return (succ_inputs - mean[input_indices].reshape(1,-1)) / std[input_indices].reshape(1,-1)
+# ---------------------------------------------------------------------------
+# Pmap padding helpers — keep pmap width constant across calls.
+# ---------------------------------------------------------------------------
+
+def pad_to_multiple(arr, W: int, axis: int = 0):
+    """
+    Pad `arr` along `axis` up to the next multiple of `W`, using replicas
+    of the row at index 0 along `axis`.
+
+    Padding with first-row replicas (rather than zeros) means any shard
+    body that's correct on real inputs cannot crash on a padded lane —
+    the padded lane sees a genuine sample.  The `lax.cond` gate inside
+    the shard throws the output away anyway; the replicas exist purely
+    so intermediate ops (standardise, surrogate evaluation, constraint
+    probes) don't trip over zero/NaN inputs during tracing.
+
+    Returns `(padded, n_real, n_pad)`.
+    """
+    n_real = arr.shape[axis]
+    remainder = n_real % W
+    if remainder == 0:
+        return arr, n_real, 0
+    n_pad = W - remainder
+
+    slicer = [slice(None)] * arr.ndim
+    slicer[axis] = slice(0, 1)
+    row0 = arr[tuple(slicer)]
+
+    pad_shape = list(arr.shape)
+    pad_shape[axis] = n_pad
+    pad_block = jnp.broadcast_to(row0, tuple(pad_shape))
+    return jnp.concatenate([arr, pad_block], axis=axis), n_real, n_pad
+
+
+def batch_mask(n_real: int, total: int) -> jnp.ndarray:
+    """Boolean mask of length `total`: True on `[0, n_real)`, False after."""
+    return jnp.arange(total) < n_real
+
+
+def poison_padded(arr: jnp.ndarray, mask: jnp.ndarray, fill=jnp.nan) -> jnp.ndarray:
+    """
+    Set `arr[i, ...] = fill` wherever `mask[i]` is False.
+
+    `mask` must be 1D and match `arr.shape[0]`.  The mask is reshaped to
+    `(N, 1, 1, ...)` so it broadcasts cleanly over the trailing dims of
+    `arr` regardless of rank — writing `arr[:, None]` hard-codes 2D input
+    and silently blows up on 3D arrays (the broadcast picks up the
+    trailing singleton from the mask and the leading singleton from the
+    array, giving `(N, N, ...)`).
+    """
+    bcast = mask.reshape((mask.shape[0],) + (1,) * (arr.ndim - 1))
+    return jnp.where(bcast, arr, fill)
+
+
+# ---------------------------------------------------------------------------
+# Scaling helpers (DEPRECATED) — identity no-ops under the new contract.
+# ---------------------------------------------------------------------------
+#
+# Under the "surrogate self-scaling" contract (every callable stored on the
+# graph already takes real-world inputs and standardises internally with its
+# own trained scaler), the evaluator path never needs to apply or invert
+# scaling.  These functions stay as identity passthroughs so older call
+# sites don't crash while the migration ripples through, but their real
+# work has moved inside the surrogate closures.
+#
+# Planned cleanup: once every evaluator has stopped calling these (tracked
+# elsewhere in this refactor), delete them outright.
+
+def standardise_inputs(graph, succ_inputs, out_node, input_indices):
+    """Deprecated — identity passthrough.  Surrogates self-scale now."""
+    return succ_inputs
 
 
 def standardise_model_decisions(graph, decisions, out_node):
-    """
-    Standardises the decisions
-    """
-    if out_node is None:
-        standardiser = graph.graph['classifier_x_scalar']
-    else:
-        standardiser = graph.nodes[out_node]['classifier_x_scalar']
-    if standardiser is None: return decisions
-    else:
-        mean, std = standardiser.mean, standardiser.std
-        return [(decision - mean[:].reshape(1,-1)) / std[:].reshape(1,-1) for decision in decisions]
+    """Deprecated — identity passthrough.  Surrogates self-scale now."""
+    return decisions
+
+
+def destandardise_model_decisions(decisions, graph, node, cfg):
+    """Deprecated — identity passthrough.  Solver already runs in real space."""
+    return decisions
     
 
 @lru_cache(maxsize=None)
@@ -230,8 +285,8 @@ def get_backward_bounds(graph, node, cfg):
             [inp for inp in graph.edges[node, succ]['auxiliary_indices']]
         ))
         decision_bounds = graph.nodes[succ]["extendedDS_bounds"].copy()
-        if cfg.solvers.standardised:
-            decision_bounds = standardise_model_decisions(graph, decision_bounds, succ)
+        # Bounds stay in real-world units; the classifier callable
+        # self-scales.  (`cfg` retained in the signature for API parity.)
         decision_bounds = [
             jnp.delete(bound, np.hstack([input_indices, aux_indices]).astype(int), axis=1)
             for bound in decision_bounds
@@ -252,8 +307,7 @@ def get_forward_bounds(graph, node, cfg):
     forward_bounds = {}
     for pred in graph.predecessors(node):
         decision_bounds = graph.nodes[pred]["extendedDS_bounds"].copy()
-        if cfg.solvers.standardised:
-            decision_bounds = standardise_model_decisions(graph, decision_bounds, pred)
+        # Real-world units; forward surrogate self-scales.
         lb = jnp.asarray(decision_bounds[0]).reshape(-1)
         ub = jnp.asarray(decision_bounds[1]).reshape(-1)
         forward_bounds[pred] = [lb, ub]

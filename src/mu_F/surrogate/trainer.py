@@ -84,12 +84,8 @@ class trainer(trainer_base):
         else:
             dataset = self.get_data(successor_node=node)
 
-
-        if self.model_surrogate == 'ctg_surrogate' and self.model_subclass == 'ANN':
-            self.x_scalar_override = self.graph.nodes[self.unit_index].get('classifier_x_scalar')
-
         self.load_trainer_methods()
-        model, args, serialised_data = self.trainer(self.cfg, dataset, self.cfg.surrogate.num_folds) 
+        model, args, serialised_data = self.trainer(self.cfg, dataset, self.cfg.surrogate.num_folds)
 
         if self.model_class == 'regression':
             assert len(args) == 4, "Regression model training should return 4 arguments; standardised model (i.e. model mapping from and into a standardised space), unstandardised model (i.e. model mapping from and into original data space), standardisation metrics for input and output"

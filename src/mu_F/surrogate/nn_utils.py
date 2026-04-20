@@ -274,7 +274,20 @@ class NeuralNetworkEstimator(nn.Module):
                 self.afs += (nn.tanh,)
 
         self.afs += (lambda x: x,) # currently have no output activation function (feel free to change it)
-        
+
+        # -- Hard-fail structural check ---------------------------------
+        assert len(self.afs) == len(self.layers), (
+            f"NeuralNetworkEstimator layer/activation mismatch: "
+            f"len(hidden_units)={len(self.hidden_units)} + 1 output layer "
+            f"= {len(self.layers)} Dense layers, but "
+            f"len(activation_functions)={len(self.activation_functions)} "
+            f"+ 1 output identity = {len(self.afs)} afs.  "
+            f"`activation_functions` must have exactly one entry per "
+            f"hidden layer (it gets implicitly padded with an identity "
+            f"for the output layer).  Fix the yaml — e.g. for "
+            f"hidden_units={self.hidden_units!r} you need "
+            f"activation_functions of length {len(self.hidden_units)}."
+        )
 
 
     def __call__(self, x):
@@ -282,7 +295,7 @@ class NeuralNetworkEstimator(nn.Module):
             x = layer(x)
             x = af(x)
 
-        return x 
+        return x
 
 
 @partial(jit, static_argnames=('model',))
@@ -391,7 +404,7 @@ def train(cfg, model, data, valid_data, model_type):
 
         # Train one epoch in parallel
         state, loss = parallel_train_one_epoch(state, minibatches)
-        logging.info('epoch: %d, loss: %.4f' % (epoch, jnp.mean(loss).squeeze()))
+        logging.debug('epoch: %d, loss: %.4f' % (epoch, jnp.mean(loss).squeeze()))
 
         # Add current losses to history
         loss_history.extend(loss)
@@ -407,7 +420,7 @@ def train(cfg, model, data, valid_data, model_type):
         else:
             raise NotImplementedError(f"Model type {model_type} not implemented")
         
-        logging.info('Validation loss: %.4f' % val_loss)
+        logging.debug('Validation loss: %.4f' % val_loss)
 
         # Check for convergence
         early_stop = early_stop.update(val_loss)
@@ -537,16 +550,10 @@ def build_ann(cfg, model_data, model_class):
         y_mean = jnp.array(y_standardisation.mean)
         y_std = jnp.array(y_standardisation.std)
 
-        if cfg['solvers']['standardised']:
-            return partial(_ann_forward_std_regressor_jit, params, model=model)
-        else:
-            return partial(_ann_forward_unstd_regressor_jit, params, x_mean, x_std, y_mean, y_std, model=model)
+        return partial(_ann_forward_unstd_regressor_jit, params, x_mean, x_std, y_mean, y_std, model=model)
 
     elif model_class == 'classifier':
-        if cfg['solvers']['standardised']:
-            return partial(_ann_forward_std_classifier_jit, params, model=model)
-        else:
-            return partial(_ann_forward_unstd_classifier_jit, params, x_mean, x_std, model=model)
+        return partial(_ann_forward_unstd_classifier_jit, params, x_mean, x_std, model=model)
 
     else:
         raise NotImplementedError(f"Model class {model_class} not implemented")

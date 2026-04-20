@@ -11,11 +11,18 @@ Decision space is pred's **full** NLP (design + input + aux).  Unlike the
 backward/CTG reduced space, we don't mask inputs out — they're pinned by the
 equality constraint itself.
 
-The equality is written in septal's static-lhs/rhs form as
-`g(x, p) = forward_surrogate(x) - p` with `lhs = rhs = 0`, so the measured
-input rides in the closure as `y` (per-sample).  The baked-in `y` triggers a
-JIT trace per sample; that's the known p-lifting issue noted elsewhere and
-gets addressed in one sweep across all evaluators later.
+### p-lifting
+
+The measured-input target `y` is threaded through as the parametric `p`
+argument of septal's `ParametricNLPProblem` instead of being baked into a
+Python closure.  The equality becomes
+
+    g(x, p) = forward_surrogate(x) - p
+
+with `constraint_lhs = constraint_rhs = 0`.  One
+`ParametricSQPFactory` per predecessor is built in `_build_for_key`; every
+subsequent shard call feeds new `(x_batch, p_batch)` to the same compiled
+scan body.
 
 NOTE: does NOT implement `cfg.solvers.forward_general_constraints` — the
 variant that stacks extra successor classifier+surrogate blocks for already-
@@ -24,257 +31,268 @@ as a follow-up if a case study needs it.
 """
 from __future__ import annotations
 
-from functools import partial
-
 import jax.numpy as jnp
 import numpy as np
-from jax import jit, pmap, devices
+from jax import devices
 
-from mu_F.constraints.utils import (
-    standardise_model_decisions,
-    initial_guess,
-    get_forward_bounds,
-    generate_initial_guess,
-    determine_batches,
-    create_batches,
+from mu_F.constraints.evaluators.base import (
+    BaseEvaluator,
+    build_factory,
+    build_penalty_screener,
+    parallel_shard,
+    pick_best,
+    pick_x0_batch,
+    precompute_sobol_pool,
+    skip_if_masked,
 )
-from mu_F.solvers.septal import (
-    construct_constrained_solver,
-    solve_constrained,
+from mu_F.constraints.utils import (
+    pad_to_multiple,
+    batch_mask,
+    poison_padded,
 )
 
 
 __all__ = [
-    "prepare_forward_problem",
-    "evaluate_forward",
-    "forward_pmap_batch_evaluator",
+    "ForwardEvaluator",
     "forward_constraint_evaluator",
 ]
 
 
-# ---------------------------------------------------------------------------
-# Graph helpers — small, private to this file
-# ---------------------------------------------------------------------------
+# =============================================================================
+# ForwardEvaluator — one instance per (cfg, graph, node)
+# =============================================================================
 
-def _get_predecessor_inputs(inputs, aux, graph, node):
+class ForwardEvaluator(BaseEvaluator):
     """
-    Split `inputs` / `aux` into per-edge slices keyed by predecessor.
+    Stateful forward evaluator.
 
-    Uses the edge-stored `input_indices` to pick out the subset of the
-    current node's inputs coming from each predecessor.
+    Owns the factory + screener + sobol pool for every predecessor.  The
+    shard entry point `evaluate(inputs_s, aux_s)` is pinned to a stable
+    bound-method attribute in `__init__` so pmap's compile cache keys on
+    the same callable identity across every call.
     """
-    pred_inputs, pred_aux = {}, {}
-    for pred in graph.predecessors(node):
-        input_indices = np.array(graph.edges[pred, node]['input_indices'], dtype=int)
-        pred_inputs[pred] = inputs[:, input_indices]
-        pred_aux[pred] = aux[:, :]
-    return pred_inputs, pred_aux
 
+    def __init__(self, cfg, graph, node):
+        # Per-predecessor static state populated in `_build_for_key`.
+        self.n_g: dict           = {}
+        self.n_fix: dict         = {}
+        self.n_d: dict           = {}
+        self.bounds: dict        = {}
+        self.input_indices: dict = {}
+        self.objective_fn: dict  = {}
+        self.constraint_fn: dict = {}
 
-def _standardise_edge_outputs(graph, data, pred, node):
-    """
-    Apply edge-level `y_scalar` standardisation to data flowing through the
-    (pred, node) edge.  Returns `data` unchanged if no scaler is attached —
-    mirrors the casadi `standardise_inputs` fallback.
-    """
-    scaler = graph.edges[pred, node].get('y_scalar')
-    if scaler is None:
-        return data
-    mean = jnp.asarray(scaler.mean).reshape(1, -1)
-    std = jnp.asarray(scaler.std).reshape(1, -1)
-    return (data - mean) / std
+        super().__init__(cfg, graph, node)
 
+        self._shard = self.evaluate
 
-# ---------------------------------------------------------------------------
-# Problem builder
-# ---------------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # BaseEvaluator contract
+    # ------------------------------------------------------------------
 
-def prepare_forward_problem(inputs, aux, graph, node, cfg):
-    """
-    Build a forward sub-problem per predecessor of `node`.
+    def _keys(self) -> list:
+        if self.node is None:
+            return []
+        return list(self.graph.predecessors(self.node))
 
-    Returns `(objective, constraint, bounds)` dicts keyed by predecessor,
-    each value a list of length `N_samples` (one solver per sample).
-    Objective (classifier+backoff) and constraint (forward_surrogate - target)
-    are pulled as live JAX callables from the graph — no reconstruction from
-    serialised weights.
-    """
-    if node is None:
-        return None, None, None
+    def _build_for_key(self, pred: int) -> None:
+        """
+        Build the per-predecessor parametric NLP.
 
-    fwd_objective  = {pred: None for pred in graph.predecessors(node)}
-    fwd_constraint = {pred: None for pred in graph.predecessors(node)}
-    fwd_bounds     = {pred: None for pred in graph.predecessors(node)}
+        Decision space is pred's full NLP.  `p` is the measured-input
+        target (same width as the forward surrogate's output).
+        """
+        # pred's full NLP dimension — no reduction; equality constraint pins
+        # the inputs.
+        n_design = self.graph.nodes[pred]['n_design_args']
+        n_input  = self.graph.nodes[pred]['n_input_args']
+        n_aux    = self.graph.graph['n_aux_args']
+        n_d      = n_design + n_input + n_aux
 
-    pred_inputs, pred_aux = _get_predecessor_inputs(inputs, aux, graph, node)
-
-    for pred in graph.predecessors(node):
-
-        # pred's full NLP dimension — no reduction; equality constraint pins inputs.
-        n_design = graph.nodes[pred]['n_design_args']
-        n_input  = graph.nodes[pred]['n_input_args']
-        n_aux    = graph.graph['n_aux_args']
-        n_d_j    = n_design + n_input + n_aux  # noqa: F841 — documented, kept for clarity
-
-        # Bounds — pred's extendedDS_bounds, optionally standardised.
-        decision_bounds = graph.nodes[pred]["extendedDS_bounds"].copy()
-        if cfg.solvers.standardised:
-            decision_bounds = standardise_model_decisions(graph, decision_bounds, pred)
+        # Bounds — pred's extendedDS_bounds, in real-world units.  The
+        # classifier / forward surrogate callables self-scale internally.
+        decision_bounds = self.graph.nodes[pred]["extendedDS_bounds"].copy()
         lb = jnp.asarray(decision_bounds[0]).reshape(-1)
         ub = jnp.asarray(decision_bounds[1]).reshape(-1)
-        fwd_bounds[pred] = [[lb, ub] for _ in range(pred_inputs[pred].shape[0])]
+        bounds = [lb, ub]
 
-        # Measured-input target for the equality constraint.
-        # [pred_inputs | pred_aux] — matches the forward surrogate's output layout.
-        target = jnp.hstack([pred_inputs[pred], pred_aux[pred]])
-        if cfg.solvers.standardised:
-            target = _standardise_edge_outputs(graph, target, pred, node)
-
-        # Live JAX callables from the graph.
-        classifier        = graph.nodes[pred]["classifier"]
-        forward_surrogate = graph.edges[pred, node]["forward_surrogate"]
-        # `constraint_backoff` is a per-output-channel scalar list; the casadi
-        # path sums it into the scalar objective via `_ensure_scalar_objective`.
-        # Collapse to a scalar explicitly here so septal gets a scalar f(x, p).
-        backoff = jnp.sum(jnp.asarray(graph.nodes[pred]['constraint_backoff']))
-
-        fwd_objective[pred] = [
-            jit(partial(
-                lambda x, b: classifier(x.reshape(1, -1)).reshape(()) + b,
-                b=backoff,
-            ))
-            for _ in range(target.shape[0])
-        ]
-        fwd_constraint[pred] = [
-            jit(partial(
-                lambda x, y: forward_surrogate(x.reshape(1, -1)).reshape(-1) - y.reshape(-1),
-                y=target[i],
-            ))
-            for i in range(target.shape[0])
-        ]
-
-    return fwd_objective, fwd_constraint, fwd_bounds
-
-
-# ---------------------------------------------------------------------------
-# Shard-level evaluator
-# ---------------------------------------------------------------------------
-
-def evaluate_forward(inputs, aux, graph, node, cfg, sobol_pts_dict=None):
-    """
-    Evaluate the forward problem per predecessor within a pmap shard.
-
-    Mirrors `evaluate_ctg` structurally: build one solver per sample per
-    predecessor, hand each a sobol-seeded initial-guess batch, stack the
-    scalar `(objective, converged)` summaries across predecessors.
-    """
-    objective, constraint, bounds = prepare_forward_problem(inputs, aux, graph, node, cfg)
-    if objective is None or bounds is None:
-        return jnp.zeros((inputs.shape[0], 1)), None
-
-    pred_fn_evaluations = {}
-    for pred in graph.predecessors(node):
-        pred_sobol = sobol_pts_dict.get(pred) if sobol_pts_dict is not None else None
-
-        n_samples = inputs.shape[0]
-        # Equality constraint — septal needs lhs = rhs = 0 with matching width.
-        # Probe the constraint at midpoint to discover n_g.
-        lb = bounds[pred][0][0]
-        ub = bounds[pred][0][1]
-        x_probe = 0.5 * (lb + ub)
-        n_g = int(constraint[pred][0](x_probe).reshape(-1).shape[0])
-        eq = jnp.zeros((n_g,))
-
-        solvers = [
-            construct_constrained_solver(
-                objective[pred][i], constraint[pred][i], bounds[pred][i],
-                tol=cfg.solvers.tol,
-                sobol_pts=pred_sobol,
-                constraint_lhs=eq,
-                constraint_rhs=eq,
-            )
-            for i in range(n_samples)
-        ]
-        initial_guesses = [
-            initial_guess(cfg.solvers, bounds[pred][i])
-            for i in range(n_samples)
-        ]
-        pred_fn_evaluations[pred] = solve_constrained(solvers, initial_guesses)
-
-    fn_evaluations = [
-        pred_fn_evaluations[pred]['objective'].reshape(-1, 1)
-        for pred in graph.predecessors(node)
-    ]
-    success_flags = [
-        pred_fn_evaluations[pred]['converged'].reshape(-1, 1)
-        for pred in graph.predecessors(node)
-    ]
-    return jnp.hstack(fn_evaluations), jnp.hstack(success_flags)
-
-
-# ---------------------------------------------------------------------------
-# pmap shard wrapper
-# ---------------------------------------------------------------------------
-
-def forward_pmap_batch_evaluator(inputs, aux, cfg, graph, node):
-    """
-    Fan the sample axis out across CPU devices.  Sobol points are
-    precomputed outside pmap (bounds are static per-predecessor) and passed
-    in via `in_axes=None` as a tuple ordered by the predecessor list.
-    """
-    n_sobol_screen    = getattr(cfg.solvers, 'n_sobol_screen', 16_384)
-    forward_bounds    = get_forward_bounds(graph, node, cfg)
-    sobol_pts_tuple   = ()
-    predecessor_order = None
-    if forward_bounds is not None:
-        predecessor_order = list(forward_bounds.keys())
-        sobol_pts_tuple = tuple(
-            generate_initial_guess(n_sobol_screen, None, bounds)
-            for bounds in forward_bounds.values()
+        # `input_indices` picks out the pred->node slice of the current
+        # node's input stream; used at shard time to build `p`.
+        input_indices = np.array(
+            self.graph.edges[pred, self.node]['input_indices'], dtype=int,
         )
 
-    def shard_call(inputs_s, aux_s, sobol_tuple):
-        sobol_dict = None
-        if predecessor_order is not None and sobol_tuple is not None:
-            sobol_dict = {pred: pts for pred, pts in zip(predecessor_order, sobol_tuple)}
-        return evaluate_forward(inputs_s, aux_s, graph, node, cfg,
-                                sobol_pts_dict=sobol_dict)
+        # Live callables — keep stable identity from the graph.
+        classifier        = self.graph.nodes[pred]["classifier"]
+        forward_surrogate = self.graph.edges[pred, self.node]["forward_surrogate"]
+        backoff = jnp.sum(jnp.asarray(self.graph.nodes[pred]['constraint_backoff']))
 
-    devs = [d for i, d in enumerate(devices('cpu')) if i < inputs.shape[0]]
-    return pmap(shard_call, in_axes=(0, 0, None), out_axes=0, devices=devs)(
-        inputs, aux, sobol_pts_tuple,
-    )
+        # Discover forward-surrogate output width at build time to know `p`
+        # dimension + equality constraint width.
+        x_probe = 0.5 * (lb + ub)
+        fwd_probe = forward_surrogate(x_probe.reshape(1, -1)).reshape(-1)
+        n_g = int(fwd_probe.size)
+        n_fix = n_g  # `p` matches the equality constraint width.
+
+        def objective(x, p):
+            return classifier(x.reshape(1, -1)).reshape(()) + backoff
+
+        def constraint(x, p):
+            return forward_surrogate(x.reshape(1, -1)).reshape(-1) - p.reshape(-1)
+
+        eq = jnp.zeros((n_g,))
+        self.factories[pred] = build_factory(
+            objective, constraint, bounds,
+            n_decision=n_d,
+            n_params=n_fix,
+            n_constraints=n_g,
+            tol=self.tol,
+            constraint_lhs=eq,
+            constraint_rhs=eq,
+        )
+        self.screeners[pred] = build_penalty_screener(
+            objective, constraint, self.screen_penalty,
+        )
+        self.sobol_pool[pred] = precompute_sobol_pool(
+            bounds, n_d, self.n_sobol_screen,
+        )
+
+        self.n_g[pred]           = n_g
+        self.n_fix[pred]         = n_fix
+        self.n_d[pred]           = n_d
+        self.bounds[pred]        = bounds
+        self.input_indices[pred] = input_indices
+        self.objective_fn[pred]  = objective
+        self.constraint_fn[pred] = constraint
+
+    # ------------------------------------------------------------------
+    # Shard entry point — pmap target
+    # ------------------------------------------------------------------
+
+    def evaluate(self, inputs_s, aux_s, mask_s):
+        """
+        Shard body.
+
+        Parameters
+        ----------
+        inputs_s : (N_uncertainty, N_input_dim) — current node's measured inputs
+        aux_s    : (N_uncertainty, N_aux)       — auxiliary variables
+        mask_s   : scalar bool — True on real lanes, False on padded lanes
+
+        Returns `(evals, flags)` each shape `(1, N_predecessors)` for this
+        shard.  Padded lanes skip the SQP via `lax.cond`.
+        """
+        def real():
+            evals, flags = [], []
+            for pred in self._keys():
+                # Build target `y` = [pred_inputs | pred_aux] — matches the
+                # forward surrogate's output layout.  First uncertainty
+                # realisation only (N_uncertainty=1 in deterministic cases).
+                pred_inputs = inputs_s[0, self.input_indices[pred]]
+                pred_aux    = aux_s[0]
+                # Target stays in real units; the forward surrogate produces
+                # real-world outputs (self-unscales) so the equality
+                # `fwd(x) - target = 0` is also in real units.
+                target = jnp.hstack([pred_inputs, pred_aux])
+
+                # Align `y` width to the factory's `n_fix` — the equality
+                # constraint width is set at build time from the forward
+                # surrogate's output probe.  If `target` is wider, trim;
+                # if narrower, zero-pad.
+                n_fix = self.n_fix[pred]
+                y = jnp.zeros(n_fix).at[:min(target.size, n_fix)].set(
+                    target[:n_fix]
+                )
+
+                x0_batch = pick_x0_batch(
+                    self.sobol_pool[pred],
+                    self.screeners[pred],
+                    y,
+                    self.n_starts,
+                )
+                p_batch = jnp.broadcast_to(
+                    y.reshape(1, -1), (self.n_starts, n_fix),
+                )
+
+                result = self.factories[pred].solve_batch(x0_batch, p_batch)
+                best_f, best_c, _ = pick_best(result)
+
+                evals.append(best_f.reshape(-1, 1))
+                flags.append(best_c.reshape(-1, 1))
+
+            return jnp.hstack(evals), jnp.hstack(flags)
+
+        return skip_if_masked(mask_s, real)
 
 
-# ---------------------------------------------------------------------------
-# Top-level evaluator
-# ---------------------------------------------------------------------------
+# =============================================================================
+# Evaluator cache + top-level entry point
+# =============================================================================
+
+_FORWARD_EVALUATOR_CACHE: dict = {}
+
+
+def _get_evaluator(cfg, graph, node) -> ForwardEvaluator:
+    key = (id(graph), node)
+    evaluator = _FORWARD_EVALUATOR_CACHE.get(key)
+    if evaluator is None:
+        evaluator = ForwardEvaluator(cfg, graph, node)
+        _FORWARD_EVALUATOR_CACHE[key] = evaluator
+    return evaluator
+
 
 def forward_constraint_evaluator(inputs, aux, cfg, graph, node):
     """
-    Top-level forward evaluator — mirrors `backward_constraint_evaluator`.
+    Top-level forward evaluator — fixed-width pmap with padding + mask
+    (see `cost_to_go_evaluator` for the full rationale).
 
-    Shards samples across CPU devices via pmap.  Returns
-    `(fwd_evaluations, success_flags)` as `(N_samples, N_predecessors)`
-    matrices hstacked across predecessors.
+    Parameters
+    ----------
+    inputs : (N_batch, N_uncertainty, N_input_dim)
+    aux    : (N_batch, N_aux)
+
+    Returns
+    -------
+    evaluations   : (N_batch, N_predecessors) — NaN on padded rows.
+    success_flags : (N_batch, N_predecessors)
     """
-    max_devices = cfg.max_devices
-    batch_sizes, _ = determine_batches(inputs.shape[0], max_devices)
+    evaluator = _get_evaluator(cfg, graph, node)
+    if evaluator._keys() == []:
+        return jnp.zeros((inputs.shape[0], 1)), None
 
-    input_batches = create_batches(batch_sizes, inputs)
-    aux_batches   = create_batches(
-        batch_sizes,
-        jnp.repeat(jnp.expand_dims(aux, axis=1), inputs.shape[1], axis=1),
+    cpu_devs = list(devices('cpu'))
+    W = min(int(cfg.max_devices), len(cpu_devs))
+    n_real = inputs.shape[0]
+
+    aux_expanded = jnp.repeat(
+        jnp.expand_dims(aux, axis=1), inputs.shape[1], axis=1,
+    )
+    padded_in,  _, _ = pad_to_multiple(inputs, W, axis=0)
+    padded_aux, _, _ = pad_to_multiple(aux_expanded, W, axis=0)
+    total = padded_in.shape[0]
+    mask = batch_mask(n_real, total)
+
+    n_chunks = total // W
+    in_chunks   = padded_in.reshape((n_chunks, W) + padded_in.shape[1:])
+    aux_chunks  = padded_aux.reshape((n_chunks, W) + padded_aux.shape[1:])
+    mask_chunks = mask.reshape(n_chunks, W)
+
+    devs = cpu_devs[:W]
+    pmap_fn = parallel_shard(
+        evaluator._shard,
+        in_axes=(0, 0, 0),
+        devices=devs,
+        use_vmap=bool(getattr(cfg.solvers, "use_vmap", False)),
     )
 
-    evals, flags = [], []
-    for input_batch, aux_batch in zip(input_batches, aux_batches):
-        evals_i, flags_i = forward_pmap_batch_evaluator(
-            input_batch, aux_batch, cfg, graph, node,
-        )
-        evals.append(evals_i)
-        flags.append(flags_i)
+    evals_chunks, flags_chunks = [], []
+    for i in range(n_chunks):
+        e, f = pmap_fn(in_chunks[i], aux_chunks[i], mask_chunks[i])
+        evals_chunks.append(e)
+        flags_chunks.append(f)
 
-    del input_batches, aux_batches, batch_sizes
-
-    return jnp.vstack(evals), jnp.vstack(flags)
+    full_evals = jnp.concatenate(evals_chunks, axis=0)
+    full_flags = jnp.concatenate(flags_chunks, axis=0)
+    full_evals = poison_padded(full_evals, mask, fill=jnp.nan)
+    full_flags = poison_padded(full_flags, mask, fill=False)
+    return full_evals[:n_real], full_flags[:n_real]

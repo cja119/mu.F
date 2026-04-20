@@ -3,244 +3,325 @@ Cost-to-go (CTG) evaluator.
 
 For each successor of `node`, solves
 
-    min   ctg_surrogate(x, succ_input)                  (regression)
-    s.t.  classifier(x, succ_input) <= 0                (live-set feasibility)
-          lb <= x <= ub                                 (reduced box)
+    min   ctg_surrogate(x, succ_input)                (regression)
+    s.t.  classifier(x, succ_input) <= 0              (live-set feasibility)
+          lb <= x <= ub                               (reduced box)
 
 where `x` is the successor's reduced decision vector (design + non-current-
-edge inputs + aux) and `succ_input` is the current node's output slice feeding
-that edge, held fixed.
+edge inputs + aux) and `succ_input` is the current node's output slice
+feeding that edge, held fixed.
 
-Structure mirrors `prepare_backward_problem` (same standardisation, same
-bound-masking) with the CTG surrogate added as objective and the classifier
-reused as a feasibility constraint rather than the objective.  Consumes
-`warmstarts` produced by the backward constraint evaluator when provided.
+### p-lifting
+
+The per-sample `succ_input` is threaded through as the `p` parameter of
+septal's `ParametricNLPProblem`, not baked into a Python closure.  One
+`ParametricSQPFactory` per successor is built in `_build_for_key`; every
+subsequent call feeds new `(x_batch, p_batch)` to the same compiled scan
+body.  This is what makes the JIT cache hit across calls.
+
+### Multi-start
+
+Initial guesses for the SQP are chosen by an L1-penalty screen over a
+pre-generated Sobol pool (see `base.build_penalty_screener`) — matching
+the behaviour of the old `l1_sample_initial_guess` path.
+
+Warmstart plumbing (accepting a per-successor `(N_batch, n_d_k)` dict from
+the backward pass) was removed in the port: the call site in
+`integration.py` built the dict but never forwarded it into
+`cost_to_go_evaluator`, so the whole path was dead code.
 """
 from __future__ import annotations
 
-from functools import partial
-
 import jax.numpy as jnp
 import numpy as np
-from jax import jit, pmap, devices
+from jax import devices
 
+from mu_F.constraints.evaluators.base import (
+    BaseEvaluator,
+    build_factory,
+    build_penalty_screener,
+    parallel_shard,
+    pick_best,
+    pick_x0_batch,
+    precompute_sobol_pool,
+    skip_if_masked,
+)
 from mu_F.constraints.utils import (
-    standardise_inputs,
-    standardise_model_decisions,
-    mask_classifier,
     get_successor_inputs,
-    initial_guess,
-    get_backward_bounds,
-    generate_initial_guess,
-    determine_batches,
-    create_batches,
-)
-from mu_F.solvers.septal import (
-    construct_constrained_solver,
-    solve_constrained,
+    mask_classifier,
+    pad_to_multiple,
+    batch_mask,
+    poison_padded,
 )
 
 
-__all__ = [
-    "prepare_ctg_problem",
-    "evaluate_ctg",
-    "ctg_pmap_batch_evaluator",
-    "cost_to_go_evaluator",
-]
+__all__ = ["CTGEvaluator", "cost_to_go_evaluator"]
 
 
-# ---------------------------------------------------------------------------
-# Problem builder
-# ---------------------------------------------------------------------------
+# =============================================================================
+# CTG evaluator — one instance per (cfg, graph, node)
+# =============================================================================
 
-def prepare_ctg_problem(outputs, graph, node, cfg):
+class CTGEvaluator(BaseEvaluator):
     """
-    Build the CTG sub-problem for each successor of `node`.
+    Stateful CTG evaluator.
 
-    Returns three dicts keyed by successor: `(objective, constraint, bounds)`,
-    each with a list of length `N_samples` carrying per-sample jit'd closures.
+    Owns the factory + screener + sobol pool for every successor.  The
+    shard entry point `evaluate(outputs_s, aux_s)` is pinned to a stable
+    bound-method attribute in `__init__` so pmap's compile cache keys on
+    the same callable identity across every call.
     """
-    if node is None:
-        return None, None, None
 
-    ctg_objective  = {succ: None for succ in graph.successors(node)}
-    ctg_constraint = {succ: None for succ in graph.successors(node)}
-    ctg_bounds     = {succ: None for succ in graph.successors(node)}
+    def __init__(self, cfg, graph, node):
+        # Per-successor static state populated in `_build_for_key`.
+        self.n_fix: dict         = {}
+        self.n_d_k: dict         = {}
+        self.bounds: dict        = {}
+        self.input_indices: dict = {}
+        self.aux_indices: dict   = {}
+        self.fix_indices: dict   = {}
+        self.ndim: dict          = {}
+        # Kept for inspection / testing — the actual solve goes through
+        # `self.factories[succ]` which wraps these in an NLP problem.
+        self.objective_fn: dict  = {}
+        self.constraint_fn: dict = {}
 
-    succ_inputs = get_successor_inputs(graph, node, outputs)
+        super().__init__(cfg, graph, node)
 
-    for succ in graph.successors(node):
+        # Pin bound methods for stable id() across calls.  Without pinning,
+        # `instance.evaluate` creates a fresh bound-method object on every
+        # access, breaking pmap's compile cache.
+        self._shard = self.evaluate
 
-        n_d           = graph.nodes[succ]['n_design_args']
-        input_indices = np.copy(np.array(
-            [n_d + inp for inp in graph.edges[node, succ]['input_indices']]
-        ))
-        aux_indices   = np.copy(np.array(
-            [inp for inp in graph.edges[node, succ]['auxiliary_indices']]
-        ))
-        fix_indices   = np.hstack([input_indices, aux_indices]).astype(int)
+    # ------------------------------------------------------------------
+    # BaseEvaluator contract
+    # ------------------------------------------------------------------
 
-        # standardise fixed inputs if requested
-        if cfg.solvers.standardised:
-            succ_inputs[succ] = succ_inputs[succ].at[:].set(
-                standardise_inputs(graph, succ_inputs[succ], succ, fix_indices)
-            )
+    def _keys(self) -> list:
+        return list(self.graph.successors(self.node))
 
-        # reduced-space bounds (drop the indices held fixed by the edge)
-        decision_bounds = graph.nodes[succ]["extendedDS_bounds"].copy()
-        ndim = (graph.nodes[succ]['n_design_args']
-                + graph.nodes[succ]['n_input_args']
-                + graph.graph['n_aux_args'])
-        if cfg.solvers.standardised:
-            decision_bounds = standardise_model_decisions(graph, decision_bounds, succ)
-        decision_bounds = [jnp.delete(bound, fix_indices, axis=1) for bound in decision_bounds]
-        ctg_bounds[succ] = [decision_bounds for _ in range(succ_inputs[succ].shape[0])]
+    def _build_for_key(self, succ: int) -> None:
+        """
+        Compute stable state for one successor.  Called once per successor
+        from `BaseEvaluator.__init__`.
 
-        # live JAX callables straight off the graph — no reconstruction
-        ctg_surrogate = graph.nodes[succ]["ctg_surrogate"]
-        classifier    = graph.nodes[succ]["classifier"]
+        Everything stored on `self` here is part of the compile cache's
+        identity — no per-call closures, no rebuilt factories.
+        """
+        # --- indices, ndim, reduced decision dim --------------------------
+        n_d = self.graph.nodes[succ]['n_design_args']
+        input_indices = np.array(
+            [n_d + inp for inp in self.graph.edges[self.node, succ]['input_indices']],
+            dtype=int,
+        )
+        aux_indices = np.array(
+            self.graph.edges[self.node, succ]['auxiliary_indices'],
+            dtype=int,
+        )
+        fix_indices = np.hstack([input_indices, aux_indices]).astype(int)
+        ndim = (
+            self.graph.nodes[succ]['n_design_args']
+            + self.graph.nodes[succ]['n_input_args']
+            + self.graph.graph['n_aux_args']
+        )
+        n_fix = len(fix_indices)
+        n_d_k = ndim - n_fix
 
-        wrapped_ctg        = mask_classifier(ctg_surrogate, ndim, input_indices, aux_indices)
-        wrapped_classifier = mask_classifier(classifier,    ndim, input_indices, aux_indices)
+        # --- reduced-space bounds ----------------------------------------
+        # Bounds stay in real-world units; the classifier + CTG surrogates
+        # self-scale internally.
+        decision_bounds = self.graph.nodes[succ]['extendedDS_bounds'].copy()
+        lb = jnp.delete(
+            jnp.asarray(decision_bounds[0]), fix_indices, axis=1,
+        ).reshape(-1)
+        ub = jnp.delete(
+            jnp.asarray(decision_bounds[1]), fix_indices, axis=1,
+        ).reshape(-1)
+        bounds = [lb, ub]
 
-        # ctg_surrogate may return a vector of per-uncertainty-sample
-        # predictions; collapse to a scalar objective via sum to match the
-        # casadi path's `_ensure_scalar_objective` behaviour.
-        ctg_objective[succ] = [
-            jit(partial(lambda x, y: wrapped_ctg(x, y).reshape(-1).sum(),
-                        y=succ_inputs[succ][i].reshape(1, -1)))
-            for i in range(succ_inputs[succ].shape[0])
-        ]
-        ctg_constraint[succ] = [
-            jit(partial(lambda x, y: wrapped_classifier(x, y).reshape(-1),
-                        y=succ_inputs[succ][i].reshape(1, -1)))
-            for i in range(succ_inputs[succ].shape[0])
-        ]
+        # --- live-callable wrappers --------------------------------------
+        # `mask_classifier` returns a cached jit'd callable keyed on (fn,
+        # ndim, fix_ind, aux_ind) — stable identity per (graph, node, succ).
+        ctg_surrogate = self.graph.nodes[succ]['ctg_surrogate']
+        classifier    = self.graph.nodes[succ]['classifier']
+        wrapped_ctg   = mask_classifier(ctg_surrogate, ndim, input_indices, aux_indices)
+        wrapped_clf   = mask_classifier(classifier,    ndim, input_indices, aux_indices)
 
-    return ctg_objective, ctg_constraint, ctg_bounds
+        # --- (x, p) parametric objective + constraint -------------------
+        # The CTG surrogate may return a per-uncertainty-sample vector —
+        # collapse to scalar via sum (matches the casadi path's
+        # `_ensure_scalar_objective`).
+        def objective(x, p):
+            return wrapped_ctg(x, p.reshape(1, -1)).reshape(-1).sum()
 
+        def constraint(x, p):
+            return wrapped_clf(x, p.reshape(1, -1)).reshape(-1)
 
-# ---------------------------------------------------------------------------
-# Shard-level evaluator
-# ---------------------------------------------------------------------------
-
-def evaluate_ctg(outputs, aux, graph, node, cfg, sobol_pts_dict=None, warmstarts=None):
-    """
-    Evaluate the CTG surrogate for each successor of `node` within a pmap shard.
-
-    Builds per-sample solvers, runs them, stacks the scalar `(objective,
-    converged)` summaries into `(N_samples, N_successors)` matrices.
-    """
-    objective, constraint, bounds = prepare_ctg_problem(outputs, graph, node, cfg)
-    if objective is None or bounds is None:
-        return jnp.zeros((outputs.shape[0], 1)), None
-
-    succ_fn_evaluations = {}
-    for succ in graph.successors(node):
-        succ_sobol = sobol_pts_dict.get(succ) if sobol_pts_dict is not None else None
-
-        solvers = [
-            construct_constrained_solver(
-                objective[succ][i], constraint[succ][i], bounds[succ][i],
-                tol=cfg.solvers.tol,
-                sobol_pts=succ_sobol,
-            )
-            for i in range(outputs.shape[0])
-        ]
-
-        # warmstart per sample if provided; otherwise sobol-sampled initial guess
-        if warmstarts is not None and succ in warmstarts:
-            initial_guesses = [warmstarts[succ][i].reshape(1, -1)
-                               for i in range(outputs.shape[0])]
-        else:
-            initial_guesses = [initial_guess(cfg.solvers, bounds[succ][i])
-                               for i in range(outputs.shape[0])]
-
-        succ_fn_evaluations[succ] = solve_constrained(solvers, initial_guesses)
-
-    fn_evaluations = [
-        succ_fn_evaluations[succ]['objective'].reshape(-1, 1)
-        for succ in graph.successors(node)
-    ]
-    success_flags = [
-        succ_fn_evaluations[succ]['converged'].reshape(-1, 1)
-        for succ in graph.successors(node)
-    ]
-    return jnp.hstack(fn_evaluations), jnp.hstack(success_flags)
-
-
-# ---------------------------------------------------------------------------
-# pmap shard wrapper
-# ---------------------------------------------------------------------------
-
-def ctg_pmap_batch_evaluator(outputs, aux, cfg, graph, node, warmstarts=None):
-    """
-    Fan the sample axis out across CPU devices.  Sobol points are
-    precomputed outside pmap (bounds are static per-successor) and passed in
-    via `in_axes=None` as a tuple ordered by the successor list.
-    """
-    n_sobol_screen  = getattr(cfg.solvers, 'n_sobol_screen', 16_384)
-    backward_bounds = get_backward_bounds(graph, node, cfg)
-    sobol_pts_tuple = ()
-    successor_order = None
-    if backward_bounds is not None:
-        successor_order = list(backward_bounds.keys())
-        sobol_pts_tuple = tuple(
-            generate_initial_guess(n_sobol_screen, None, bounds)
-            for bounds in backward_bounds.values()
+        # --- factory + screener + sobol pool -----------------------------
+        self.factories[succ] = build_factory(
+            objective, constraint, bounds,
+            n_decision=n_d_k,
+            n_params=n_fix,
+            n_constraints=1,          # single classifier feasibility scalar
+            tol=self.tol,
+        )
+        self.screeners[succ] = build_penalty_screener(
+            objective, constraint, self.screen_penalty,
+        )
+        self.sobol_pool[succ] = precompute_sobol_pool(
+            bounds, n_d_k, self.n_sobol_screen,
         )
 
-    def shard_call(outputs_s, aux_s, sobol_tuple, warmstarts_s):
-        sobol_dict = None
-        if successor_order is not None and sobol_tuple is not None:
-            sobol_dict = {succ: pts for succ, pts in zip(successor_order, sobol_tuple)}
-        return evaluate_ctg(outputs_s, aux_s, graph, node, cfg,
-                            sobol_pts_dict=sobol_dict, warmstarts=warmstarts_s)
+        # --- metadata used at shard-evaluate time ------------------------
+        self.n_fix[succ]         = n_fix
+        self.n_d_k[succ]         = n_d_k
+        self.bounds[succ]        = bounds
+        self.input_indices[succ] = input_indices
+        self.aux_indices[succ]   = aux_indices
+        self.fix_indices[succ]   = fix_indices
+        self.ndim[succ]          = ndim
+        self.objective_fn[succ]  = objective
+        self.constraint_fn[succ] = constraint
 
-    devs = [d for i, d in enumerate(devices('cpu')) if i < outputs.shape[0]]
-    return pmap(shard_call, in_axes=(0, 0, None, 0), out_axes=0, devices=devs)(
-        outputs, aux, sobol_pts_tuple, warmstarts
+    # ------------------------------------------------------------------
+    # Shard entry point — pmap target
+    # ------------------------------------------------------------------
+
+    def evaluate(self, outputs_s, aux_s, mask_s):
+        """
+        Shard body.
+
+        Parameters
+        ----------
+        outputs_s : (N_uncertainty, N_output_dim)
+        aux_s     : (N_uncertainty, N_aux)
+        mask_s    : scalar bool — True on real lanes, False on padded lanes
+
+        Returns `(evals, flags)` each shape `(1, N_successors)` for this shard.
+        Padded lanes skip the SQP via `lax.cond` and return zeros.
+        """
+        def real():
+            succ_inputs = get_successor_inputs(self.graph, self.node, outputs_s)
+
+            evals, flags = [], []
+            for succ in self._keys():
+                # First (and only) uncertainty realisation.  N_uncertainty=1 in
+                # every deterministic case study; probabilistic raises upstream.
+                # `y` is passed straight through — the classifier / CTG
+                # surrogates self-scale.
+                y = succ_inputs[succ][0]
+
+                x0_batch = pick_x0_batch(
+                    self.sobol_pool[succ],
+                    self.screeners[succ],
+                    y,
+                    self.n_starts,
+                )
+                p_batch = jnp.broadcast_to(
+                    y.reshape(1, -1), (self.n_starts, self.n_fix[succ]),
+                )
+
+                result = self.factories[succ].solve_batch(x0_batch, p_batch)
+                best_f, best_c, _ = pick_best(result)
+
+                evals.append(best_f.reshape(-1, 1))
+                flags.append(best_c.reshape(-1, 1))
+
+            return jnp.hstack(evals), jnp.hstack(flags)
+
+        return skip_if_masked(mask_s, real)
+
+
+# =============================================================================
+# Evaluator cache — one CTGEvaluator per (id(graph), node)
+# =============================================================================
+
+_CTG_EVALUATOR_CACHE: dict = {}
+
+
+def _get_evaluator(cfg, graph, node) -> CTGEvaluator:
+    """
+    Look up or build the `CTGEvaluator` for this `(graph, node)` pair.
+
+    Keyed on `id(graph)` so the cache tracks the graph object's lifetime —
+    a new iterate with a fresh graph object gets a fresh evaluator.
+    Within one iterate the graph is stable, so DEUS calls reuse the cached
+    factories + screeners.
+    """
+    key = (id(graph), node)
+    evaluator = _CTG_EVALUATOR_CACHE.get(key)
+    if evaluator is None:
+        evaluator = CTGEvaluator(cfg, graph, node)
+        _CTG_EVALUATOR_CACHE[key] = evaluator
+    return evaluator
+
+
+# =============================================================================
+# Public entry point — called by constraints/constructor.py
+# =============================================================================
+
+def cost_to_go_evaluator(outputs, aux, cfg, graph, node):
+    """
+    Top-level CTG evaluator.  Shards samples across CPU devices via pmap
+    at a **fixed width** (`cfg.max_devices`), padding smaller batches up
+    with row-0 replicas and masking the padded lanes inside the shard.
+
+    Fixed pmap width means the pmap compile cache keys only on static
+    shape, not on batch size — so calls with different real-batch sizes
+    reuse the same compiled kernel after the first.
+
+    Parameters
+    ----------
+    outputs : (N_batch, N_uncertainty, N_output_dim)
+    aux     : (N_batch, N_aux)
+
+    Returns
+    -------
+    evaluations   : (N_batch, N_successors) — NaN on any row where the
+                    padded-lane mask applied (defensive poison).
+    success_flags : (N_batch, N_successors)
+    """
+    evaluator = _get_evaluator(cfg, graph, node)
+
+    # Fixed pmap width clamped to real CPU device count.
+    cpu_devs = list(devices('cpu'))
+    W = min(int(cfg.max_devices), len(cpu_devs))
+    n_real = outputs.shape[0]
+
+    aux_expanded = jnp.repeat(
+        jnp.expand_dims(aux, axis=1), outputs.shape[1], axis=1,
+    )
+    padded_out, _, _ = pad_to_multiple(outputs, W, axis=0)
+    padded_aux, _, _ = pad_to_multiple(aux_expanded, W, axis=0)
+    total = padded_out.shape[0]
+    mask = batch_mask(n_real, total)
+
+    n_chunks = total // W
+    out_chunks  = padded_out.reshape((n_chunks, W) + padded_out.shape[1:])
+    aux_chunks  = padded_aux.reshape((n_chunks, W) + padded_aux.shape[1:])
+    mask_chunks = mask.reshape(n_chunks, W)
+
+    devs = cpu_devs[:W]
+    pmap_fn = parallel_shard(
+        evaluator._shard,
+        in_axes=(0, 0, 0),
+        devices=devs,
+        use_vmap=bool(getattr(cfg.solvers, "use_vmap", False)),
     )
 
+    evals_chunks, flags_chunks = [], []
+    for i in range(n_chunks):
+        e, f = pmap_fn(out_chunks[i], aux_chunks[i], mask_chunks[i])
+        evals_chunks.append(e)
+        flags_chunks.append(f)
 
-# ---------------------------------------------------------------------------
-# Top-level evaluator
-# ---------------------------------------------------------------------------
-
-def cost_to_go_evaluator(outputs, aux, cfg, graph, node, warmstarts=None):
-    """
-    Top-level CTG evaluator — mirrors `backward_constraint_evaluator`.
-
-    Shards samples across CPU devices via pmap.  Returns
-    `(ctg_evaluations, success_flags)` as `(N_samples, N_successors)` matrices.
-    """
-    max_devices = cfg.max_devices
-    batch_sizes, _ = determine_batches(outputs.shape[0], max_devices)
-
-    output_batches = create_batches(batch_sizes, outputs)
-    aux_batches    = create_batches(
-        batch_sizes,
-        jnp.repeat(jnp.expand_dims(aux, axis=1), outputs.shape[1], axis=1),
-    )
-
-    warmstart_batches = None
-    if warmstarts is not None:
-        per_succ_batches = {succ: create_batches(batch_sizes, warmstarts[succ])
-                            for succ in warmstarts}
-        warmstart_batches = [
-            {succ: per_succ_batches[succ][i] for succ in per_succ_batches}
-            for i in range(len(batch_sizes))
-        ]
-
-    evals, flags = [], []
-    for i, (output_batch, aux_batch) in enumerate(zip(output_batches, aux_batches)):
-        ws_i = warmstart_batches[i] if warmstart_batches is not None else None
-        evals_i, flags_i = ctg_pmap_batch_evaluator(
-            output_batch, aux_batch, cfg, graph, node, warmstarts=ws_i,
-        )
-        evals.append(evals_i)
-        flags.append(flags_i)
-
-    del output_batches, aux_batches, batch_sizes
-
-    return jnp.vstack(evals), jnp.vstack(flags)
+    full_evals = jnp.concatenate(evals_chunks, axis=0)
+    full_flags = jnp.concatenate(flags_chunks, axis=0)
+    # Defensive poison: NaN on padded rows, False on the converged flag.
+    # `poison_padded` reshapes the mask to match the array's rank so 3D
+    # `(total, N_unc, N_succ)` broadcasts correctly (naive `mask[:, None]`
+    # trips the 1-dimensioned axes against each other and blows up to
+    # `(total, total, N_succ)`).
+    full_evals = poison_padded(full_evals, mask, fill=jnp.nan)
+    full_flags = poison_padded(full_flags, mask, fill=False)
+    return full_evals[:n_real], full_flags[:n_real]
