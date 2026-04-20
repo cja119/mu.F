@@ -122,22 +122,19 @@ def build_penalty_screener(
     """
     Build an L1-penalty-augmented screener for multi-start selection.
 
-    Returns a `jit(vmap(score, in_axes=(0, None)))` callable with signature
-    `(x_batch, p) -> scores`, where
+    Returns a `screener(sobol_pool, p) -> scores` callable that scans
+    across the Sobol pool:
 
         score(x, p) = objective(x, p) + penalty * sum(max(0, constraint(x, p)))
 
-    Low scores correspond to points that are both feasible (small violation)
-    and have low objective — good multi-start seeds.
+    Low scores correspond to points that are both feasible (small
+    violation) and have low objective — good multi-start seeds.
 
     Calling pattern the shard should use:
-        scores = screener(sobol_pool, p)       # shapes (N_pool,)
+        scores = screener(sobol_pool, p)           # shape (N_pool,)
         best   = sobol_pool[jnp.argsort(scores)[:n_starts]]
 
-    Passing `sobol_pool` as an argument (not a closure) means the compiled
-    kernel caches on the abstract shape only; the concrete bytes flow
-    through as an input buffer, so re-used or regenerated pools don't
-    trigger retracing.
+    
     """
     penalty = float(penalty)
 
@@ -147,7 +144,15 @@ def build_penalty_screener(
         viol = jnp.maximum(0.0, penalty * g).sum()
         return obj + viol
 
-    return jax.jit(jax.vmap(_score, in_axes=(0, None), out_axes=0))
+    def screener(sobol_pool, p):
+        # carry = () — per-row scores are independent, no state needed.
+        # lax.scan stacks the per-step scalar outputs into a (N_pool,) array.
+        def _step(_carry, x):
+            return _carry, _score(x, p)
+        _, scores = lax.scan(_step, (), sobol_pool)
+        return scores
+
+    return screener
 
 
 def precompute_sobol_pool(bounds, n_d: int, n_sobol: int, seed: int = 42) -> jnp.ndarray:

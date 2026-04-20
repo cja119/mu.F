@@ -4,14 +4,14 @@ from abc import ABC
 import jax
 import jax.numpy as jnp
 from jax import random
-from jax import jit
+from jax import jit, lax
 
 
 from sklearn.model_selection import KFold
 from sklearn.preprocessing import StandardScaler
 from flax import linen as nn
+from flax import struct
 from flax.training import train_state
-from flax.training.early_stopping import EarlyStopping
 from flax.nnx import softmax
 from flax.serialization import to_bytes, from_bytes
 from flax import jax_utils
@@ -165,10 +165,16 @@ def hyperparameter_selection(cfg: DictConfig, D, num_folds: int, model_type, rng
     opt_model = partial(best_model.apply, best_params)
     x_mean = jnp.array(x_scalar.mean_)
     x_std = jnp.array(x_scalar.scale_)
-    
-    logging.info(f'--- {model_type} ---')
-    logging.info(f"Best hyperparameters: {best_hyperparams}")
-    logging.info(f"Best average validation loss: {best_avg_loss}")
+
+    # One concise INFO line per `hyperparameter_selection` call, matching
+    # the SVM classifier's single-line summary.  Everything per-fold and
+    # per-combo is logged at DEBUG from `train()`.
+    best_training_performance = getattr(train, 'last_training_performance', {})
+    logging.info(
+        f"training_performance ({model_type}): {best_training_performance} "
+        f"| best_hyperparams={best_hyperparams} "
+        f"| best_avg_val_loss={float(best_avg_loss):.4g}"
+    )
 
     serialised_model = serialise_model(best_params, best_model, x_scalar, y_scalar, model_type, {})
 
@@ -338,7 +344,229 @@ def get_initial_params_serial(key: jax.Array, data:jnp.array, model: nn.Module) 
   return initial_params
 
 
+# ---------------------------------------------------------------------------
+# Fused training pipeline — one pmap dispatch per `train()` call
+# ---------------------------------------------------------------------------
+#
+# The legacy structure (`for epoch in range(num_epochs): parallel_train_one_epoch(...)`)
+# paid a pmap dispatch every epoch × every hyperparam combo × every K-fold —
+# tens of thousands of dispatches per DEUS run.  On top of that, the pmap'd
+# function was defined inside `train()`, so its Python-function identity was
+# fresh on every call → JAX's compile cache (keyed on `WrappedFun.f`) missed
+# and re-compiled on every `train()` call.
+#
+# The refactor below:
+#
+#   1. Hoists the pmap to module scope with a cache dict
+#      (`_TRAIN_PMAP_CACHE`) keyed on the architecture signature, model
+#      type, device count, and epoch budget.  Same arch + same budget =>
+#      cache hit => no recompile.
+#
+#   2. Fuses the per-epoch loop into a single `lax.scan` *inside* the pmap,
+#      so the entire training run is one pmap dispatch.  Early-stop is
+#      threaded through as scan carry; once tripped, subsequent epochs
+#      `lax.cond`-skip.  State stays replicated across epochs — one
+#      `jax_utils.unreplicate` at the end.
+#
+# Flax's `EarlyStopping.update` uses `math.isinf` + Python `if/else`, which
+# isn't scan-safe (tracers don't survive host-side control flow).  We
+# mirror it with a trace-safe version below.
+# ---------------------------------------------------------------------------
+
+
+@struct.dataclass
+class _ScanEarlyStopping:
+    """
+    JAX-traceable mirror of `flax.training.early_stopping.EarlyStopping`.
+
+    `min_delta` and `patience` are static pytree fields — they bake into
+    the compiled kernel as constants rather than flowing as tracers.
+    The mutable fields (`best_metric`, `patience_count`, `should_stop`)
+    thread through `lax.scan` cleanly as dynamic state.
+    """
+    min_delta: float = struct.field(pytree_node=False)
+    patience: int = struct.field(pytree_node=False)
+    best_metric: jnp.ndarray = struct.field(pytree_node=True)
+    patience_count: jnp.ndarray = struct.field(pytree_node=True)
+    should_stop: jnp.ndarray = struct.field(pytree_node=True)
+
+    @classmethod
+    def create(cls, min_delta: float, patience: int, *, dtype=jnp.float32):
+        """
+        `dtype` must match the dtype that `metric` will be passed in as
+        (i.e. the computed validation loss dtype).  If they don't match,
+        `update`'s `jnp.where` will promote `best_metric` to the wider
+        type in one branch of `lax.cond` but not in the other — which
+        fails `cond`'s equal-output-types invariant.
+
+        The caller in `train()` pulls this from `valid_data.y.dtype`
+        since the validation-loss compute preserves that dtype.
+        """
+        return cls(
+            min_delta=float(min_delta),
+            patience=int(patience),
+            best_metric=jnp.asarray(jnp.inf, dtype=dtype),
+            patience_count=jnp.asarray(0, dtype=jnp.int32),
+            should_stop=jnp.asarray(False),
+        )
+
+    def update(self, metric):
+        # `jnp.isinf(best)` handles the first-call case (best starts at inf)
+        # where `best - metric > min_delta` would be inf - finite = inf > x,
+        # which is true anyway — but we keep the explicit isinf for parity
+        # with flax's reference implementation.
+        improved = (jnp.isinf(self.best_metric)
+                    | (self.best_metric - metric > self.min_delta))
+        new_best = jnp.where(improved, metric, self.best_metric)
+        new_patience = jnp.where(
+            improved, jnp.asarray(0, dtype=jnp.int32), self.patience_count + 1,
+        )
+        new_should_stop = jnp.where(
+            improved,
+            self.should_stop,
+            (self.patience_count >= self.patience) | self.should_stop,
+        )
+        return self.replace(
+            best_metric=new_best,
+            patience_count=new_patience,
+            should_stop=new_should_stop,
+        )
+
+
+def _architecture_key(model):
+    """Hashable signature for compile-cache keying."""
+    return (
+        tuple(getattr(model, 'hidden_units', ()) or ()),
+        getattr(model, 'output_units', None),
+        tuple(getattr(model, 'activation_functions', ()) or ()),
+    )
+
+
+_TRAIN_PMAP_CACHE: Dict = {}
+
+
+def _build_fused_train_pmap(model, model_type, num_devices, num_epochs):
+    """
+    Construct a `jax.pmap(scan_over_epochs)` for one `(architecture, model_type,
+    num_devices, num_epochs)` signature.  Cached in `_TRAIN_PMAP_CACHE`.
+    """
+    if model_type == 'regressor':
+        grad_fn = _grad_fn_regressor
+    elif model_type == 'classifier':
+        grad_fn = _grad_fn_classifier
+    else:
+        raise NotImplementedError(f"Model type {model_type} not implemented")
+
+    def _val_loss(params, valid_X, valid_y):
+        y_pred = model.apply(params, valid_X)
+        if model_type == 'classifier':
+            return jnp.mean(
+                optax.softmax_cross_entropy_with_integer_labels(
+                    jnp.expand_dims(y_pred, axis=1), valid_y,
+                )
+            )
+        return jnp.mean(jnp.square(valid_y - y_pred))
+
+    devices = [d for i, d in enumerate(jax.devices('cpu')) if i < num_devices]
+
+    @partial(
+        jax.pmap,
+        axis_name="device",
+        in_axes=(None, 0, None, None, None),
+        out_axes=0,
+        devices=devices,
+    )
+    def fused_train(state, minibatch, valid_X, valid_y, init_es):
+        """
+        Full training loop fused into one pmap dispatch.
+
+        Args (in-axes):
+          state      : TrainState, broadcast  (in_axes=None).
+          minibatch  : {X,y} dict, sharded    (in_axes=0).
+          valid_X    : broadcast              (in_axes=None).
+          valid_y    : broadcast              (in_axes=None).
+          init_es    : initial _ScanEarlyStopping, broadcast.
+
+        Returns (stacked along pmap axis 0):
+          final_state, losses[num_epochs], val_losses[num_epochs],
+          final_es, converged_at_epoch.
+
+        `converged_at_epoch` is set on the step where `should_stop` first
+        flips True, else stays at `num_epochs`.  Used host-side to trim
+        the loss history.
+        """
+
+        def epoch_body(carry, epoch_idx):
+            state, es, done, converged_at = carry
+
+            def do_epoch():
+                loss, grads = grad_fn(state.params, model, minibatch)
+                grads = lax.pmean(grads, "device")
+                new_state = state.apply_gradients(grads=grads)
+                loss_avg = lax.pmean(loss, "device")
+                val_loss = _val_loss(new_state.params, valid_X, valid_y)
+                new_es = es.update(val_loss)
+                new_done = done | new_es.should_stop
+                # Freeze converged_at at the first step where we flip to done.
+                just_converged = new_done & (~done)
+                new_converged_at = jnp.where(just_converged, epoch_idx, converged_at)
+                return (
+                    (new_state, new_es, new_done, new_converged_at),
+                    (loss_avg, val_loss),
+                )
+
+            def skip_epoch():
+                # Identity carry; zero outputs for the already-converged tail.
+                # Dtype must match do_epoch's outputs (loss_avg / val_loss),
+                # otherwise `lax.cond` rejects the mismatched branches.
+                # Both upstream values inherit `valid_y.dtype` by broadcast,
+                # so we source the zero's dtype from there.
+                z = jnp.zeros((), dtype=valid_y.dtype)
+                return (
+                    (state, es, done, converged_at),
+                    (z, z),
+                )
+
+            return lax.cond(done, skip_epoch, do_epoch)
+
+        init_carry = (
+            state,
+            init_es,
+            jnp.asarray(False),
+            jnp.asarray(num_epochs, dtype=jnp.int32),
+        )
+        (state_f, es_f, _done_f, converged_at), (losses, val_losses) = lax.scan(
+            epoch_body, init_carry, jnp.arange(num_epochs, dtype=jnp.int32),
+        )
+        return state_f, losses, val_losses, es_f, converged_at
+
+    return fused_train
+
+
+def _get_or_build_train_pmap(model, model_type, num_devices, num_epochs):
+    """Memoised factory — one compile per arch × model_type × devices × epochs."""
+    key = (
+        _architecture_key(model),
+        str(model_type),
+        int(num_devices),
+        int(num_epochs),
+    )
+    fn = _TRAIN_PMAP_CACHE.get(key)
+    if fn is None:
+        fn = _build_fused_train_pmap(model, model_type, num_devices, num_epochs)
+        _TRAIN_PMAP_CACHE[key] = fn
+    return fn
+
+
 def train(cfg, model, data, valid_data, model_type):
+    """
+    Train one NN with device-parallel minibatch SGD + early stopping.
+
+    Uses a single pmap(scan) dispatch for the whole training run — the
+    pmap is cached in `_TRAIN_PMAP_CACHE` and reused across K-fold
+    retraining of the same architecture.  See the block comment at the
+    top of this module for the design rationale.
+    """
 
     # define optimizer
     if cfg.decaying_lr_and_clip_param:
@@ -352,91 +580,78 @@ def train(cfg, model, data, valid_data, model_type):
 
     tx = optax.adamw(lr, weight_decay=getattr(cfg, 'weight_decay', 0.0))
 
-    # initialise parameters
+    # initialise parameters + TrainState
     params = get_initial_params(jax.random.PRNGKey(0), data, model)
-
-    # create train state
     state = train_state.TrainState.create(
         apply_fn=model.apply,
         params=params,
-        tx=tx
+        tx=tx,
     )
-    #state = jax_utils.replicate(state)
 
-    # early stopping
-    early_stop = EarlyStopping(min_delta=cfg.min_delta, patience=cfg.patience)
-
-    loss_history = []  # Track loss history
-
-    if model_type == 'regressor':
-        train_one_step = train_one_step_regressor
-    elif model_type == 'classifier':
-        train_one_step = train_one_step_classifier
-    else:
-        raise NotImplementedError(f"Model type {model_type} not implemented")
-
-    # Define a function to train one epoch
-    def train_one_epoch(state, minibatch):
-        loss, grads = train_one_step(state, model, minibatch)
-        return loss, grads
-    
-    # Create minibatches
+    # Create minibatches — host side, once per training run.
     num_devices = jax.local_device_count('cpu')
     minibatches = create_minibatches(data, cfg.batch_size, num_devices)
     minibatches = minibatch_reshape(minibatches)
+    actual_num_devices = int(minibatches['X'].shape[0])
 
-    # Make the function parallelizable
-    @partial(jax.pmap, axis_name="device", devices=[dev for i, dev in enumerate(jax.devices('cpu')) if i < minibatches['X'].shape[0]], in_axes=(None, 0), out_axes=(0, 0))
-    def parallel_train_one_epoch(state, minibatches):
+    # Initial early-stop (trace-safe mirror of flax.EarlyStopping).
+    # `best_metric` dtype must match the eventual val_loss dtype, which
+    # inherits from `valid_data.y` (data typically comes in as float64
+    # from numpy even when JAX x64 is off).  Mismatching would break
+    # `lax.cond`'s equal-output-types invariant in `epoch_body`.
+    init_es = _ScanEarlyStopping.create(
+        min_delta=cfg.min_delta,
+        patience=cfg.patience,
+        dtype=jnp.asarray(valid_data.y).dtype,
+    )
 
-        # Train one epoch in parallel
-        loss, grads = train_one_epoch(state, minibatches)
-    
-        # sync gradients
-        grads = jax.lax.pmean(grads, "device")
-        state = state.apply_gradients(grads=grads)
-        loss = jax.lax.pmean(loss, "device")
+    # Cached pmap — compiles once per (arch, model_type, device_count, num_epochs).
+    fused_train = _get_or_build_train_pmap(
+        model, model_type, actual_num_devices, int(cfg.num_epochs),
+    )
 
-        return state, loss
-    
-    # Train the model
-    for epoch in range(cfg.num_epochs):
+    # One dispatch for the whole training run.
+    state_rep, losses, val_losses, es_rep, converged_at_rep = fused_train(
+        state,
+        minibatches,
+        valid_data.X,
+        valid_data.y,
+        init_es,
+    )
 
-        # Train one epoch in parallel
-        state, loss = parallel_train_one_epoch(state, minibatches)
-        logging.debug('epoch: %d, loss: %.4f' % (epoch, jnp.mean(loss).squeeze()))
+    # Unreplicate once; pmap replicas are identical (pmean'd grads ⇒ identical state).
+    state = jax_utils.unreplicate(state_rep)
+    converged_at = int(jax_utils.unreplicate(converged_at_rep))
+    num_epochs = int(cfg.num_epochs)
 
-        # Add current losses to history
-        loss_history.extend(loss)
+    # losses / val_losses are (num_devices, num_epochs) — all replicas agree
+    # after pmean, so take replica 0 and trim to the actual stopping epoch.
+    losses_1d     = jnp.asarray(losses)[0, :converged_at]
+    val_losses_1d = jnp.asarray(val_losses)[0, :converged_at]
+    loss_history  = list(losses_1d)
 
-        # update kernel state
-        state = jax_utils.unreplicate(state)
-    
-        # # NOTE removed validation data evaluation to hack around pmap (should be resolved) Evaluate the model on the validation data
-        if model_type == 'classifier':
-            val_loss = jnp.mean(optax.softmax_cross_entropy_with_integer_labels(jnp.expand_dims(model.apply(state.params, valid_data.X), axis=1), valid_data.y))
-        elif model_type == 'regressor':
-            val_loss = jnp.mean(jnp.square(valid_data.y - model.apply(state.params, valid_data.X)))
-        else:
-            raise NotImplementedError(f"Model type {model_type} not implemented")
-        
-        logging.debug('Validation loss: %.4f' % val_loss)
-
-        # Check for convergence
-        early_stop = early_stop.update(val_loss)
-        if isinstance(early_stop, tuple): early_stop = early_stop[1]
-        if early_stop.should_stop:
-            logging.info('Converged. Training stopped at iteration %d, loss value %.4f, val. loss value %.4f' % (epoch, jnp.mean(loss).squeeze(), val_loss))
-            break
+    # Per-train-call stats are logged at DEBUG — `hyperparameter_selection`
+    # emits one concise INFO summary line at the end (matching the SVM
+    # classifier's terseness).  Crank up to DEBUG in Hydra config or
+    # via `logging.getLogger().setLevel(logging.DEBUG)` when debugging
+    # individual training runs.
+    if converged_at < num_epochs:
+        last_loss = float(losses_1d[-1]) if losses_1d.size else 0.0
+        last_val  = float(val_losses_1d[-1]) if val_losses_1d.size else 0.0
+        logging.debug(
+            'Converged. Training stopped at iteration %d, '
+            'loss value %.4f, val. loss value %.4f'
+            % (converged_at, last_loss, last_val)
+        )
 
     if model_type == 'classifier':
         # get classifier performance
         def model_predict(params, data_points):
             return jnp.argmax(model.apply(params, data_points), axis=-1)
-        
+
         def score(params, data_points, labels):
             return jnp.mean(jnp.equal(model_predict(params, data_points), labels.reshape(-1,)))
-        
+
         accuracy = score(state.params, data.X, data.y)
         # get classifier false positive rates
         try:
@@ -446,18 +661,26 @@ def train(cfg, model, data, valid_data, model_type):
                 tn, fp, fn, tp = len(data.y), 0, 0, 0
             else:
                 tn, fp, fn, tp = 0, 0, 0, len(data.y)
-        # metrics compression
         training_performance = {"acc": accuracy, "tn": tn, "fp": fp, "fn": fn, "tp": tp}
-        logging.info(f"--- {model_type} ---")
-        logging.info(f"training_performance: {training_performance}")
+        logging.debug(f"--- {model_type} ---")
+        logging.debug(f"training_performance: {training_performance}")
 
     if model_type == 'regressor':
-        # get regressor performance
         mse = jnp.mean(jnp.square(data.y - model.apply(state.params, data.X)))
-        training_performance = {"mse": mse, "standardised_mape": jnp.mean(jnp.abs((data.y - model.apply(state.params, data.X)) / data.y))}
-        logging.info(f"--- {model_type} ---")
-        logging.info(f"training_performance: {training_performance}")
-      
+        training_performance = {
+            "mse": mse,
+            "standardised_mape": jnp.mean(
+                jnp.abs((data.y - model.apply(state.params, data.X)) / data.y)
+            ),
+        }
+        logging.debug(f"--- {model_type} ---")
+        logging.debug(f"training_performance: {training_performance}")
+
+    # Stash on the function object so `hyperparameter_selection` can pluck
+    # the best-combo performance out for its INFO summary line without
+    # re-running the metrics computation.
+    train.last_training_performance = training_performance
+
     return state.params, model, loss_history
 
 

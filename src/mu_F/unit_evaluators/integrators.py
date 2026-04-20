@@ -18,7 +18,7 @@ from omegaconf import DictConfig, OmegaConf
 # diffrax imports
 from functools import partial
 import diffrax
-from diffrax import ODETerm, SaveAt, diffeqsolve
+from diffrax import ODETerm, SaveAt, diffeqsolve, DirectAdjoint
 from diffrax import Tsit5
 
 
@@ -60,6 +60,17 @@ def unit_dynamics(design_params, u, aux, decision_dependent, uncertainty_params,
 
     # define step size controller for solver
     step_size_controller = dispatcher[cfg.model.integration.step_size_controller]
+
+    # `DirectAdjoint()` disables the default `RecursiveCheckpointAdjoint`'s
+    # checkpoint stack.  That stack is built only to support reverse-mode
+    # autodiff through the ODE — we never differentiate through
+    # `diffeqsolve` in mu_F (gradients come from surrogates), so
+    # checkpointing is pure overhead.  The payoff is significant under
+    # outer `vmap`: the checkpointed while-loop's buffer grows to
+    # `(vmap_width, n_checkpoints, n_state)`, and XLA's while-loop
+    # compile passes scale super-linearly with that tensor.  Dropping
+    # the buffer removes the biggest contributor to the pmap_all
+    # vmap-over-samples compile blowup.
     try:
         start = time.time()
         return diffeqsolve(
@@ -73,6 +84,7 @@ def unit_dynamics(design_params, u, aux, decision_dependent, uncertainty_params,
         max_steps=cfg.model.integration.max_steps,
         stepsize_controller=step_size_controller,
         saveat=saveat,
+        adjoint=DirectAdjoint(),
     ).ys[
         :, :
     ][-1,:]  # t x n_components
@@ -88,6 +100,7 @@ def unit_dynamics(design_params, u, aux, decision_dependent, uncertainty_params,
         max_steps=cfg.model.integration.max_steps,
         stepsize_controller=step_size_controller,
         saveat=saveat,
+        adjoint=DirectAdjoint(),
     ).ys[
         :, :
     ][-1,:]  # t x n_components
