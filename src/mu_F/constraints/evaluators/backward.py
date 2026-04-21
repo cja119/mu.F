@@ -21,7 +21,7 @@ Kept because callers elsewhere import these names for box-only problems.
 ### BaseEvaluator port
 
 Per-successor state (factory, sobol pool, reduced bounds) is built once in
-`_build_for_key` and reused across every shard call.  The `succ_input` is
+`_build_for_key` and reused across every thread call.  The `succ_input` is
 threaded as the parametric `p` so one `ParametricSQPFactory` per successor
 serves all samples — the JIT cache stays warm.
 """
@@ -34,7 +34,7 @@ from jax import devices
 from mu_F.constraints.evaluators.base import (
     BaseEvaluator,
     build_factory,
-    parallel_shard,
+    parallel_thread,
     pick_best,
     precompute_sobol_pool,
     skip_if_masked,
@@ -124,15 +124,8 @@ class BackwardEvaluator(BaseEvaluator):
         super().__init__(cfg, graph, node)
 
         # Pin bound methods for stable pmap identity across calls.
-        self._shard_node_local = self.evaluate_node_local
-        self._shard_graph_wide = self.evaluate_graph_wide
-
-    # ------------------------------------------------------------------
-    # BaseEvaluator.evaluate contract — dispatches to the active variant.
-    # Callers should prefer the specific `evaluate_{node_local, graph_wide}`
-    # entry points or go through `backward_constraint_evaluator` (which
-    # drives pmap); this exists so the abstract-method check is satisfied.
-    # ------------------------------------------------------------------
+        self._thread_node_local = self.evaluate_node_local
+        self._thread_graph_wide = self.evaluate_graph_wide
 
     def evaluate(self, outputs_s, aux_s, mask_s=None):
         if self._graph_wide:
@@ -142,10 +135,6 @@ class BackwardEvaluator(BaseEvaluator):
             # Legacy single-shot entry — treat as a real lane.
             mask_s = jnp.asarray(True)
         return self.evaluate_node_local(outputs_s, aux_s, mask_s)
-
-    # ------------------------------------------------------------------
-    # BaseEvaluator contract
-    # ------------------------------------------------------------------
 
     def _keys(self) -> list:
         if self._graph_wide:
@@ -274,12 +263,12 @@ class BackwardEvaluator(BaseEvaluator):
         self.objective_fn[key]  = objective
 
     # ------------------------------------------------------------------
-    # Shard entry points — pmap targets
+    # Thread entry points — pmap targets
     # ------------------------------------------------------------------
 
     def evaluate_node_local(self, outputs_s, aux_s, mask_s):
         """
-        Node-local shard body.
+        Node-local thread body.
 
         Parameters
         ----------
@@ -319,7 +308,7 @@ class BackwardEvaluator(BaseEvaluator):
 
     def evaluate_graph_wide(self, outputs_s, aux_s):
         """
-        Graph-wide shard body.
+        Graph-wide thread body.
 
         The caller passes `outputs_s` in the slot that plays the role of
         the graph-level fixed inputs.  Returns `shaped_evals`.
@@ -360,7 +349,7 @@ def _get_evaluator(cfg, graph, node) -> BackwardEvaluator:
 
 def backward_constraint_evaluator(outputs, aux, cfg, graph, node):
     """
-    Top-level backward feasibility evaluator — shards samples across CPU
+    Top-level backward feasibility evaluator — threads samples across CPU
     devices via pmap.
 
     Returns
@@ -378,11 +367,11 @@ def backward_constraint_evaluator(outputs, aux, cfg, graph, node):
     evaluator = _get_evaluator(cfg, graph, node)
 
     if evaluator._graph_wide:
-        # Graph-wide: a single graph-level NLP.  No sharding over samples
+        # Graph-wide: a single graph-level NLP.  No threading over samples
         # — one solve, then broadcast to match the expected batch shape.
-        shard_out = evaluator.evaluate_graph_wide(outputs, aux)
+        thread_out = evaluator.evaluate_graph_wide(outputs, aux)
         n_batch = outputs.shape[0]
-        return jnp.broadcast_to(shard_out.reshape(1, -1), (n_batch, shard_out.size)), None
+        return jnp.broadcast_to(thread_out.reshape(1, -1), (n_batch, thread_out.size)), None
 
     # Node-local: fixed-width pmap with padding + mask (see
     # `cost_to_go_evaluator` for the full rationale).
@@ -408,8 +397,8 @@ def backward_constraint_evaluator(outputs, aux, cfg, graph, node):
     mask_chunks = mask.reshape(n_chunks, W)
 
     devs = cpu_devs[:W]
-    pmap_fn = parallel_shard(
-        evaluator._shard_node_local,
+    pmap_fn = parallel_thread(
+        evaluator._thread_node_local,
         in_axes=(0, 0, 0),
         devices=devs,
         use_vmap=bool(getattr(cfg.solvers, "use_vmap", False)),

@@ -9,13 +9,13 @@ Every concrete evaluator (CTG, backward, forward, current, ...) inherits from
   - `_build_for_key(key)`   — build and cache the stable state for one
                               sub-problem (factory, screener, sobol pool,
                               wrapped callables, shapes)
-  - `evaluate(...)`         — the pmap shard body; pure function of its
+  - `evaluate(...)`         — the pmap thread body; pure function of its
                               traced arguments, closing only over `self`
 
 The base `__init__` reads the common cfg knobs, initialises the per-key
 state dicts, then drives the `_build_for_key` loop.  Subclass state lives
 on `self` under those dicts so the instance has a stable id() — necessary
-for pmap to cache the compiled shard across calls.
+for pmap to cache the compiled thread across calls.
 
 All compile-relevant work happens in `__init__`.  `evaluate` does only
 pure JAX operations on traced arrays (and on the precomputed JAX arrays
@@ -52,7 +52,7 @@ __all__ = [
     "pick_x0_batch",
     "pick_best",
     "skip_if_masked",
-    "parallel_shard",
+    "parallel_thread",
 ]
 
 
@@ -130,7 +130,7 @@ def build_penalty_screener(
     Low scores correspond to points that are both feasible (small
     violation) and have low objective — good multi-start seeds.
 
-    Calling pattern the shard should use:
+    Calling pattern the thread should use:
         scores = screener(sobol_pool, p)           # shape (N_pool,)
         best   = sobol_pool[jnp.argsort(scores)[:n_starts]]
 
@@ -190,9 +190,9 @@ def pick_x0_batch(
     return sobol_pool[top_idx]
 
 
-def parallel_shard(shard_fn, *, in_axes, devices, use_vmap: bool):
+def parallel_thread(thread_fn, *, in_axes, devices, use_vmap: bool):
     """
-    Pick between `pmap(shard_fn, devices=devices)` and `jit(vmap(shard_fn))`
+    Pick between `pmap(thread_fn, devices=devices)` and `jit(vmap(thread_fn))`
     based on a single runtime flag.
 
     Both paths expose the same `(*args) -> pytree` signature with axis-0
@@ -203,25 +203,25 @@ def parallel_shard(shard_fn, *, in_axes, devices, use_vmap: bool):
     parallelism, at the cost of a device-to-host gather at the end).
 
     `jit(vmap(...))` stays on a single device — XLA can still parallelise
-    internally when the compute graph supports it, but there's no shard-
+    internally when the compute graph supports it, but there's no thread-
     args/gather round-trip.  On a single-host CPU with our small scalar-
-    output shards, this is often strictly faster.
+    output threads, this is often strictly faster.
 
     Shape compile-cache behaviour is unchanged: vmap still keys on abstract
     argument shape, so callers that pad to a fixed batch width keep the
     cache warm in exactly the same way as the pmap path.
     """
     if use_vmap:
-        return jax.jit(jax.vmap(shard_fn, in_axes=in_axes, out_axes=0))
+        return jax.jit(jax.vmap(thread_fn, in_axes=in_axes, out_axes=0))
     from jax import pmap
-    return pmap(shard_fn, in_axes=in_axes, out_axes=0, devices=devices)
+    return pmap(thread_fn, in_axes=in_axes, out_axes=0, devices=devices)
 
 
 def skip_if_masked(mask, real_fn):
     """
     Conditionally execute `real_fn()` under a scalar boolean mask.
 
-    Used inside pmap shards to skip the SQP solve on padded lanes.  When
+    Used inside pmap threads to skip the SQP solve on padded lanes.  When
     `mask` is True the real branch runs; when False, a zero-filled pytree
     matching the real branch's abstract output is returned instead.
 
@@ -271,9 +271,9 @@ class BaseEvaluator(ABC):
     Stateful, stable-id evaluator for septal-backed NLP sub-problems.
 
     One instance per `(cfg, graph, node)` triple — all factories, screeners
-    and Sobol pools are built once in `__init__`.  The pmap shard body lives
+    and Sobol pools are built once in `__init__`.  The pmap thread body lives
     on `evaluate(...)`; since the instance id is stable across calls, pmap
-    caches the compiled shard and only re-uses it.
+    caches the compiled thread and only re-uses it.
 
     Subclasses implement:
 
@@ -283,7 +283,7 @@ class BaseEvaluator(ABC):
                                     (factory, screener, sobol pool, wrapped
                                     callables, shapes).  Called once per
                                     `_keys()` entry from `__init__`.
-      - `evaluate(...)`           — the pmap shard body.  Argument signature
+      - `evaluate(...)`           — the pmap thread body.  Argument signature
                                     varies per evaluator; documented in the
                                     concrete subclass.  Must be a pure
                                     function of its traced inputs and `self`.
@@ -365,7 +365,7 @@ class BaseEvaluator(ABC):
     @abstractmethod
     def evaluate(self, *args, **kwargs):
         """
-        Pmap shard body.  Argument signature is evaluator-specific.
+        Pmap thread body.  Argument signature is evaluator-specific.
 
         Must be a pure function of:
           - its (traced) arguments, and

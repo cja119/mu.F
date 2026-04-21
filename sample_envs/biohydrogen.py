@@ -55,12 +55,6 @@ def simulator(
     _dgdt = jnp.atleast_1d(dgdt(param_dict, x, u))
     _dldt = jnp.atleast_1d(dldt(param_dict, x, u))
 
-    #_dldt = jax.lax.cond(
-    #    node == 29,
-    #    lambda: jnp.atleast_1d(dphidt(param_dict, x, u)),
-    #    lambda: _dldt,
-    #)
-
     return jnp.concatenate([_dxdt, _dgdt, _dldt], axis=0)
 
 @partial(jax.jit, static_argnums=(0,))
@@ -71,7 +65,7 @@ def dxdt(param_dict,  x: jnp.ndarray, u: jnp.ndarray):
     # Guard C denominator: when K_c=0.0 (as set in ENV_PARAMS), x[1]/(0+x[1]) = 0/0 at C=0
     _t1 =  param_dict['mu_max'] * (1 - param_dict['k_q'] / _q_safe) * (x[1] / (param_dict['K_c'] + x[1] + 1e-8))
     _t2 =  x[2] / (param_dict['K_N'] + x[2])
-    _t3 = x[4] / (x[4]**2 + 0.1) ** 0.5  # paper formulation: O in 0-100 %, smoothing 0.1
+    _t3 = jax.nn.sigmoid(x[4] * 2.0)  # smooth step: ~0 when O≈0, ~1 when O>0
     # alpha reparametrisation: u[1] is fraction of remaining feed budget [0,1]
     _F_in = u[1] * jnp.maximum(param_dict['F_max'] - x[6], 0.0) / 24
 
@@ -96,8 +90,7 @@ def dxdt(param_dict,  x: jnp.ndarray, u: jnp.ndarray):
     )
 
     # f(N) switch: H₂ only produced when culture nitrate N < 100 mg/L (Eq 1g)
-    _delta_N = x[2] - 100.0
-    _f_N = 0.5 * (jnp.sqrt(_delta_N**2 + 1e-12) - _delta_N) / jnp.sqrt(_delta_N**2 + 0.1)
+    _f_N = jax.nn.sigmoid((100.0 - x[2]) * 1.0)  # smooth step: ~1 when N<100, ~0 when N>100
 
     dHdt = (
         param_dict['Y_HX'] * x[0] * (1 - _t3) * _f_N
@@ -120,9 +113,8 @@ def dgdt(param_dict,  x: jnp.ndarray, u: jnp.ndarray):
 
 @partial(jax.jit, static_argnums=(0,))
 def dldt(param_dict,  x: jnp.ndarray, u: jnp.ndarray):
-    _delta_N = x[2] - 100.0
-    _t3 = x[4] / (x[4]**2 + 0.1) ** 0.5
-    _f_N = 0.5 * (jnp.sqrt(_delta_N**2 + 1e-12) - _delta_N) / jnp.sqrt(_delta_N**2 + 0.1)
+    _t3 = jax.nn.sigmoid(x[4] * 2.0)
+    _f_N = jax.nn.sigmoid((100.0 - x[2]) * 1.0)
     return -jnp.array([param_dict['Y_HX'] * x[0] * (1 - _t3) * _f_N / 1000])
 
 @partial(jax.jit, static_argnums=(0,))

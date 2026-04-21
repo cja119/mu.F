@@ -77,13 +77,9 @@ def _current_reduced_space(graph, node, cfg):
     aux_indices   = np.arange(ndim - n_aux, ndim).astype(int)
     fix_indices   = np.hstack([input_indices, aux_indices]).astype(int)
 
-    # Bounds stay in real-world units.  The surrogates stored on the graph
-    # (`classifier`, `ctg_surrogate`) are self-scaling — they standardise
-    # their inputs internally using their own trained scaler.  The solver
-    # runs in real space; scaling concerns live entirely inside each
-    # surrogate callable.
+    # Extract design-variable bounds from extendedDS_bounds by removing
+    # the input and aux columns (which are fixed during optimisation).
     decision_bounds = graph.nodes[node]["extendedDS_bounds"]
-
     decision_bounds = [
         jnp.delete(bound, fix_indices, axis=1) for bound in decision_bounds
     ]
@@ -132,7 +128,7 @@ class CurrentConstraintEvaluator(BaseEvaluator):
 
         super().__init__(cfg, graph, node)
 
-        self._shard = self.evaluate
+        self._thread = self.evaluate
 
     def _keys(self) -> list:
         return [self.node]
@@ -177,31 +173,26 @@ class CurrentConstraintEvaluator(BaseEvaluator):
 
         Returns
         -------
-        (decision_variables.T, objective, converged)
-            decision_variables : (n_d, n_starts) — transposed for `v.T[i]`.
-            objective          : (n_starts, 1)
-            converged          : (n_starts, 1), dtype bool
+        (decision_variables, objective, converged)
+            decision_variables : (1, n_d)
+            objective          : (1, 1)
+            converged          : (1, 1), dtype bool
         """
         key = self.node
         if key is None:
             n = 0 if inputs is None else inputs.shape[0]
             return (
-                jnp.zeros((0, n)),
+                jnp.zeros((n, 0)),
                 jnp.zeros((n, 1)),
                 jnp.zeros((n, 1), dtype=bool),
             )
 
         p = _prepare_inputs(inputs, self.graph, key, self.fix_indices[key], self.cfg)
-        # The classifier's `construct_input` only consumes the first
-        # `n_fix` slots of `p`; pad or trim to that width for determinism.
+
         p = jnp.zeros(self.n_fix[key]).at[:min(p.size, self.n_fix[key])].set(
             p[:self.n_fix[key]]
         )
 
-        # Box-only — no constraint to penalise against, so the L1-penalty
-        # screener degenerates to "sort by objective".  Take the first
-        # `n_starts` Sobol points directly; multi-start variance is
-        # preserved by the deterministic pool layout.
         x0_batch = _sobol_topn(self.sobol_pool[key], self.n_starts)
         p_batch = jnp.broadcast_to(
             p.reshape(1, -1), (self.n_starts, self.n_fix[key]),
@@ -209,17 +200,8 @@ class CurrentConstraintEvaluator(BaseEvaluator):
 
         result = self.factories[key].solve_batch(x0_batch, p_batch)
 
-        # Solver ran in real-world decision space (bounds are real, inputs
-        # are real, surrogates self-scale) — no post-solve inverse
-        # transform needed.
-        #
-        # Collapse the `n_starts` multi-start axis via `pick_best` so the
-        # caller (rollout) receives exactly one decision per sample.  The
-        # old return shape `(n_d_k, n_starts)` caused the multi-start axis
-        # to be interpreted as a feature axis downstream — that poisoned
-        # the rollout's forward pass at non-root nodes.
         best_f, best_c, best_x = pick_best(result)
-        params    = jnp.asarray(best_x).reshape(-1, 1)   # (n_d_k, 1)
+        params    = jnp.asarray(best_x).reshape(1, -1)   # (1, n_d_k)
         objective = jnp.asarray(best_f).reshape(1, 1)    # (1, 1)
         converged = jnp.asarray(best_c).reshape(1, 1)    # (1, 1)
         return params, objective, converged
@@ -250,7 +232,7 @@ class CurrentCostEvaluator(BaseEvaluator):
 
         super().__init__(cfg, graph, node)
 
-        self._shard = self.evaluate
+        self._thread = self.evaluate
 
     def _keys(self) -> list:
         return [self.node]
@@ -267,8 +249,6 @@ class CurrentCostEvaluator(BaseEvaluator):
         wrapped_ctg        = mask_classifier(ctg_surrogate, ndim, input_indices, aux_indices)
         wrapped_classifier = mask_classifier(classifier,    ndim, input_indices, aux_indices)
 
-        # CTG surrogate may return a per-uncertainty-sample vector — sum to
-        # scalar to match the casadi `_ensure_scalar_objective` behaviour.
         def objective(x, p):
             return wrapped_ctg(x, p.reshape(1, -1)).reshape(-1).sum()
 
@@ -301,14 +281,14 @@ class CurrentCostEvaluator(BaseEvaluator):
         """
         Solve the constrained-CTG current-node NLP.
 
-        Returns `(decision_variables.T, objective, converged)` in the same
+        Returns `(decision_variables, objective, converged)` in the same
         shape as `CurrentConstraintEvaluator.evaluate`.
         """
         key = self.node
         if key is None:
             n = 0 if inputs is None else inputs.shape[0]
             return (
-                jnp.zeros((0, n)),
+                jnp.zeros((n, 0)),
                 jnp.zeros((n, 1)),
                 jnp.zeros((n, 1), dtype=bool),
             )
@@ -328,24 +308,12 @@ class CurrentCostEvaluator(BaseEvaluator):
 
         result = self.factories[key].solve_batch(x0_batch, p_batch)
 
-        # Solver ran in real-world decision space (bounds are real, inputs
-        # are real, surrogates self-scale) — no post-solve inverse
-        # transform needed.  Collapse the n_starts axis via `pick_best`
-        # so the caller gets one decision per sample (see
-        # `CurrentConstraintEvaluator.evaluate` for the rationale).
         best_f, best_c, best_x = pick_best(result)
-        params    = jnp.asarray(best_x).reshape(-1, 1)   # (n_d_k, 1)
+        params    = jnp.asarray(best_x).reshape(1, -1)   # (1, n_d_k)
         objective = jnp.asarray(best_f).reshape(1, 1)    # (1, 1)
         converged = jnp.asarray(best_c).reshape(1, 1)    # (1, 1)
         return params, objective, converged
 
-
-# =============================================================================
-# Local helper — top-N without screening (box-only path has no constraint
-# to penalise against, so screening degenerates to `sort by objective`,
-# which equals the screener's output when penalty*sum(max(0, g)) is 0).
-# Keep a tiny helper so we don't drag a no-op penalty screen through.
-# =============================================================================
 
 def _sobol_topn(pool: jnp.ndarray, n_starts: int) -> jnp.ndarray:
     """Return the first `n_starts` points from the Sobol pool — deterministic."""

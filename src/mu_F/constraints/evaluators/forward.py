@@ -21,13 +21,9 @@ Python closure.  The equality becomes
 
 with `constraint_lhs = constraint_rhs = 0`.  One
 `ParametricSQPFactory` per predecessor is built in `_build_for_key`; every
-subsequent shard call feeds new `(x_batch, p_batch)` to the same compiled
+subsequent thread call feeds new `(x_batch, p_batch)` to the same compiled
 scan body.
 
-NOTE: does NOT implement `cfg.solvers.forward_general_constraints` — the
-variant that stacks extra successor classifier+surrogate blocks for already-
-processed downstream nodes.  Off by default in every yaml in the repo; land
-as a follow-up if a case study needs it.
 """
 from __future__ import annotations
 
@@ -39,7 +35,7 @@ from mu_F.constraints.evaluators.base import (
     BaseEvaluator,
     build_factory,
     build_penalty_screener,
-    parallel_shard,
+    parallel_thread,
     pick_best,
     pick_x0_batch,
     precompute_sobol_pool,
@@ -67,7 +63,7 @@ class ForwardEvaluator(BaseEvaluator):
     Stateful forward evaluator.
 
     Owns the factory + screener + sobol pool for every predecessor.  The
-    shard entry point `evaluate(inputs_s, aux_s)` is pinned to a stable
+    thread entry point `evaluate(inputs_s, aux_s)` is pinned to a stable
     bound-method attribute in `__init__` so pmap's compile cache keys on
     the same callable identity across every call.
     """
@@ -84,7 +80,7 @@ class ForwardEvaluator(BaseEvaluator):
 
         super().__init__(cfg, graph, node)
 
-        self._shard = self.evaluate
+        self._thread = self.evaluate
 
     # ------------------------------------------------------------------
     # BaseEvaluator contract
@@ -117,7 +113,7 @@ class ForwardEvaluator(BaseEvaluator):
         bounds = [lb, ub]
 
         # `input_indices` picks out the pred->node slice of the current
-        # node's input stream; used at shard time to build `p`.
+        # node's input stream; used at thread time to build `p`.
         input_indices = np.array(
             self.graph.edges[pred, self.node]['input_indices'], dtype=int,
         )
@@ -180,25 +176,16 @@ class ForwardEvaluator(BaseEvaluator):
         mask_s   : scalar bool — True on real lanes, False on padded lanes
 
         Returns `(evals, flags)` each shape `(1, N_predecessors)` for this
-        shard.  Padded lanes skip the SQP via `lax.cond`.
+        thread.  Padded lanes skip the SQP via `lax.cond`.
         """
         def real():
             evals, flags = [], []
             for pred in self._keys():
-                # Build target `y` = [pred_inputs | pred_aux] — matches the
-                # forward surrogate's output layout.  First uncertainty
-                # realisation only (N_uncertainty=1 in deterministic cases).
+
                 pred_inputs = inputs_s[0, self.input_indices[pred]]
                 pred_aux    = aux_s[0]
-                # Target stays in real units; the forward surrogate produces
-                # real-world outputs (self-unscales) so the equality
-                # `fwd(x) - target = 0` is also in real units.
                 target = jnp.hstack([pred_inputs, pred_aux])
 
-                # Align `y` width to the factory's `n_fix` — the equality
-                # constraint width is set at build time from the forward
-                # surrogate's output probe.  If `target` is wider, trim;
-                # if narrower, zero-pad.
                 n_fix = self.n_fix[pred]
                 y = jnp.zeros(n_fix).at[:min(target.size, n_fix)].set(
                     target[:n_fix]
@@ -278,8 +265,8 @@ def forward_constraint_evaluator(inputs, aux, cfg, graph, node):
     mask_chunks = mask.reshape(n_chunks, W)
 
     devs = cpu_devs[:W]
-    pmap_fn = parallel_shard(
-        evaluator._shard,
+    pmap_fn = parallel_thread(
+        evaluator._thread,
         in_axes=(0, 0, 0),
         devices=devs,
         use_vmap=bool(getattr(cfg.solvers, "use_vmap", False)),

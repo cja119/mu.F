@@ -64,13 +64,11 @@ class ForwardDecentralisedEvaluator(BaseEvaluator):
         self.n_fix: dict         = {}
         self.objective_fn: dict  = {}
         self.constraint_fn: dict = {}
-        # Slice layout on the concatenated decision vector — needed at
-        # inspection time, kept for parity with the legacy API.
         self.pred_slices: dict   = {}
 
         super().__init__(cfg, graph, node)
 
-        self._shard = self.evaluate
+        self._thread = self.evaluate
 
     # ------------------------------------------------------------------
     # BaseEvaluator contract
@@ -119,9 +117,6 @@ class ForwardDecentralisedEvaluator(BaseEvaluator):
         node_backoff    = jnp.sum(jnp.asarray(self.graph.nodes[key]['constraint_backoff']))
 
         # Determine `p` dimension by probing the first predecessor's
-        # forward surrogate at its midpoint: `p` is the measured-input
-        # vector for this node, whose width is the sum of per-edge
-        # forward-surrogate output widths.
         def _fwd_width(p_idx: int) -> int:
             sl_s, sl_e = pred_slices[p_idx]
             x_probe = 0.5 * (lb[sl_s:sl_e] + ub[sl_s:sl_e])
@@ -131,9 +126,7 @@ class ForwardDecentralisedEvaluator(BaseEvaluator):
         n_fix = int(sum(fwd_widths))
 
         def objective(x, p):
-            # Stack per-predecessor forward-surrogate outputs, concat with
-            # `p` (measured input for this node), pipe through the node's
-            # classifier, negate + subtract backoff.
+            # Stack per-predecessor forward-surrogate outputs,
             fwd_pieces = [
                 pred_forward_sg[i](x.reshape(1, -1)[:, s:e]).reshape(1, -1)
                 for i, (s, e) in enumerate(pred_slices)
@@ -202,9 +195,6 @@ class ForwardDecentralisedEvaluator(BaseEvaluator):
 
         evals, flags = [], []
         for i in range(n_samples):
-            # `p` is this sample's measured input (node-level) — width may
-            # differ from n_fix by padding if inputs include aux tails; pad
-            # / trim to the factory's n_fix width.
             v = inputs[i].reshape(-1)
             p = jnp.zeros(n_fix).at[:min(v.size, n_fix)].set(v[:n_fix])
 
@@ -218,8 +208,6 @@ class ForwardDecentralisedEvaluator(BaseEvaluator):
             result = self.factories[key].solve_batch(x0_batch, p_batch)
             best_f, best_c, _ = pick_best(result)
 
-            # Flip sign so we return `classifier + backoff` (positive =
-            # feasible), consistent with the casadi `ray_evaluation`.
             evals.append((-best_f).reshape(-1))
             flags.append(best_c.reshape(-1))
 
@@ -250,7 +238,7 @@ def forward_constraint_decentralised_evaluator(inputs, aux, cfg, graph, node):
     Drop-in replacement for the legacy casadi class of the same name.
 
     Serial across samples for now — each sample reuses the compiled
-    factory with a new `p`.  A pmap shard would be straightforward if
+    factory with a new `p`.  A pmap thread would be straightforward if
     typical batch sizes warrant it.
     """
     return _get_evaluator(cfg, graph, node).evaluate(inputs, aux)

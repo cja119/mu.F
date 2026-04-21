@@ -126,10 +126,7 @@ class PostProcessUpperLevelEvaluator(BaseEvaluator):
         self.n_d: dict    = {}
 
         super().__init__(cfg, graph, node)
-
-        # Pin bound method — harmless for this evaluator (not pmap'd), but
-        # keeps the pattern consistent across the evaluator family.
-        self._shard = self.evaluate
+        self._thread = self.evaluate
 
     # ------------------------------------------------------------------
     # BaseEvaluator contract

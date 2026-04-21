@@ -40,7 +40,7 @@ from mu_F.constraints.evaluators.base import (
     BaseEvaluator,
     build_factory,
     build_penalty_screener,
-    parallel_shard,
+    parallel_thread,
     pick_best,
     pick_x0_batch,
     precompute_sobol_pool,
@@ -67,7 +67,7 @@ class CTGEvaluator(BaseEvaluator):
     Stateful CTG evaluator.
 
     Owns the factory + screener + sobol pool for every successor.  The
-    shard entry point `evaluate(outputs_s, aux_s)` is pinned to a stable
+    thread entry point `evaluate(outputs_s, aux_s)` is pinned to a stable
     bound-method attribute in `__init__` so pmap's compile cache keys on
     the same callable identity across every call.
     """
@@ -91,7 +91,7 @@ class CTGEvaluator(BaseEvaluator):
         # Pin bound methods for stable id() across calls.  Without pinning,
         # `instance.evaluate` creates a fresh bound-method object on every
         # access, breaking pmap's compile cache.
-        self._shard = self.evaluate
+        self._thread = self.evaluate
 
     # ------------------------------------------------------------------
     # BaseEvaluator contract
@@ -172,7 +172,7 @@ class CTGEvaluator(BaseEvaluator):
             bounds, n_d_k, self.n_sobol_screen,
         )
 
-        # --- metadata used at shard-evaluate time ------------------------
+        # --- metadata used at thread-evaluate time ------------------------
         self.n_fix[succ]         = n_fix
         self.n_d_k[succ]         = n_d_k
         self.bounds[succ]        = bounds
@@ -197,7 +197,7 @@ class CTGEvaluator(BaseEvaluator):
         aux_s     : (N_uncertainty, N_aux)
         mask_s    : scalar bool — True on real lanes, False on padded lanes
 
-        Returns `(evals, flags)` each shape `(1, N_successors)` for this shard.
+        Returns `(evals, flags)` each shape `(1, N_successors)` for this thread.
         Padded lanes skip the SQP via `lax.cond` and return zeros.
         """
         def real():
@@ -264,7 +264,7 @@ def cost_to_go_evaluator(outputs, aux, cfg, graph, node):
     """
     Top-level CTG evaluator.  Shards samples across CPU devices via pmap
     at a **fixed width** (`cfg.max_devices`), padding smaller batches up
-    with row-0 replicas and masking the padded lanes inside the shard.
+    with row-0 replicas and masking the padded lanes inside the thread.
 
     Fixed pmap width means the pmap compile cache keys only on static
     shape, not on batch size — so calls with different real-batch sizes
@@ -302,8 +302,8 @@ def cost_to_go_evaluator(outputs, aux, cfg, graph, node):
     mask_chunks = mask.reshape(n_chunks, W)
 
     devs = cpu_devs[:W]
-    pmap_fn = parallel_shard(
-        evaluator._shard,
+    pmap_fn = parallel_thread(
+        evaluator._thread,
         in_axes=(0, 0, 0),
         devices=devs,
         use_vmap=bool(getattr(cfg.solvers, "use_vmap", False)),
