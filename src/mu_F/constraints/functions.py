@@ -245,6 +245,29 @@ def make_markov_cost_cfg(cfg):
                     int(sizes.PHI_SIZE))]
 
 
+# -------------------------------------------------------------------------------- #
+# ----- Per-case-study cost / constraint factories ------------------------------- #
+# Each factory has the same return contract as the generic markov helpers above
+# (a list of (rollout, cfg) -> array callables) and starts as a thin delegate.
+# Add state-dependent terms by editing the factory body (extract the simulator
+# rollout's F slice as the terminal state and combine with the path term).
+# -------------------------------------------------------------------------------- #
+
+def make_markov_process_cost(cfg):  return make_markov_cost_cfg(cfg)
+def make_markov_process_cons(cfg):  return make_markov_cons_cfg(cfg)
+
+def make_cstr_cost(cfg):            return make_markov_cost_cfg(cfg)
+def make_cstr_cons(cfg):            return make_markov_cons_cfg(cfg)
+
+def make_waste_water_cost(cfg):     return make_markov_cost_cfg(cfg)
+def make_waste_water_cons(cfg):     return make_markov_cons_cfg(cfg)
+
+def make_hydrogen_export_cost(cfg): return make_markov_cost_cfg(cfg)
+def make_hydrogen_export_cons(cfg): return make_markov_cons_cfg(cfg)
+
+def make_biohydrogen_cost(cfg):     return make_markov_cost_cfg(cfg)
+def make_biohydrogen_cons(cfg):     return make_markov_cons_cfg(cfg)
+
 
 """ insert case study specific functions for constraints here"""
 CS_holder = {'tablet_press': {0: [unit1_volume_ub], 1: [unit2_volume_ub, tablet_composition_lb, tablet_composition_ub], 2: [tablet_hardness_lb, tablet_hardness_ub, tablet_size_lb, tablet_size_ub]},
@@ -254,17 +277,17 @@ CS_holder = {'tablet_press': {0: [unit1_volume_ub], 1: [unit2_volume_ub, tablet_
              'estimator': {0: [], 1: [], 2: [], 3: [], 4: [], 5: [estimation_g_aux]},
              'affine_study': {0: [negative_output_constraint], 1: [negative_output_constraint], 2: [negative_output_constraint], 3: [negative_output_constraint], 4: [negative_output_constraint]},
              'markov_process': make_markov_cons,
-             'cstr': make_markov_cons_cfg,
-             'waste_water': make_markov_cons_cfg,
-             'hydrogen_export': make_markov_cons_cfg,
-             'biohydrogen': make_markov_cons_cfg}
+             'cstr': make_cstr_cons,
+             'waste_water': make_waste_water_cons,
+             'hydrogen_export': make_hydrogen_export_cons,
+             'biohydrogen': make_biohydrogen_cons}
 
 COST_holder = {
     'markov_process': make_markov_cost,
-    'cstr': make_markov_cost_cfg,
-    'waste_water': make_markov_cost_cfg,
-    'hydrogen_export': make_markov_cost_cfg,
-    'biohydrogen': make_markov_cost_cfg,
+    'cstr': make_cstr_cost,
+    'waste_water': make_waste_water_cost,
+    'hydrogen_export': make_hydrogen_export_cost,
+    'biohydrogen': make_biohydrogen_cost,
 }
 
 post_process_visualiser = {

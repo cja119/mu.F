@@ -43,8 +43,14 @@ parameters_samples: [{'c': [350.0, 1.0], 'w': 1.0}]
 
 parameters_best_estimate: [350.0, 1.0]
 
-extendedDS_bounds:
-  - [290, 302]
+extendedDS_bounds: None
+
+# Per-state clip applied by `make_cstr_edge` to the F slice that flows
+# between nodes.  One [lo, hi] entry per F-state-dim (F_SIZE=2).
+# Order: [Ca, T] (concentration, temperature).  Lifted from the legacy
+# extendedDS_bounds [u0, Ca, T]; the design-variable entry isn't part of
+# the F slice so doesn't belong here.
+edge_clip:
   - [0.7, 1.0]
   - [319, 331]
 

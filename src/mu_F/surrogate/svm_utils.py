@@ -97,8 +97,17 @@ def compute_best_svm_classifier(
     try:
         if data_points.ndim > 2: data_points = data_points.squeeze()
         model.fit(data_points, labels.squeeze())
-    except: 
-        logging.info("error in fitting classification model")
+    except:
+        # Labels: -1 = feasible, +1 = infeasible (see surrogate/data_utils.py).
+        # sklearn refuses to fit on a single-class dataset; the caller
+        # short-circuits to `all_feasible` / `no_feasible` afterwards.
+        ls = jnp.asarray(labels).squeeze()
+        if jnp.all(ls == -1):
+            logging.info("classification model skipped — all samples are feasible")
+        elif jnp.all(ls == 1):
+            logging.info("classification model skipped — all samples are infeasible")
+        else:
+            logging.info("error in fitting classification model")
 
         return None, None, None, labels
     # get support vectors

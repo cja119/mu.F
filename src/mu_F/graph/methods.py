@@ -79,6 +79,47 @@ def vmap_markov_edge_cfg(cfg):
     return vmap(vmap(fn, in_axes=0, out_axes=0), in_axes=1, out_axes=1)
 
 
+# -------------------------------------------------------------------------------- #
+# ----- Per-case-study edge factories ------------------------------------------- #
+# Same return contract as the generic markov edge (rollout -> F_slice).  Each
+# factory body is the place to add saturation / clipping rules.  When
+# `cfg.case_study.edge_clip` is a list of [lo, hi] per F-state-dim, the
+# returned closure clamps the F slice to those bounds; otherwise it's a
+# no-op delegate to the generic markov factory.
+# -------------------------------------------------------------------------------- #
+
+def _markov_edge_with_clip(cfg):
+    """Slice F then clamp per-dim if cfg.case_study.edge_clip is provided."""
+    F_size = int(cfg.case_study.sizes.F_SIZE)
+    clip = getattr(cfg.case_study, "edge_clip", None)
+    if clip is None:
+        return lambda rollout: rollout[..., :F_size]
+    bounds = jnp.asarray(clip)                                   # (F_size, 2)
+    lo = bounds[:, 0]
+    hi = bounds[:, 1]
+    return lambda rollout: jnp.clip(rollout[..., :F_size], lo, hi)
+
+
+def _vmap_with_clip(cfg):
+    fn = _markov_edge_with_clip(cfg)
+    return vmap(vmap(fn, in_axes=0, out_axes=0), in_axes=1, out_axes=1)
+
+
+def make_markov_process_edge(cfg):    return make_markov_edge_cfg(cfg)
+def vmap_markov_process_edge(cfg):    return vmap_markov_edge_cfg(cfg)
+
+def make_cstr_edge(cfg):              return _markov_edge_with_clip(cfg)
+def vmap_cstr_edge(cfg):              return _vmap_with_clip(cfg)
+
+def make_waste_water_edge(cfg):       return _markov_edge_with_clip(cfg)
+def vmap_waste_water_edge(cfg):       return _vmap_with_clip(cfg)
+
+def make_hydrogen_export_edge(cfg):   return _markov_edge_with_clip(cfg)
+def vmap_hydrogen_export_edge(cfg):   return _vmap_with_clip(cfg)
+
+def make_biohydrogen_edge(cfg):       return _markov_edge_with_clip(cfg)
+def vmap_biohydrogen_edge(cfg):       return _vmap_with_clip(cfg)
+
 
 """ insert case study specific functions for constraints here"""
 CS_edge_holder = {  'tablet_press': {(0,1): data_IO_1, (1,2): data_IO_2}, 'serial_mechanism_batch': {(0,1): data_transform},
@@ -88,10 +129,10 @@ CS_edge_holder = {  'tablet_press': {(0,1): data_IO_1, (1,2): data_IO_2}, 'seria
                                         (3,5): data_transform_cvx, (4,5): data_transform_cvx},
                     'affine_study': {(0,2): data_transform_cvx, (1,2): data_transform_cvx, (2,3): affine_cs34, (2,4): affine_cs35},
                     'markov_process': make_markov_edge,
-                    'cstr': make_markov_edge_cfg,
-                    'waste_water': make_markov_edge_cfg,
-                    'hydrogen_export': make_markov_edge_cfg,
-                    'biohydrogen': make_markov_edge_cfg}
+                    'cstr': make_cstr_edge,
+                    'waste_water': make_waste_water_edge,
+                    'hydrogen_export': make_hydrogen_export_edge,
+                    'biohydrogen': make_biohydrogen_edge}
 
 vmap_CS_edge_holder = {'tablet_press': {(0,1): vmap_data_IO_1, (1,2): vmap_data_IO_2}, 'serial_mechanism_batch': {(0,1): vmap_data_transform},
                        'estimator': {(0,5): vmap_data_transform_cvx, (1,5): vmap_data_transform_cvx, (2,5): vmap_data_transform_cvx,
@@ -102,8 +143,8 @@ vmap_CS_edge_holder = {'tablet_press': {(0,1): vmap_data_IO_1, (1,2): vmap_data_
                                             (3,5): vmap_data_transform_cvx, (4,5): vmap_data_transform_cvx},
                         'affine_study': {(0,2): vmap_data_transform_cvx, (1,2): vmap_data_transform_cvx, (2,3): vmap_cs34, (2,4): vmap_cs35},
                         'markov_process': vmap_markov_edge,
-                        'cstr': vmap_markov_edge_cfg,
-                        'waste_water': vmap_markov_edge_cfg,
-                        'hydrogen_export': vmap_markov_edge_cfg,
-                        'biohydrogen': vmap_markov_edge_cfg}
+                        'cstr': vmap_cstr_edge,
+                        'waste_water': vmap_waste_water_edge,
+                        'hydrogen_export': vmap_hydrogen_export_edge,
+                        'biohydrogen': vmap_biohydrogen_edge}
 

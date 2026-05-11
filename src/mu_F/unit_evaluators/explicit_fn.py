@@ -6,6 +6,7 @@ from mu_F.utils import requires_param
 from omegaconf import DictConfig
 import jax.numpy as jnp
 from jax import hessian
+from jax.nn import sigmoid
 
 from mu_F.control.environment import MarkovEnvironment
 
@@ -1210,9 +1211,15 @@ def _make_biohydrogen_step(cfg: DictConfig):
     C_Fed  = float(cfg.model.c_fed)
     Y_HX   = float(cfg.model.y_hx)
 
-    N_MAX  = float(cfg.model.n_max)
-    O_MAX  = float(cfg.model.o_max)
+    N_MAX    = float(cfg.model.n_max)
+    O_MAX    = float(cfg.model.o_max)
     N_SWITCH = float(cfg.model.n_switch)
+    # Floor on (1 - σ(2·O)).  At O≈20 % the sigmoid saturates and the gate
+    # rounds to ~4e-18, so H stays identically zero and DEUS's box-bound at
+    # downstream nodes collapses to [0, 0] (failing lbound < ubound).  A
+    # small floor leaks a physically negligible amount of H per sample,
+    # enough to keep the bound non-degenerate.
+    EPS_H_GATE = float(cfg.model.eps_h_gate)
 
     @jit
     def _step(x: jnp.ndarray, u: jnp.ndarray, z: jnp.ndarray, node):
@@ -1227,8 +1234,11 @@ def _make_biohydrogen_step(cfg: DictConfig):
         q_safe = jnp.maximum(q, 1e-8)
         t1 = mu_max * (1.0 - k_q / q_safe) * (C / (K_c + C + 1e-8))
         t2 = N / (K_N + N)
-        t3 = jax.nn.sigmoid(O * 2.0)                  # ~0 at O≈0, ~1 at O>0
-        f_N = jax.nn.sigmoid((N_SWITCH - N) * 1.0)    # ~1 at N<switch, ~0 otherwise
+        t3 = sigmoid(O * 2.0)                  # ~0 at O≈0, ~1 at O>0
+        f_N = sigmoid((N_SWITCH - N) * 1.0)    # ~1 at N<switch, ~0 otherwise
+
+        # O-gated H2 production — floored so the gate never numerically zeros.
+        gate = jnp.maximum(1.0 - t3, EPS_H_GATE)
 
         # Feed flow: alpha is fraction of remaining daily budget; /24 → L/h.
         F_in = alpha_u * jnp.maximum(F_max - F, 0.0) / 24.0
@@ -1239,7 +1249,7 @@ def _make_biohydrogen_step(cfg: DictConfig):
         dN = -Y_NX * X * t2 * mu_max + F_in * N_Fed
         dq = Y_qX * t2 * mu_max - t1 * q
         dO = Y_OX * X * t2 - Y_d * X ** 2 * t3 + O_Fed * F_in
-        dH = Y_HX * X * (1.0 - t3) * f_N
+        dH = Y_HX * X * gate * f_N
         dF = F_in
         dxdt = jnp.array([dX, dC, dN, dq, dO, dH, dF])
 
@@ -1249,7 +1259,7 @@ def _make_biohydrogen_step(cfg: DictConfig):
         dgdt = jnp.array([g_N, g_O])
 
         # Stage cost: negative H₂ production rate (we minimise; max H is min -H).
-        rwd = -Y_HX * X * (1.0 - t3) * f_N / 1000.0
+        rwd = -Y_HX * X * gate * f_N / 1000.0
 
         return jnp.concatenate([jnp.ravel(dxdt), jnp.ravel(dgdt), jnp.atleast_1d(rwd)], axis=0)
 

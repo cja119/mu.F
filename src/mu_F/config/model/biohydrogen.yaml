@@ -1,9 +1,10 @@
 root_node_inputs:
-  - [0.1, 30.0, 50.0, 0.8, 20.0, 0.0, 0.0]
+  - [0.2, 50.0, 100.0, 1.0, 20.0, 0.0, 0.0]
   # [X, C, N, q, O, H, F]
-  # X(0)=0.1 g/L small culture, C(0)=30 mmol/L, N(0)=50 mg/L (well below 150 max),
-  # q(0)=0.8 (above k_q=0.628 so the kinetic factor (1 - k_q/q) is non-negative),
-  # O(0)=20 % (smooth sigmoid region), H(0)=0, F(0)=0 (no feed used yet).
+  # X(0)=0.2 g/L, C(0)=50 mmol/L, N(0)=100 mg/L (below 150 max), q(0)=1.0
+  # (above k_q=0.628), O(0)=20 % (aerobic start — H2 production gate is
+  # saturated, so H starts at ~0; eps_h_gate prevents the box-bound from
+  # collapsing).  H(0)=0 mL/g, F(0)=0 L.
 
 constraint:
   auxiliary: 'None'
@@ -37,11 +38,15 @@ n_max: 150.0       # mg/L culture nitrate ceiling
 o_max: 100.0       # % oxygen ceiling
 n_switch: 100.0    # mg/L H₂-production switch (Eq. 1g f(N))
 
+# Floor on (1 - σ(2·O)) gate; physically negligible, prevents the H
+# state collapsing to identically zero across the first node integration.
+eps_h_gate: 1.0e-6
+
 integration:
   scheme: tsit5
   step_size_controller: pid
   t0: 0
-  tf: 4            # hours per node (4 h × 12 nodes = 48 h horizon)
+  tf: 24           # hours per node
   dt0: Null
   max_steps: 100000
   vmap_chunk_size: 0

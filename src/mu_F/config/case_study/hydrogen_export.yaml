@@ -51,11 +51,14 @@ parameters_samples: [{'c': [0.02048169, 11.87977224, 0.29061465, 7.13482955, 7.7
 
 parameters_best_estimate: [8.420454054312653]
 
-# 4-d extended DS for reconstruction plotting:
-# [u0 (ramp_t), u1 (hydrogen_throughput), hydrogen_storage, train_throughput]
-extendedDS_bounds:
-  - [-535.8, 214.32]
-  - [-1387.8, 18954.2]
+extendedDS_bounds: None
+
+# Per-state clip applied by `make_hydrogen_export_edge` to the F slice
+# that flows between nodes.  One [lo, hi] entry per F-state-dim (F_SIZE=2).
+# Order: [hydrogen_storage, train_throughput].  Lifted from the legacy
+# extendedDS_bounds [u0, u1, hydrogen_storage, train_throughput]; the
+# design-variable entries aren't part of the F slice so don't belong here.
+edge_clip:
   - [59087, 295435]
   - [0, 2143.2]
 

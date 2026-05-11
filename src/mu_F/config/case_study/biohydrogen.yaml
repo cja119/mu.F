@@ -6,8 +6,8 @@ vmap_evaluations: True
 
 eval_cost: True
 
-# 12 nodes × 4 h = 48 h total horizon (fed-batch photobiological H2 culture).
-num_nodes: 12
+# 30 nodes × 24 h = 30 days (`REPEATS` in the cluster wrapper).
+num_nodes: 30
 
 adjacency_matrix: None
 
@@ -32,11 +32,11 @@ sizes:
   L_SIZE: 1    # -Y_HX·X·(1-σ(O))·f(N)/1000
   PHI_SIZE: 0
 
-# u = [N_Fed (mg/L), alpha (fraction of remaining daily feed budget)]
+# u = [N_Fed (mg/L), alpha (fraction of remaining daily feed budget [0,1])]
 KS_bounds:
   design_args:
-  - - 0.0
-    - 2000.0
+  - - 1.0
+    - 3000.0
   - - 0.0
     - 1.0
 
@@ -44,21 +44,36 @@ KS_bounds:
   - - - None
       - None
 
-# No exogenous disturbance — single dummy scenario keeps the parameter
-# expansion machinery happy.
-parameters_samples: [{'c': [], 'w': 1.0}]
+# Single dummy scenario — biohydrogen has no exogenous disturbance, but the
+# parameter expansion machinery wants at least one entry.
+parameters_samples: [{'c': [0.0], 'w': 1.0}]
 
-parameters_best_estimate: []
+parameters_best_estimate: [0.0]
 
+# 9-d extended DS for reconstruction plotting:
+#   [N_Fed, alpha, X, C, N, q, O, H, F]
 extendedDS_bounds: None
 
+# Per-state clip applied by `make_biohydrogen_edge` to the F slice that
+# flows between nodes.  One [lo, hi] entry per F-state-dim (F_SIZE=7).
+# Order: [X, C, N, q, O, H, F_acc].  Comment out / delete to disable
+# clipping (the factory then no-ops back to the generic markov slicer).
+edge_clip:
+  - [0.0, 5.0]      # X    biomass
+  - [0.0, 60.0]     # C    carbon
+  - [0.0, 250.0]    # N    culture nitrate
+  - [0.01, 5.0]     # q    quota (keep above 1e-2 so k_q/q stays bounded)
+  - [0.0, 110.0]    # O    oxygen %
+  - [0.0, 1000.0]   # H    H2 accumulator
+  - [0.0, 0.1]      # F    feed accumulator (capped at F_max)
+
 design_space_dimensions:
-- 'N_Fed'
-- 'alpha'
+- 'u0'
+- 'u1'
 
 global_n_aux_args: 0
 
-process_space_names: ['N_Fed', 'alpha']
+process_space_names: ['N', 'alpha']
 
 mode:
   - backward
@@ -70,6 +85,6 @@ serial_graph: True
 
 unit_op: 'dynamic'
 
-n_theta: 0
+n_theta: 1
 
 fn_evals: 0

@@ -52,9 +52,9 @@ alpha: 0.5
 
 integration:
   scheme: tsit5
-  step_size_controller: pid
+  step_size_controller: Kvaerno5
   t0: 0
   tf: 0.4          
   dt0: Null
-  max_steps: 100000
+  max_steps: 5000
   vmap_chunk_size: 0
