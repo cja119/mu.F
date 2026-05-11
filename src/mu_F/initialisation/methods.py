@@ -49,7 +49,7 @@ class initialisation(ABC):
         
         if self.cfg.formulation == 'probabilistic':
             param_dict = self.cfg.case_study.parameters_samples
-            if self.cfg.case_study.case_study == 'markov_process':
+            if self.cfg.case_study.get('make_markov', False):
                 param_dict = [param_dict for _ in range(self.cfg.case_study.num_nodes)]
             
             list_of_params = [jnp.array([p['c'] for p in param]) for param in param_dict]

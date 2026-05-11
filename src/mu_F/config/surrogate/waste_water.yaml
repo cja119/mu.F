@@ -1,17 +1,17 @@
 
 classifier: true
-classifier_selection: 'SVM' # or 'SVM'
-regressor_selection: 'ANN' # or 'GP' 
-probability_map: true
+classifier_selection: 'SVM'
+regressor_selection: 'ANN'
+probability_map: false
 
 subsample_size: 100000
 num_folds: 2
 
 index_on: 1
 
-classifier_args: 
+classifier_args:
   standardised: true
-  svm: # these parameters must be provided as lists for Sklearn's GridSearchCV
+  svm:
     kernel: ['rbf']
     C: [20, 10, 2.5, 1, 0.1]
     gamma: [0.2, 1, 0.5, 2, 4, 6]
@@ -30,10 +30,10 @@ classifier_args:
     decaying_lr_and_clip_param: True
     learning_rate: 0.01
     terminal_lr: 0.00001
-    num_epochs: 1000 # 10 #50 # 50 # 500
+    num_epochs: 1000
     min_delta: 0.000001
     patience: 50
-    batch_size: 264 #64
+    batch_size: 264
     weight_decay: 0.0
 
 
@@ -44,14 +44,12 @@ post_process_lower:
   desired_node_index: 0
 
 
-surrogate_forward: # This is for the q-function surrogate
+surrogate_forward:
   drop_uncertain_params: False
   ann:
     hidden_size_options:
-      - [100, 100]
-      - [100, 50]
-      - [50, 25]
       - [50, 50]
+      - [50, 25]
       - [25, 10]
     activation_functions:
       - ['tanh', tanh]
@@ -59,8 +57,8 @@ surrogate_forward: # This is for the q-function surrogate
     decaying_lr_and_clip_param: True
     learning_rate: 0.01
     terminal_lr: 0.00001
-    num_epochs: 1000 # 10 #50 # 50 # 500
+    num_epochs: 1000
     min_delta: 0.00001
     patience: 50
-    batch_size: 264 #64
+    batch_size: 264
     weight_decay: 0.0

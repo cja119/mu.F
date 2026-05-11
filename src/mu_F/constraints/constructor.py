@@ -17,6 +17,7 @@ from mu_F.constraints.evaluators.current import (
     current_cost_surrogate,
 )
 from mu_F.constraints.evaluators.post_process import post_process_upper_level
+from mu_F.constraints.evaluators.probability import backward_pmap
 from mu_F.constraints.evaluators.process import (
     process_constraint_evaluator,
     node_cost_evaluator,
@@ -78,6 +79,12 @@ class constraint_evaluator(ABC):
         elif constraint_type == 'backward_cost_to_go':
             self.constraint_evaluator = partial(
                 cost_to_go_evaluator, cfg=cfg, graph=graph, node=node,
+            )
+            self.evaluate = self.evaluate_coupling
+
+        elif constraint_type == 'backward_pmap':
+            self.constraint_evaluator = partial(
+                backward_pmap, cfg=cfg, graph=graph, node=node,
             )
             self.evaluate = self.evaluate_coupling
 

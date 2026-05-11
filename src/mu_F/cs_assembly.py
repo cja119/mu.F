@@ -36,8 +36,14 @@ def case_study_constructor(cfg):
         dict_of_edge_fn = CS_edge_holder[cfg.case_study.case_study]
 
     # Create a graph constructor object
-    if cfg.case_study.case_study == 'markov_process':
-        G = markov_graph_constructor(cfg, cfg.case_study.env_file)
+    if cfg.case_study.get('make_markov', False):
+        # Markov-style case study: chain DAG of identical nodes. Two sub-paths:
+        #   - legacy hydrogen-style: env_file points at sample_envs/*.py and a
+        #     MarkovEnvironment is built from it (case_study == 'markov_process').
+        #   - cfg-driven (e.g. cstr): no env_file; simulator + slicers come from
+        #     the case-study registries keyed on cfg.case_study.case_study.
+        env_file = cfg.case_study.get('env_file', None)
+        G = markov_graph_constructor(cfg, env_file)
     else:
         G = graph_constructor(cfg, cfg.case_study.adjacency_matrix)
 
@@ -90,7 +96,8 @@ def case_study_allocation(G, cfg, dict_of_edge_fn, constraint_dictionary, solver
     # used after Phase 3f.  Septal is the sole backend and is imported directly
     # by each evaluator.
     if cfg.method != 'decomposition_constraint_tuner':
-        b_off = [0 for _ in range(len(cfg.case_study.adjacency_matrix))]
+        n_nodes = cfg.case_study.num_nodes if cfg.case_study.get('make_markov', False) else len(cfg.case_study.adjacency_matrix)
+        b_off = [0 for _ in range(n_nodes)]
         G.add_arg_to_nodes('constraint_backoff', b_off)
 
     # add miscellaneous information to the graph
@@ -110,8 +117,9 @@ def case_study_allocation(G, cfg, dict_of_edge_fn, constraint_dictionary, solver
     # default: no post-process solve unless reconstruction enables it later
     G.add_arg_to_graph('solve_post_processing_problem', False)
     if cfg.case_study.eval_cost:
-        G.add_arg_to_graph('n_design_args', cfg.case_study.n_design_args * len(cfg.case_study.adjacency_matrix))
-        G.add_arg_to_graph('bounds', list(chain.from_iterable([cfg.case_study.KS_bounds.design_args]* len(cfg.case_study.adjacency_matrix) + cfg.case_study.KS_bounds.aux_args)))
+        n_nodes_eval = cfg.case_study.num_nodes if cfg.case_study.get('make_markov', False) else len(cfg.case_study.adjacency_matrix)
+        G.add_arg_to_graph('n_design_args', cfg.case_study.n_design_args * n_nodes_eval)
+        G.add_arg_to_graph('bounds', list(chain.from_iterable([cfg.case_study.KS_bounds.design_args]* n_nodes_eval + cfg.case_study.KS_bounds.aux_args)))
     else:
         G.add_arg_to_graph('n_design_args', sum(cfg.case_study.n_design_args))
         G.add_arg_to_graph('bounds', list(chain.from_iterable(cfg.case_study.KS_bounds.design_args + cfg.case_study.KS_bounds.aux_args)))
@@ -157,7 +165,7 @@ def unit_params_fn(cfg, G):
         return {node: partial(arrhenius_kinetics_fn,Ea=jnp.array(cfg.model.arrhenius.EA[node]), A=jnp.array(cfg.model.arrhenius.A[node]), R=jnp.array(cfg.model.arrhenius.R)) for node in G.G.nodes}
     elif cfg.case_study.case_study in ['tablet_press', 'convex_estimator', 'estimator', 'convex_underestimator', 'affine_study', ]:
         return {node: lambda x, y: jnp.empty((0,)) for node in G.G.nodes}
-    elif cfg.case_study.case_study == 'markov_process':
+    elif cfg.case_study.get('make_markov', False):
         return lambda x, y: jnp.empty((0,))
     else :
         raise ValueError('Invalid case study')
@@ -181,7 +189,7 @@ def solver_constructor(cfg, G):
     }
 
 def make_markov(cfg):
-    if cfg.case_study.case_study == 'markov_process':
+    if cfg.case_study.get('make_markov', False):
         cfg.case_study.parameters_best_estimate = [cfg.case_study.parameters_best_estimate for _ in range(cfg.case_study.num_nodes)]
         cfg.case_study.KS_bounds.design_args = [cfg.case_study.KS_bounds.design_args for _ in range(cfg.case_study.num_nodes)]
         cfg.case_study.design_space_dimensions = [f'{dim}_node_{i}' for i in range(cfg.case_study.num_nodes) for dim in cfg.case_study.design_space_dimensions]

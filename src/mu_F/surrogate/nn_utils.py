@@ -12,7 +12,7 @@ from sklearn.preprocessing import StandardScaler
 from flax import linen as nn
 from flax import struct
 from flax.training import train_state
-from flax.nnx import softmax
+from jax.nn import softmax
 from flax.serialization import to_bytes, from_bytes
 from flax import jax_utils
 import optax
@@ -166,9 +166,6 @@ def hyperparameter_selection(cfg: DictConfig, D, num_folds: int, model_type, rng
     x_mean = jnp.array(x_scalar.mean_)
     x_std = jnp.array(x_scalar.scale_)
 
-    # One concise INFO line per `hyperparameter_selection` call, matching
-    # the SVM classifier's single-line summary.  Everything per-fold and
-    # per-combo is logged at DEBUG from `train()`.
     best_training_performance = getattr(train, 'last_training_performance', {})
     logging.info(
         f"training_performance ({model_type}): {best_training_performance} "
@@ -344,36 +341,6 @@ def get_initial_params_serial(key: jax.Array, data:jnp.array, model: nn.Module) 
   return initial_params
 
 
-# ---------------------------------------------------------------------------
-# Fused training pipeline — one pmap dispatch per `train()` call
-# ---------------------------------------------------------------------------
-#
-# The legacy structure (`for epoch in range(num_epochs): parallel_train_one_epoch(...)`)
-# paid a pmap dispatch every epoch × every hyperparam combo × every K-fold —
-# tens of thousands of dispatches per DEUS run.  On top of that, the pmap'd
-# function was defined inside `train()`, so its Python-function identity was
-# fresh on every call → JAX's compile cache (keyed on `WrappedFun.f`) missed
-# and re-compiled on every `train()` call.
-#
-# The refactor below:
-#
-#   1. Hoists the pmap to module scope with a cache dict
-#      (`_TRAIN_PMAP_CACHE`) keyed on the architecture signature, model
-#      type, device count, and epoch budget.  Same arch + same budget =>
-#      cache hit => no recompile.
-#
-#   2. Fuses the per-epoch loop into a single `lax.scan` *inside* the pmap,
-#      so the entire training run is one pmap dispatch.  Early-stop is
-#      threaded through as scan carry; once tripped, subsequent epochs
-#      `lax.cond`-skip.  State stays replicated across epochs — one
-#      `jax_utils.unreplicate` at the end.
-#
-# Flax's `EarlyStopping.update` uses `math.isinf` + Python `if/else`, which
-# isn't scan-safe (tracers don't survive host-side control flow).  We
-# mirror it with a trace-safe version below.
-# ---------------------------------------------------------------------------
-
-
 @struct.dataclass
 class _ScanEarlyStopping:
     """
@@ -457,15 +424,19 @@ def _build_fused_train_pmap(model, model_type, num_devices, num_epochs):
     else:
         raise NotImplementedError(f"Model type {model_type} not implemented")
 
+    loss_dtype = jnp.asarray(0.0).dtype
+
     def _val_loss(params, valid_X, valid_y):
         y_pred = model.apply(params, valid_X)
         if model_type == 'classifier':
-            return jnp.mean(
+            out = jnp.mean(
                 optax.softmax_cross_entropy_with_integer_labels(
                     jnp.expand_dims(y_pred, axis=1), valid_y,
                 )
             )
-        return jnp.mean(jnp.square(valid_y - y_pred))
+        else:
+            out = jnp.mean(jnp.square(valid_y - y_pred))
+        return out.astype(loss_dtype)
 
     devices = [d for i, d in enumerate(jax.devices('cpu')) if i < num_devices]
 
@@ -503,7 +474,7 @@ def _build_fused_train_pmap(model, model_type, num_devices, num_epochs):
                 loss, grads = grad_fn(state.params, model, minibatch)
                 grads = lax.pmean(grads, "device")
                 new_state = state.apply_gradients(grads=grads)
-                loss_avg = lax.pmean(loss, "device")
+                loss_avg = lax.pmean(loss, "device").astype(loss_dtype)
                 val_loss = _val_loss(new_state.params, valid_X, valid_y)
                 new_es = es.update(val_loss)
                 new_done = done | new_es.should_stop
@@ -516,12 +487,7 @@ def _build_fused_train_pmap(model, model_type, num_devices, num_epochs):
                 )
 
             def skip_epoch():
-                # Identity carry; zero outputs for the already-converged tail.
-                # Dtype must match do_epoch's outputs (loss_avg / val_loss),
-                # otherwise `lax.cond` rejects the mismatched branches.
-                # Both upstream values inherit `valid_y.dtype` by broadcast,
-                # so we source the zero's dtype from there.
-                z = jnp.zeros((), dtype=valid_y.dtype)
+                z = jnp.zeros((), dtype=loss_dtype)
                 return (
                     (state, es, done, converged_at),
                     (z, z),
@@ -594,15 +560,10 @@ def train(cfg, model, data, valid_data, model_type):
     minibatches = minibatch_reshape(minibatches)
     actual_num_devices = int(minibatches['X'].shape[0])
 
-    # Initial early-stop (trace-safe mirror of flax.EarlyStopping).
-    # `best_metric` dtype must match the eventual val_loss dtype, which
-    # inherits from `valid_data.y` (data typically comes in as float64
-    # from numpy even when JAX x64 is off).  Mismatching would break
-    # `lax.cond`'s equal-output-types invariant in `epoch_body`.
     init_es = _ScanEarlyStopping.create(
         min_delta=cfg.min_delta,
         patience=cfg.patience,
-        dtype=jnp.asarray(valid_data.y).dtype,
+        dtype=jnp.asarray(0.0).dtype,
     )
 
     # Cached pmap — compiles once per (arch, model_type, device_count, num_epochs).
@@ -623,18 +584,10 @@ def train(cfg, model, data, valid_data, model_type):
     state = jax_utils.unreplicate(state_rep)
     converged_at = int(jax_utils.unreplicate(converged_at_rep))
     num_epochs = int(cfg.num_epochs)
-
-    # losses / val_losses are (num_devices, num_epochs) — all replicas agree
-    # after pmean, so take replica 0 and trim to the actual stopping epoch.
     losses_1d     = jnp.asarray(losses)[0, :converged_at]
     val_losses_1d = jnp.asarray(val_losses)[0, :converged_at]
     loss_history  = list(losses_1d)
 
-    # Per-train-call stats are logged at DEBUG — `hyperparameter_selection`
-    # emits one concise INFO summary line at the end (matching the SVM
-    # classifier's terseness).  Crank up to DEBUG in Hydra config or
-    # via `logging.getLogger().setLevel(logging.DEBUG)` when debugging
-    # individual training runs.
     if converged_at < num_epochs:
         last_loss = float(losses_1d[-1]) if losses_1d.size else 0.0
         last_val  = float(val_losses_1d[-1]) if val_losses_1d.size else 0.0
@@ -676,9 +629,6 @@ def train(cfg, model, data, valid_data, model_type):
         logging.debug(f"--- {model_type} ---")
         logging.debug(f"training_performance: {training_performance}")
 
-    # Stash on the function object so `hyperparameter_selection` can pluck
-    # the best-combo performance out for its INFO summary line without
-    # re-running the metrics computation.
     train.last_training_performance = training_performance
 
     return state.params, model, loss_history
@@ -729,7 +679,13 @@ def create_minibatches(dataset, batch_size, num_devices=1):
 
 
 def _ann_mapp(y):
-    # if this quantity is <= 0 the sample predicts feasibility
+    # Match the original `query_unstandardised_classifier` mapping:
+    #   0.5 - softmax(y)[0]
+    # `<= 0 ⇒ feasible` convention.  The earlier logit-difference variant
+    # was a workaround for the macOS XLA-CPU compile crash; that crash has
+    # since been fixed (the off-by-one in `build_ann`'s positional partial
+    # was returning garbage from every surrogate, so the SQP was solving a
+    # nonsense kernel).
     if y.ndim < 2: y = y.reshape(1, -1)
     return jnp.array([0.5]) - softmax(y, axis=-1)[0, 0]
 
@@ -773,10 +729,18 @@ def build_ann(cfg, model_data, model_class):
         y_mean = jnp.array(y_standardisation.mean)
         y_std = jnp.array(y_standardisation.std)
 
-        return partial(_ann_forward_unstd_regressor_jit, params, x_mean, x_std, y_mean, y_std, model=model)
+        def _predict_regressor(x):
+            return _ann_forward_unstd_regressor_jit(
+                params, x, x_mean, x_std, y_mean, y_std, model=model,
+            )
+        return _predict_regressor
 
     elif model_class == 'classifier':
-        return partial(_ann_forward_unstd_classifier_jit, params, x_mean, x_std, model=model)
+        def _predict_classifier(x):
+            return _ann_forward_unstd_classifier_jit(
+                params, x, x_mean, x_std, model=model,
+            )
+        return _predict_classifier
 
     else:
         raise NotImplementedError(f"Model class {model_class} not implemented")

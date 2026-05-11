@@ -28,7 +28,15 @@ def unit_steady_state(design_params, u, aux, dd_params, uncertain_params, cfg, n
 
     # defining the dynamics
     if cfg.case_study.eval_cost:
-        term = partial(case_studies[cfg.case_study.case_study](graph.env), node = node)
+        # Markov-style case studies: registered value is a factory.
+        #   - legacy 'markov_process': factory takes the MarkovEnvironment
+        #     attached to the graph (graph.env).
+        #   - cfg-driven (e.g. cstr): factory takes cfg, returns a function
+        #     with the case-study signature (cfg, design, input, aux, unc, node).
+        if cfg.case_study.case_study == 'markov_process':
+            term = partial(case_studies[cfg.case_study.case_study](graph.env), node=node)
+        else:
+            term = partial(case_studies[cfg.case_study.case_study](cfg), node=node)
     else:
         term = case_studies[cfg.case_study.case_study][node]
 

@@ -1,0 +1,74 @@
+case_study: waste_water
+
+make_markov: True
+
+vmap_evaluations: True
+
+eval_cost: True
+
+num_nodes: 20
+# 20 nodes × 0.4 d = 8 d total horizon (~6 methanogen time constants).
+# Long enough to see biology settle, short enough not to compound washout.
+
+adjacency_matrix: None
+
+n_design_args: 1
+
+n_aux_args:
+  node_0: 0
+  (0,1): 0
+
+n_input_args: 6
+
+reject_time: 0.5
+
+discount_factor: 0.99999
+
+sizes:
+  X_SIZE: 6
+  U_SIZE: 1
+  F_SIZE: 6
+  G_SIZE: 5
+  Z_SIZE: 4
+  L_SIZE: 1
+  PHI_SIZE: 0
+
+KS_bounds:
+  design_args:
+  - - 0.0
+    - 0.5
+
+  aux_args:
+  - - - None
+      - None
+
+parameters_samples: [{'c': [3.0, 30.0, 65.0, 95.0], 'w': 1.0}]
+
+parameters_best_estimate: [3.0, 30.0, 65.0, 95.0]
+# Disturbance order:  [S1_in, S2_in, Z_in, C_in].
+# C_in > Z_in + S2_in  (95 ≥ 65 + 30 = 95)  so the inflow doesn't carry
+# negative dissolved CO2 into the reactor.  Both Z_in and C_in are off the
+# initial-state values (50, 60) so dZ/dt and dC/dt are both D-dependent at t=0.
+
+extendedDS_bounds: None
+
+design_space_dimensions:
+- 'D'
+
+global_n_aux_args: 0
+
+process_space_names: ['D']
+
+mode:
+  - backward
+  - rollout
+
+evaluation_mode: 'jax-pmap'
+
+serial_graph: True
+
+unit_op: 'dynamic'
+
+n_theta: 4
+
+fn_evals: 0

@@ -141,18 +141,67 @@ def reactor_network_5(t: float, state: jnp.ndarray, parameters: jnp.ndarray):
 @requires_param('env')
 def markov_process(env: MarkovEnvironment):
     def markov_process_fn(t: float, state: jnp.ndarray, parameters: jnp.ndarray, node=None):
-        
+
         # Extracting the input args, design args, uncertainty params and node from the parameters vector
         inputs = state[..., :env.X_SIZE]
         design_args = parameters[..., :env.U_SIZE]
         uncertainties = parameters[..., env.U_SIZE:env.U_SIZE + env.Z_SIZE]
         return env(inputs, design_args, uncertainties, node=node)
-    
+
     return markov_process_fn
+
+
+def cstr_ode(cfg):
+    """Factory: returns a diffrax-shaped ODE term for the cstr case study.
+
+    Mirrors `markov_process(env)` but reads sizes from `cfg.case_study.sizes`
+    and dispatches the underlying step through `_make_cstr_step` (defined
+    alongside the steady-state factory in unit_evaluators/explicit_fn.py),
+    which closes over cfg-resolved constants and JIT-compiles the inner body.
+    """
+    from mu_F.unit_evaluators.explicit_fn import _make_cstr_step
+    X_size = int(cfg.case_study.sizes.X_SIZE)
+    U_size = int(cfg.case_study.sizes.U_SIZE)
+    step = _make_cstr_step(cfg)
+
+    def cstr_ode_fn(t: float, state: jnp.ndarray, parameters: jnp.ndarray, node=None):
+        x = state[..., :X_size]
+        u = parameters[..., :U_size]
+        # uncertainties live at parameters[..., U_size:U_size + Z_size] but
+        # cstr does not consume them (disturbances aren't injected here).
+        return step(x, u, node)
+
+    return cstr_ode_fn
+
+
+def waste_water_ode(cfg):
+    """Factory: returns a diffrax-shaped ODE term for the waste_water case study.
+
+    Bernard et al. (2001) AM2 anaerobic digestion. Unlike cstr, this case study
+    *consumes* the uncertainty / disturbance vector z = [S_1in, S_2in, Z_in, C_in].
+    Layout of `parameters` (set in unit_dynamics):
+        [design_args | dd | aux | uncertainty]  with n_dd = 0 and n_aux = 0
+    so the disturbances slice cleanly to parameters[..., U_size:U_size + Z_size].
+    """
+    from mu_F.unit_evaluators.explicit_fn import _make_waste_water_step
+    X_size = int(cfg.case_study.sizes.X_SIZE)
+    U_size = int(cfg.case_study.sizes.U_SIZE)
+    Z_size = int(cfg.case_study.sizes.Z_SIZE)
+    step = _make_waste_water_step(cfg)
+
+    def waste_water_ode_fn(t: float, state: jnp.ndarray, parameters: jnp.ndarray, node=None):
+        x = state[..., :X_size]
+        u = parameters[..., :U_size]
+        z = parameters[..., U_size:U_size + Z_size]
+        return step(x, u, z, node)
+
+    return waste_water_ode_fn
 
 
 # define a dictionary that contains unit wise dynamics for each of the nodes in the graph in the case study
 case_studies = {'serial_mechanism_batch': {0: serial_mechanism_vc_batch_dynamics_u1, 1: serial_mechanism_vc_batch_dynamics_u2},
                 'batch_reaction_network': {0: reactor_network_4, 1: reactor_network_5},
                 'markov_process': markov_process,
+                'cstr': cstr_ode,
+                'waste_water': waste_water_ode,
                 }

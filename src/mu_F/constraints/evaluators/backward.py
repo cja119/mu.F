@@ -34,6 +34,7 @@ from jax import devices
 from mu_F.constraints.evaluators.base import (
     BaseEvaluator,
     build_factory,
+    cached_parallel_thread,
     parallel_thread,
     pick_best,
     precompute_sobol_pool,
@@ -367,14 +368,10 @@ def backward_constraint_evaluator(outputs, aux, cfg, graph, node):
     evaluator = _get_evaluator(cfg, graph, node)
 
     if evaluator._graph_wide:
-        # Graph-wide: a single graph-level NLP.  No threading over samples
-        # — one solve, then broadcast to match the expected batch shape.
         thread_out = evaluator.evaluate_graph_wide(outputs, aux)
         n_batch = outputs.shape[0]
         return jnp.broadcast_to(thread_out.reshape(1, -1), (n_batch, thread_out.size)), None
 
-    # Node-local: fixed-width pmap with padding + mask (see
-    # `cost_to_go_evaluator` for the full rationale).
     if evaluator._keys() == []:
         # No successors — nothing to do.
         return jnp.zeros((outputs.shape[0], 1)), None
@@ -397,7 +394,9 @@ def backward_constraint_evaluator(outputs, aux, cfg, graph, node):
     mask_chunks = mask.reshape(n_chunks, W)
 
     devs = cpu_devs[:W]
-    pmap_fn = parallel_thread(
+    pmap_fn = cached_parallel_thread(
+        evaluator,
+        '_pmap_cache',
         evaluator._thread_node_local,
         in_axes=(0, 0, 0),
         devices=devs,

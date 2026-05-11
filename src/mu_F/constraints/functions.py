@@ -212,18 +212,57 @@ def make_markov_cost(env):
     return [partial(_markov_cost, env)]
 
 
+# -------------------------------------------------------------------------------- #
+# ----------- cfg-driven Markov slicers (no MarkovEnvironment needed) ------------ #
+# -------------------------------------------------------------------------------- #
+
+
+def _markov_cons_cfg(F_size: int, G_size: int, i: int, rollout, cfg=None):
+    return rollout[..., F_size:F_size + G_size][..., i]
+
+
+def make_markov_cons_cfg(cfg):
+    F_size = int(cfg.case_study.sizes.F_SIZE)
+    G_size = int(cfg.case_study.sizes.G_SIZE)
+    return [partial(_markov_cons_cfg, F_size, G_size, i) for i in range(G_size)]
+
+
+def _markov_cost_cfg(F_size: int, G_size: int, L_size: int, PHI_size: int, rollout, cfg=None):
+    base = F_size + G_size
+    R = rollout[..., base:base + L_size]
+    if PHI_size > 0:
+        phi = rollout[..., base + L_size:base + L_size + PHI_size]
+        return R + phi
+    return R
+
+
+def make_markov_cost_cfg(cfg):
+    sizes = cfg.case_study.sizes
+    return [partial(_markov_cost_cfg,
+                    int(sizes.F_SIZE),
+                    int(sizes.G_SIZE),
+                    int(sizes.L_SIZE),
+                    int(sizes.PHI_SIZE))]
+
+
 
 """ insert case study specific functions for constraints here"""
-CS_holder = {'tablet_press': {0: [unit1_volume_ub], 1: [unit2_volume_ub, tablet_composition_lb, tablet_composition_ub], 2: [tablet_hardness_lb, tablet_hardness_ub, tablet_size_lb, tablet_size_ub]}, 
+CS_holder = {'tablet_press': {0: [unit1_volume_ub], 1: [unit2_volume_ub, tablet_composition_lb, tablet_composition_ub], 2: [tablet_hardness_lb, tablet_hardness_ub, tablet_size_lb, tablet_size_ub]},
              'serial_mechanism_batch': {0: [purity_unit_1_ub], 1: [purity_unit_2_lb]},
              'convex_estimator': {0: [], 1: [log_term_hess_1], 2: [log_term_hess_1], 3: [], 4: [psd_constraint], 5: [estimation_bound_lb]},
              'convex_underestimator': {0: [], 1: [log_term_hess_1], 2: [log_term_hess_1], 3: [], 4: [psd_constraint], 5: [underestimation_constraint]},
              'estimator': {0: [], 1: [], 2: [], 3: [], 4: [], 5: [estimation_g_aux]},
              'affine_study': {0: [negative_output_constraint], 1: [negative_output_constraint], 2: [negative_output_constraint], 3: [negative_output_constraint], 4: [negative_output_constraint]},
-             'markov_process': make_markov_cons}
+             'markov_process': make_markov_cons,
+             'cstr': make_markov_cons_cfg,
+             'waste_water': make_markov_cons_cfg,
+             'hydrogen_export': make_markov_cons_cfg}
 
 COST_holder = {
-    'markov_process': make_markov_cost
+    'markov_process': make_markov_cost,
+    'cstr': make_markov_cost_cfg,
+    'waste_water': make_markov_cost_cfg,
+    'hydrogen_export': make_markov_cost_cfg,
 }
 
 post_process_visualiser = {

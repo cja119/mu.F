@@ -68,23 +68,40 @@ def vmap_markov_edge(env: MarkovEnvironment):
     return vmap(vmap(fn, in_axes=0, out_axes=0), in_axes=1, out_axes=1)
 
 
+def make_markov_edge_cfg(cfg):
+    """cfg-driven edge slicer: slice F block ([..., :F_SIZE]) from the bundled rollout."""
+    F_size = int(cfg.case_study.sizes.F_SIZE)
+    return lambda rollout: rollout[..., :F_size]
+
+
+def vmap_markov_edge_cfg(cfg):
+    fn = make_markov_edge_cfg(cfg)
+    return vmap(vmap(fn, in_axes=0, out_axes=0), in_axes=1, out_axes=1)
+
+
 
 """ insert case study specific functions for constraints here"""
-CS_edge_holder = {  'tablet_press': {(0,1): data_IO_1, (1,2): data_IO_2}, 'serial_mechanism_batch': {(0,1): data_transform}, 
-                    'convex_estimator': {(0,5): data_transform_cvx, (1,5): affine_cs34, (2,5): affine_cs34, 
+CS_edge_holder = {  'tablet_press': {(0,1): data_IO_1, (1,2): data_IO_2}, 'serial_mechanism_batch': {(0,1): data_transform},
+                    'convex_estimator': {(0,5): data_transform_cvx, (1,5): affine_cs34, (2,5): affine_cs34,
                                             (3,5): data_transform_cvx, (4,5): data_transform_cvx},
-                    'convex_underestimator': {(0,5): data_transform_cvx, (1,5): data_transform_cvx, (2,5): data_transform_cvx, 
+                    'convex_underestimator': {(0,5): data_transform_cvx, (1,5): data_transform_cvx, (2,5): data_transform_cvx,
                                         (3,5): data_transform_cvx, (4,5): data_transform_cvx},
                     'affine_study': {(0,2): data_transform_cvx, (1,2): data_transform_cvx, (2,3): affine_cs34, (2,4): affine_cs35},
-                    'markov_process': make_markov_edge}
+                    'markov_process': make_markov_edge,
+                    'cstr': make_markov_edge_cfg,
+                    'waste_water': make_markov_edge_cfg,
+                    'hydrogen_export': make_markov_edge_cfg}
 
 vmap_CS_edge_holder = {'tablet_press': {(0,1): vmap_data_IO_1, (1,2): vmap_data_IO_2}, 'serial_mechanism_batch': {(0,1): vmap_data_transform},
                        'estimator': {(0,5): vmap_data_transform_cvx, (1,5): vmap_data_transform_cvx, (2,5): vmap_data_transform_cvx,
                                             (3,5): vmap_data_transform_cvx, (4,5): vmap_data_transform_cvx},
-                       'convex_estimator': {(0,5): vmap_data_transform_cvx, (1,5): vmap_data_transform_cvx, (2,5): vmap_data_transform_cvx, 
+                       'convex_estimator': {(0,5): vmap_data_transform_cvx, (1,5): vmap_data_transform_cvx, (2,5): vmap_data_transform_cvx,
                                             (3,5): vmap_data_transform_cvx, (4,5): vmap_data_transform_cvx},
-                        'convex_underestimator': {(0,5): vmap_data_transform_cvx, (1,5): vmap_cs34, (2,5): vmap_cs34, 
+                        'convex_underestimator': {(0,5): vmap_data_transform_cvx, (1,5): vmap_cs34, (2,5): vmap_cs34,
                                             (3,5): vmap_data_transform_cvx, (4,5): vmap_data_transform_cvx},
                         'affine_study': {(0,2): vmap_data_transform_cvx, (1,2): vmap_data_transform_cvx, (2,3): vmap_cs34, (2,4): vmap_cs35},
-                        'markov_process': vmap_markov_edge}
+                        'markov_process': vmap_markov_edge,
+                        'cstr': vmap_markov_edge_cfg,
+                        'waste_water': vmap_markov_edge_cfg,
+                        'hydrogen_export': vmap_markov_edge_cfg}
 

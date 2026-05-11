@@ -217,6 +217,32 @@ def parallel_thread(thread_fn, *, in_axes, devices, use_vmap: bool):
     return pmap(thread_fn, in_axes=in_axes, out_axes=0, devices=devices)
 
 
+def cached_parallel_thread(owner, attr, thread_fn, *, in_axes, devices, use_vmap: bool):
+    """
+    Memoised wrapper around `parallel_thread`.
+
+    `jax.pmap(...)` allocates per-call dispatch state (incl. Mach-port-name-
+    space slots on macOS) that is NOT reclaimed when the wrapper is GC'd.
+    Rebuilding the wrapper every DEUS iteration leaks ~80–130 slots/call,
+    which crosses the per-process limit (~262k) after ~90 minutes and the
+    kernel kills the process with EXC_RESOURCE.
+
+    Build the wrapper once per `(owner, n_devices, use_vmap)` triple and
+    reuse it.  `owner` must be the cached evaluator instance so the cache
+    lives as long as the evaluator does (one entry per `(graph, node)`).
+    """
+    cache = getattr(owner, attr, None)
+    if cache is None:
+        cache = {}
+        setattr(owner, attr, cache)
+    key = (len(devices), use_vmap, in_axes)
+    fn = cache.get(key)
+    if fn is None:
+        fn = parallel_thread(thread_fn, in_axes=in_axes, devices=devices, use_vmap=use_vmap)
+        cache[key] = fn
+    return fn
+
+
 def skip_if_masked(mask, real_fn):
     """
     Conditionally execute `real_fn()` under a scalar boolean mask.

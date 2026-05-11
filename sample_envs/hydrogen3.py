@@ -45,6 +45,14 @@ SHAPE_DICT = {
     "PHI_SIZE": 0
 }    
 
+_CUMPROBS = jnp.array([0.07390548, 0.61895162, 0.74493493, 0.86740610])
+_VALUES   = jnp.array([0.02048169, 11.87977224, 0.29061465, 7.13482955, 7.78359092])
+
+def inverse_cdf(probability):
+    idx = jnp.searchsorted(_CUMPROBS, probability, side='right')
+    return _VALUES[idx]
+
+
 
 
 @partial(jax.jit, static_argnums=(0,))
@@ -54,22 +62,14 @@ def simulator(
     """
     Combined simulator for the H2 Export model.
     """
-    weather_map = jnp.array(
-        [
-            11.88, 11.88, 11.88, 11.88, 11.88, 11.88, 11.88, 11.88, 11.88, 11.88,
-            11.88, 11.88, 11.88, 11.88, 11.88, 11.88, 11.88, 11.88, 11.88, 11.88,
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-        ]
-    )
-    #weather_map = 11.88 * jnp.linspace(0.75, 0.25, 10)
     
     # Implement the simulation logic
     _hydrogen_storage = x[..., 0]
     _train_1_throughput = x[..., 1]
     _train_2_throughput = x[..., 1]
     _train_3_throughput = x[..., 1]
-    _renewable_energy = jnp.take(weather_map, node)  # z[..., 0] if z is not None else param_dict["renewable_energy_value"]
+    _renewable_energy = inverse_cdf(z)
+    
     ramp_t1 = u[..., 0]
     ramp_t2 = u[..., 0]
     ramp_t3 = u[..., 0]

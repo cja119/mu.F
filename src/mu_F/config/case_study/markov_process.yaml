@@ -1,6 +1,20 @@
 case_study: markov_process
 
+make_markov: True
+
 env_file: "../../../../../sample_envs/hydrogen.py"
+
+# Sizes block — duplicates SHAPE_DICT in sample_envs/hydrogen.py for downstream
+# cfg-driven slicers. The legacy MarkovEnvironment still reads them from the env
+# file; this block is read by cstr-style slicers and unit_evaluators.
+sizes:
+  X_SIZE: 2
+  U_SIZE: 2
+  F_SIZE: 2
+  G_SIZE: 5
+  Z_SIZE: 1
+  L_SIZE: 1
+  PHI_SIZE: 0
 
 vmap_evaluations: True
 

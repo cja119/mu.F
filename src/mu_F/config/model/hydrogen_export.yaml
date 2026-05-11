@@ -1,0 +1,45 @@
+root_node_inputs:
+  - [147717.5, 700]    # [hydrogen_storage (50% of capacity), train_throughput]
+
+constraint:
+  auxiliary: 'None'
+
+node_aux: None
+
+feas_thresh: 0.1
+
+memory: false
+
+# Bernard / Pound H2 export parameters (matches sample_envs/hydrogen3.py ENV_PARAMS).
+
+hydrogen_storage_capacity: 295435
+vector_storage_capacity: 0.0
+n_turbines: 1513
+n_trains_conversion: 4
+hfc_capacity: 832
+train_throughput_capacity: 114
+vector_molar_efficiency: 0.888
+electrolyser_efficiency: 0.85
+fuelcell_efficiency: 0.6
+fixed_energy_penalty: 0.4
+variable_energy_penalty: 1.826
+vector_calorific_value: 18.8
+lower_ramp_limit: 0.25
+upper_ramp_limit: 0.1
+lower_storage_limit: 0.2
+upper_storage_limit: 295435
+
+# Control-effort weight on the squared-ramp penalty in the reward.
+# Original `lambda` keyword renamed to lambda_penalty (yaml-safe).
+lambda_penalty: 1.0e-4
+
+# Steady-state case study — integration block kept for parity with other yamls
+# but unused by the unit_op=steady_state dispatch.
+integration:
+  scheme: tsit5
+  step_size_controller: pid
+  t0: 0
+  tf: 1.0
+  dt0: Null
+  max_steps: 50000
+  vmap_chunk_size: 0

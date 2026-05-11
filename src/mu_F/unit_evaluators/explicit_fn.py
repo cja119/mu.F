@@ -890,9 +890,300 @@ def markov_process(env: MarkovEnvironment):
     return markov_process_fn
 
 
-case_studies = {'tablet_press': {0: unit_1_dynamics, 1: unit_2_dynamics, 2: unit_3_dynamics}, 
+# -------------------------------------------------------------------------------- #
+# ----------------------------- CSTR (pcgym, jax) -------------------------------- #
+# -------------------------------------------------------------------------------- #
+
+def _smooth_log(z, z0=0.02):
+    f0 = jnp.log(z0)
+    f1 = 1.0 / z0
+    f2 = -1.0 / (z0 * z0)
+    delta = z - z0
+    fallback = f0 + f1 * delta + 0.5 * f2 * delta * delta
+    return jnp.where(z >= z0, jnp.log(jnp.maximum(z, 1e-30)), fallback)
+
+
+def _make_cstr_step(cfg: DictConfig):
+    """Factory: build a JIT-compiled CSTR step function.
+
+    All cfg-dependent values (constraint thresholds, setpoint trajectory,
+    pcgym model class) are resolved eagerly into Python scalars / jnp arrays /
+    Python objects at factory time, so the inner JIT'd body only ever touches
+    JAX arrays. This avoids OmegaConf attribute-access overhead inside the
+    per-step trace and makes the step XLA-friendly.
+    """
+    import importlib
+
+    t_lower = float(cfg.model.t_lower)
+    t_upper = float(cfg.model.t_upper)
+    sp_ca = jnp.asarray(list(cfg.model.sp_ca))
+
+    mod = importlib.import_module("pcgym.model_classes")
+    model = getattr(mod, str(cfg.model.pcgym_model_class))(int_method="jax")
+
+    @jit
+    def _step(x: jnp.ndarray, u: jnp.ndarray, node):
+        x = jnp.ravel(x)
+        u = jnp.ravel(u)
+        dxdt = model(x, u).squeeze()
+
+        g_lower = -jnp.minimum(0.0, (x[1] - t_lower) / t_upper)
+        g_upper = -jnp.minimum(0.0, (t_upper - x[1]) / t_upper)
+        dgdt = jnp.concatenate([jnp.atleast_1d(g_lower), jnp.atleast_1d(g_upper)], axis=0)
+
+        rwd = _smooth_log(jnp.abs(jnp.take(sp_ca, node) - x[0]))
+
+        return jnp.concatenate([jnp.ravel(dxdt), jnp.ravel(dgdt), jnp.ravel(rwd)], axis=0)
+
+    return _step
+
+
+def cstr_simulator(cfg: DictConfig):
+    """Factory for the CSTR steady-state-style simulator (used when
+    unit_op == 'steady_state'). Returns a function with the standard
+    case-study signature (cfg, design_args, input_args, aux, uncertainties, node).
+
+    The inner step is JIT-compiled with cfg-resolved constants closed over.
+
+    Bundled tensor returned by the step is [F | G | R] (no terminal cost):
+        F = dxdt       (state derivatives, F_SIZE = X_SIZE = 2)
+        G = path cons  (lower / upper temperature, G_SIZE = 2)
+        R = stage cost (smooth log distance to setpoint, L_SIZE = 1)
+    """
+    step = _make_cstr_step(cfg)
+
+    def cstr_simulator_fn(cfg_unused: DictConfig, design_args, input_args, aux, uncertainties, node):
+        return step(input_args, design_args, node)
+
+    return cstr_simulator_fn
+
+
+# -------------------------------------------------------------------------------- #
+# -------- Waste water (Bernard et al. 2001 AM2 anaerobic digestion) ------------- #
+# -------------------------------------------------------------------------------- #
+
+def _make_waste_water_step(cfg: DictConfig):
+    """Factory: build a JIT-compiled AM2 step function.
+
+    Returns a function with signature `_step(x, u, z, node)` that emits the
+    bundled tensor [F | G | R] of shape (X_SIZE + G_SIZE + L_SIZE,) = 12:
+        F = dxdt        (state derivatives, F_SIZE = X_SIZE = 6)
+        G = path cons   (5 feasibility margins, positive = feasible)
+        R = stage cost  (-q_m / Q_M_REF, lower is better; du² penalty dropped)
+
+    All cfg-dependent constants are resolved eagerly at factory time so the
+    inner JIT'd body only touches plain JAX arrays.
+    """
+    # Kinetics
+    mu_1_max = float(cfg.model.mu_1_max)
+    k_s1     = float(cfg.model.k_s1)
+    mu_2_max = float(cfg.model.mu_2_max)
+    k_s2     = float(cfg.model.k_s2)
+    k_i2     = float(cfg.model.k_i2)
+    # Physical / transfer
+    kl_a     = float(cfg.model.kl_a)
+    p_t      = float(cfg.model.p_t)
+    k_h      = float(cfg.model.k_h)
+    # Yields
+    k_1 = float(cfg.model.k_1)
+    k_2 = float(cfg.model.k_2)
+    k_3 = float(cfg.model.k_3)
+    k_4 = float(cfg.model.k_4)
+    k_5 = float(cfg.model.k_5)
+    k_6 = float(cfg.model.k_6)
+    # Constraint thresholds
+    GAMMA    = float(cfg.model.gamma)
+    COD_MAX  = float(cfg.model.cod_max)
+    S2_MAX   = float(cfg.model.s2_max)
+    PH_MIN   = float(cfg.model.ph_min)
+    PH_MAX   = float(cfg.model.ph_max)
+    K_B      = float(cfg.model.k_b)
+    EPS_Z_S2 = float(cfg.model.eps_z_s2)
+    # Reward scaling
+    Q_M_REF  = float(cfg.model.q_m_ref)
+    # Auxiliary (biomass-in-liquid fraction)
+    alpha    = float(cfg.model.alpha)
+
+    @jit
+    def _step(x: jnp.ndarray, u: jnp.ndarray, z: jnp.ndarray, node):
+        x = jnp.ravel(x)
+        u = jnp.ravel(u)
+        z = jnp.ravel(z)
+
+        X1, X2, Z, S1, S2, C = x[0], x[1], x[2], x[3], x[4], x[5]
+        D = u[0]
+        S1_in, S2_in, Z_in, C_in = z[0], z[1], z[2], z[3]
+
+        # Kinetics
+        mu_1 = mu_1_max * S1 / (k_s1 + S1)
+        mu_2 = mu_2_max * S2 / (S2 + k_s2 + S2 * S2 / k_i2)
+
+        # CO2 in liquid 
+        co2 = C + S2 - Z
+        phi = co2 + k_h * p_t + (k_6 / kl_a) * mu_2 * X2
+        p_c = (phi - jnp.sqrt(phi * phi - 4.0 * k_h * p_t * co2)) / (2.0 * k_h)
+        q_c = kl_a * (co2 - k_h * p_c)
+
+        # Mass balances (Eqs. 20-25)
+        dX1 = (mu_1 - alpha * D) * X1
+        dX2 = (mu_2 - alpha * D) * X2
+        dZ  = D * (Z_in - Z)
+        dS1 = D * (S1_in - S1) - k_1 * mu_1 * X1
+        dS2 = D * (S2_in - S2) + k_2 * mu_1 * X1 - k_3 * mu_2 * X2
+        dC  = D * (C_in - C)   - q_c           + k_4 * mu_1 * X1 + k_5 * mu_2 * X2
+        dxdt = jnp.array([dX1, dX2, dZ, dS1, dS2, dC])
+
+        # Path constraints. 
+        g_cod   = (S1 + GAMMA * S2) - COD_MAX
+        g_s2    = S2 - S2_MAX
+        g_ph_hi = 10.0 ** (-PH_MAX) * (Z - S2) - K_B * (C - Z + S2)
+        g_ph_lo = K_B * (C - Z + S2) - 10.0 ** (-PH_MIN) * (Z - S2)
+        g_zs2   = EPS_Z_S2 - (Z - S2)
+        dgdt = -jnp.maximum(jnp.array([g_cod, g_s2, g_ph_hi, g_ph_lo, g_zs2]), 0.0)
+
+        # Stage cost
+        q_m = k_6 * mu_2 * X2
+        rwd = -q_m / Q_M_REF
+
+        return jnp.concatenate([jnp.ravel(dxdt), jnp.ravel(dgdt), jnp.atleast_1d(rwd)], axis=0)
+
+    return _step
+
+
+def waste_water_simulator(cfg: DictConfig):
+    """Factory for the waste-water steady-state-style simulator (used when
+    unit_op == 'steady_state'). Returns a function with the standard
+    case-study signature (cfg, design, input, aux, uncertainties, node)."""
+    step = _make_waste_water_step(cfg)
+
+    def waste_water_simulator_fn(cfg_unused: DictConfig, design_args, input_args, aux, uncertainties, node):
+        return step(input_args, design_args, uncertainties, node)
+
+    return waste_water_simulator_fn
+
+
+# -------------------------------------------------------------------------------- #
+# ----------------- Hydrogen export (port of sample_envs/hydrogen3.py) ----------- #
+# -------------------------------------------------------------------------------- #
+
+def _make_hydrogen_export_step(cfg: DictConfig):
+    """Factory: build a JIT-compiled hydrogen-export steady-state step.
+
+    Port of sample_envs/hydrogen3.py: 3-train ammonia-vector hydrogen export.
+    Renewable-energy disturbance is consumed *directly* (z = energy value),
+    matching the legacy markov_process.yaml `parameters_*` semantics — the
+    discrete distribution lives in `cfg.case_study.parameters_samples`, not
+    in an inverse-CDF table.
+
+    Returns a function `_step(x, u, z, node)` emitting the bundled tensor
+    [F | G | R] of shape (X_SIZE + G_SIZE + L_SIZE,) = (2 + 3 + 1,) = 6:
+        F = [hydrogen_storage, train_throughput]    (next state, F_SIZE=2)
+        G = [lower_h2_storage, upper_h2_storage,
+             energy_balance]                         (positive = feasible, G_SIZE=3)
+        R = stage cost  (lower = better; 3-train negative throughput +
+                         storage decay - lambda·||ramp||²)
+
+    Note: hydrogen3.py treats the 3 conversion trains identically (same state
+    component x[1], same control component u[0]), so the dynamics collapse to
+    one shared throughput multiplied by 3.
+    """
+    # Capacities / counts
+    n_turbines              = float(cfg.model.n_turbines)
+    train_throughput_cap    = float(cfg.model.train_throughput_capacity)
+    # Efficiencies / penalties
+    vector_molar_efficiency = float(cfg.model.vector_molar_efficiency)
+    electrolyser_efficiency = float(cfg.model.electrolyser_efficiency)
+    fuelcell_efficiency     = float(cfg.model.fuelcell_efficiency)
+    fixed_energy_penalty    = float(cfg.model.fixed_energy_penalty)
+    variable_energy_penalty = float(cfg.model.variable_energy_penalty)
+    vector_calorific_value  = float(cfg.model.vector_calorific_value)
+    # Storage limits
+    lower_storage_limit     = float(cfg.model.lower_storage_limit)
+    upper_storage_limit     = float(cfg.model.upper_storage_limit)
+    # Reward
+    lambda_penalty          = float(cfg.model.lambda_penalty)
+
+    train_throughput_max = vector_calorific_value * train_throughput_cap
+
+    @jit
+    def _step(x: jnp.ndarray, u: jnp.ndarray, z: jnp.ndarray, node):
+        x = jnp.ravel(x)
+        u = jnp.ravel(u)
+        z = jnp.ravel(z)
+
+        _hydrogen_storage  = x[0]
+        _train_throughput  = x[1]
+        ramp_t             = u[0]
+        hydrogen_throughput = u[1]
+
+        # Disturbance: z is the renewable-energy value 
+        _renewable_energy = z[0]
+
+        # All three trains share the same state and ramp
+        train_throughput = jnp.clip(_train_throughput + ramp_t, 0.0, train_throughput_max)
+
+        # Vector energy per train (3 identical trains).
+        vector_energy_per_train = (
+            train_throughput * (variable_energy_penalty / vector_calorific_value)
+            * (1.0 - fixed_energy_penalty)
+            + fixed_energy_penalty * variable_energy_penalty * train_throughput_cap
+        )
+        vector_energy_total = 3.0 * vector_energy_per_train
+
+        # Electrolyser / fuel cell.
+        energy_electrolysis = jnp.maximum(hydrogen_throughput / electrolyser_efficiency, 0.0)
+        energy_fuelcell     = jnp.maximum(-hydrogen_throughput / fuelcell_efficiency, 0.0)
+
+        # Hydrogen consumption (3 trains).
+        hydrogen_consumption = 3.0 * train_throughput / vector_molar_efficiency
+
+        # Storage update (raw, before clipping for state propagation).
+        hydrogen_storage = _hydrogen_storage + hydrogen_throughput - hydrogen_consumption
+
+        # Constraints: positive = feasible margin (already in framework convention).
+        lower_h2 = (hydrogen_storage - lower_storage_limit * upper_storage_limit) / upper_storage_limit
+        upper_h2 = (upper_storage_limit - hydrogen_storage) / upper_storage_limit
+        energy_balance = (
+            n_turbines * _renewable_energy - energy_electrolysis - vector_energy_total + energy_fuelcell
+        ) / (11.88 * n_turbines)
+
+        # Clip storage for state passthrough (saturate at physical limits).
+        hydrogen_storage = jnp.clip(
+            hydrogen_storage,
+            lower_storage_limit * upper_storage_limit,
+            upper_storage_limit,
+        )
+
+        # Reward: cost convention (lower = better). 3 identical trains, 3 identical ramps.
+        penalty = 3.0 * jnp.square(ramp_t)
+        reward = -(3.0 * train_throughput + 0.1 * _hydrogen_storage - lambda_penalty * penalty)
+
+        outputs     = jnp.array([hydrogen_storage, train_throughput])      # F
+        constraints = jnp.array([lower_h2, upper_h2, energy_balance])       # G
+        cost        = jnp.atleast_1d(reward)                                # R
+
+        return jnp.concatenate([outputs, constraints, cost], axis=0)
+
+    return _step
+
+
+def hydrogen_export_simulator(cfg: DictConfig):
+    """Factory for hydrogen_export (steady-state). Returns a function with the
+    standard case-study signature (cfg, design, input, aux, uncertainties, node)."""
+    step = _make_hydrogen_export_step(cfg)
+
+    def hydrogen_export_simulator_fn(cfg_unused: DictConfig, design_args, input_args, aux, uncertainties, node):
+        return step(input_args, design_args, uncertainties, node)
+
+    return hydrogen_export_simulator_fn
+
+
+case_studies = {'tablet_press': {0: unit_1_dynamics, 1: unit_2_dynamics, 2: unit_3_dynamics},
                 'convex_estimator': {0: sub_fn_1, 1: sub_fn_2, 2: sub_fn_3, 3: sub_fn_4, 4: sub_fn_5, 5: sub_fn_6},
                 'convex_underestimator': {0: sub_fn_1, 1: sub_fn_2, 2: sub_fn_3, 3: sub_fn_4, 4: sub_fn_5, 5: sub_fn_6},
                 'estimator': {0: esub_fn_1, 1: esub_fn_2, 2: esub_fn_3, 3: esub_fn_4, 4: esub_fn_5, 5: esub_fn_6},
                 'affine_study': {0: affine_case_study_1, 1: affine_case_study_2, 2: affine_case_study_3, 3: affine_case_study_4, 4: affine_case_study_5},
-                'markov_process': markov_process}
+                'markov_process': markov_process,
+                'cstr': cstr_simulator,
+                'waste_water': waste_water_simulator,
+                'hydrogen_export': hydrogen_export_simulator}

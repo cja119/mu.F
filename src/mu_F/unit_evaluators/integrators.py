@@ -47,8 +47,19 @@ def unit_dynamics(design_params, u, aux, decision_dependent, uncertainty_params,
 
     # defining the dynamics
     if cfg.case_study.eval_cost:
-        term = ODETerm(partial(case_studies[cfg.case_study.case_study](graph.env), node = node))
-        u = jnp.concatenate([u, jnp.zeros(u.shape[:-1] + (graph.env.G_SIZE + 1,))], axis=-1) # Path constraints + stage cost  both start at 0.
+        # Markov-style: registered value is a factory.
+        #   - legacy 'markov_process': factory takes the MarkovEnvironment
+        #     attached to the graph (graph.env).
+        #   - cfg-driven (e.g. cstr): factory takes cfg, returns a diffrax-shaped
+        #     (t, state, parameters, node) function. Sizes come from cfg.case_study.sizes.
+        if cfg.case_study.case_study == 'markov_process':
+            term = ODETerm(partial(case_studies[cfg.case_study.case_study](graph.env), node=node))
+            pad = graph.env.G_SIZE + 1
+        else:
+            term = ODETerm(partial(case_studies[cfg.case_study.case_study](cfg), node=node))
+            sizes = cfg.case_study.sizes
+            pad = int(sizes.G_SIZE) + int(sizes.L_SIZE)
+        u = jnp.concatenate([u, jnp.zeros(u.shape[:-1] + (pad,))], axis=-1) # Path constraints + stage cost both start at 0.
     else:
         term = ODETerm(case_studies[cfg.case_study.case_study][node])
 

@@ -96,12 +96,17 @@ class graph_constructor(graph_constructor_base):
         return
 
 class markov_graph_constructor(graph_constructor):
-    def __init__(self, cfg, env_file: str):
+    def __init__(self, cfg, env_file=None):
         adjacency_matrix = self._build_adjacency_matrix(cfg)
         super().__init__(cfg, adjacency_matrix)
-        env = self._build_env(cfg.case_study.env_file, cfg)
-        self.G.env = env
-        self.G.graph['env'] = env
+        # Legacy path: load env from a sample_envs/*.py file (hydrogen, biohydrogen, ...).
+        # New cfg-driven path (e.g. cstr): env_file is None, simulator and slicers
+        # come from registries keyed by cfg.case_study.case_study and read sizes
+        # from cfg.case_study.sizes.
+        if env_file is not None:
+            env = self._build_env(env_file, cfg)
+            self.G.env = env
+            self.G.graph['env'] = env
 
     def get_graph(self):
         g = self.G.copy()
@@ -132,8 +137,10 @@ class markov_graph_constructor(graph_constructor):
 
     def add_arg_to_nodes(self, arg_name, arg_value):
         for node in self.G.nodes:
-            if callable(arg_value) and check_requires(arg_value, 'env'):
+            if callable(arg_value) and check_requires(arg_value, 'env') and hasattr(self.G, 'env'):
                 self.G.nodes[node][arg_name] = arg_value(self.G.env)
+            elif callable(arg_value) and check_requires(arg_value, 'cfg'):
+                self.G.nodes[node][arg_name] = arg_value(self.cfg)
             else:
                 self.G.nodes[node][arg_name] = arg_value
         return None
@@ -141,15 +148,19 @@ class markov_graph_constructor(graph_constructor):
     def add_arg_to_edges(self, arg_name, arg_value):
         for (i, j) in self.G.edges:
             v = arg_value[(i, j)] if isinstance(arg_value, dict) else arg_value
-            if callable(v) and check_requires(v, 'env'):
+            if callable(v) and check_requires(v, 'env') and hasattr(self.G, 'env'):
                 self.G.edges[i, j][arg_name] = v(self.G.env)
+            elif callable(v) and check_requires(v, 'cfg'):
+                self.G.edges[i, j][arg_name] = v(self.cfg)
             else:
                 self.G.edges[i, j][arg_name] = v
         return None
-    
+
     def add_arg_to_edge(self, i, j, arg_name, arg_value):
-        if callable(arg_value) and check_requires(arg_value, 'env'):
+        if callable(arg_value) and check_requires(arg_value, 'env') and hasattr(self.G, 'env'):
             self.G.edges[i,j][arg_name] = arg_value(self.G.env)
+        elif callable(arg_value) and check_requires(arg_value, 'cfg'):
+            self.G.edges[i,j][arg_name] = arg_value(self.cfg)
         elif callable(arg_value):
             self.G.edges[i,j][arg_name] = arg_value
         else:

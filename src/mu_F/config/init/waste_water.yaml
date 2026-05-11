@@ -1,0 +1,5 @@
+sobol_samples: 4096
+sampler: 'sobol'
+# 4× the previous 1024 — gives the per-node propagated-state distribution
+# enough coverage that DEUS bounds at deep nodes don't over-include
+# pathological washout / acidification states.

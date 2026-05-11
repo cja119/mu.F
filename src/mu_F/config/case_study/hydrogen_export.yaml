@@ -1,0 +1,82 @@
+case_study: hydrogen_export
+
+make_markov: True
+
+vmap_evaluations: True
+
+eval_cost: True
+
+# 24-h horizon by default (one node per hour). Adjust as needed.
+num_nodes: 24
+
+adjacency_matrix: None
+
+n_design_args: 2
+
+n_aux_args:
+  node_0: 0
+  (0,1): 0
+
+n_input_args: 2
+
+reject_time: 5
+
+discount_factor: 0.99999
+
+sizes:
+  X_SIZE: 2
+  U_SIZE: 2
+  F_SIZE: 2
+  G_SIZE: 3
+  Z_SIZE: 1
+  L_SIZE: 1
+  PHI_SIZE: 0
+
+# u = [ramp_t, hydrogen_throughput]
+KS_bounds:
+  design_args:
+  - - -535.8
+    - 214.32
+  - - -1387.8
+    - 18954.2
+  aux_args:
+  - - - None
+      - None
+
+# Renewable-energy disturbance is fed directly as the energy value (no inverse_cdf).
+# `c` is a 5-bin discrete distribution over the renewable-energy values; `w` are
+# the corresponding probabilities. `parameters_best_estimate` is the expected value.
+parameters_samples: [{'c': [0.02048169, 11.87977224, 0.29061465, 7.13482955, 7.78359092],
+                      'w': [0.07390548, 0.54504614, 0.12598331, 0.12247117, 0.13259390]}]
+
+parameters_best_estimate: [8.420454054312653]
+
+# 4-d extended DS for reconstruction plotting:
+# [u0 (ramp_t), u1 (hydrogen_throughput), hydrogen_storage, train_throughput]
+extendedDS_bounds:
+  - [-535.8, 214.32]
+  - [-1387.8, 18954.2]
+  - [59087, 295435]
+  - [0, 2143.2]
+
+design_space_dimensions:
+- 'u0'
+- 'u1'
+
+global_n_aux_args: 0
+
+process_space_names: ['u0', 'u1']
+
+mode:
+  - backward
+  - rollout
+
+evaluation_mode: 'jax-pmap'
+
+serial_graph: True
+
+unit_op: 'steady_state'
+
+n_theta: 1
+
+fn_evals: 0

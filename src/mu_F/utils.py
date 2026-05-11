@@ -256,13 +256,54 @@ class feasibility_base(ABC):
         """
         pass
 
+class feasibility_function:
+    """
+    Per-design weighted joint-feasibility probability under a discrete uncertainty set.
+
+    For each design row, computes
+        sum_theta w_theta * 1[g_i(d, theta) feasible for all i]
+    over the supplied constraint tensor and scenario weights.
+
+    Note: deliberately *not* inheriting from `feasibility_base` — that class's
+    __init__ binds `self.feasible_function` to a stub method, which would
+    shadow the method defined here.
+    """
+    def __init__(self, dataset_X, dataset_Y, cfg, node, feasibility=None):
+        # `dataset_Y` carries the constraint tensor, shape (N_batch, n_theta, n_g);
+        # `dataset_X` and `feasibility` accepted for call-site signature parity
+        # with the rest of `feasibility_base`'s subclasses but are unused here.
+        self.dataset_X = dataset_X
+        self.dataset_Y = dataset_Y
+        self.cfg = cfg
+        self.node = node
+
+    def feasible_function(self, probabilities):
+        Y = self.dataset_Y  # (N_batch, n_theta, n_g)
+
+        if self.cfg.samplers.notion_of_feasibility == 'positive':
+            feasibility = jnp.where(Y >= 0, 1.0, 0.0)
+        else:
+            feasibility = jnp.where(Y <= 0, 1.0, 0.0)
+
+        all_feasible = feasibility.prod(axis=-1)  # AND across constraints -> (N_batch, n_theta)
+
+        probabilities = jnp.asarray(probabilities).reshape(-1)
+        assert all_feasible.shape[1] == probabilities.size, (
+            f"Number of weights ({probabilities.size}) must match the scenario axis "
+            f"({all_feasible.shape[1]})."
+        )
+
+        return (all_feasible * probabilities[jnp.newaxis, :]).sum(axis=-1)  # (N_batch,)
+
 
 class apply_feasibility(feasibility_base):
     def __init__(self, dataset_X, dataset_Y, cfg, node, feasibility):
         super().__init__(dataset_X, dataset_Y, cfg, node, feasibility)
 
     def get_feasible(self, return_indices=True):
-        return self.feasible_function(self.dataset_X, self.dataset_Y, return_indices)
+        # Both `probabilistic_feasibility` and `deterministic_feasibility`
+        # already read X, Y off `self` — pass only `return_indices`.
+        return self.feasible_function(return_indices=return_indices)
 
     def probabilistic_feasibility(self, return_indices=True):
         """
@@ -293,13 +334,14 @@ class apply_feasibility(feasibility_base):
         else:
             return jnp.vstack(X), jnp.vstack(Y_s), [ys >= self.cfg.samplers.unit_wise_target_reliability[self.node] for ys in Y_s]
 
-    def deterministic_feasibility(self, X, Y, return_indices=True):
+    def deterministic_feasibility(self, return_indices=True):
         """
         Method to evaluate the deterministic feasibility of the data
         """
+        X, Y = self.dataset_X, self.dataset_Y
         cond = []
         labels = []
-        for x, y in zip(X,Y):
+        for x, y in zip(X, Y):
             if self.cfg.samplers.notion_of_feasibility == 'positive':
                 lab = jnp.min(y, axis=-1)
                 select_cond = lab  >= 0 

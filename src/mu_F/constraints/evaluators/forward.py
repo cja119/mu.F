@@ -35,6 +35,7 @@ from mu_F.constraints.evaluators.base import (
     BaseEvaluator,
     build_factory,
     build_penalty_screener,
+    cached_parallel_thread,
     parallel_thread,
     pick_best,
     pick_x0_batch,
@@ -265,7 +266,9 @@ def forward_constraint_evaluator(inputs, aux, cfg, graph, node):
     mask_chunks = mask.reshape(n_chunks, W)
 
     devs = cpu_devs[:W]
-    pmap_fn = parallel_thread(
+    pmap_fn = cached_parallel_thread(
+        evaluator,
+        '_pmap_cache',
         evaluator._thread,
         in_axes=(0, 0, 0),
         devices=devs,

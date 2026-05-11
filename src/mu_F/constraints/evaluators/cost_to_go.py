@@ -32,6 +32,7 @@ the backward pass) was removed in the port: the call site in
 """
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import devices
@@ -40,8 +41,8 @@ from mu_F.constraints.evaluators.base import (
     BaseEvaluator,
     build_factory,
     build_penalty_screener,
+    cached_parallel_thread,
     parallel_thread,
-    pick_best,
     pick_x0_batch,
     precompute_sobol_pool,
     skip_if_masked,
@@ -189,7 +190,12 @@ class CTGEvaluator(BaseEvaluator):
 
     def evaluate(self, outputs_s, aux_s, mask_s):
         """
-        Shard body.
+        Shard body — per-scenario CTG via septal's parametric batch.
+
+        Stacks `(start, scenario)` pairs into a single flat batch for one
+        `solve_batch` call.  Per-scenario start selection (the L1-penalty
+        screen) is `vmap`-ed over the uncertainty axis since each scenario
+        gets its own succ_input.
 
         Parameters
         ----------
@@ -197,35 +203,49 @@ class CTGEvaluator(BaseEvaluator):
         aux_s     : (N_uncertainty, N_aux)
         mask_s    : scalar bool — True on real lanes, False on padded lanes
 
-        Returns `(evals, flags)` each shape `(1, N_successors)` for this thread.
-        Padded lanes skip the SQP via `lax.cond` and return zeros.
+        Returns
+        -------
+        (evals, flags) : each shape (N_uncertainty, N_successors)
+            `evals[t, k]` is the minimised CTG for scenario t at successor k.
+            `flags[t, k]` is the convergence flag for the chosen start.
+
+        Deterministic case studies pass `N_uncertainty == 1`, in which case
+        the per-scenario axis is a singleton and the call is equivalent to
+        a single design × successor solve.
         """
         def real():
             succ_inputs = get_successor_inputs(self.graph, self.node, outputs_s)
 
             evals, flags = [], []
             for succ in self._keys():
-                # First (and only) uncertainty realisation.  N_uncertainty=1 in
-                # every deterministic case study; probabilistic raises upstream.
-                # `y` is passed straight through — the classifier / CTG
-                # surrogates self-scale.
-                y = succ_inputs[succ][0]
+                ys = succ_inputs[succ]                      # (N_unc, n_fix)
+                n_unc = ys.shape[0]
+                n_starts = self.n_starts
+                sobol = self.sobol_pool[succ]
+                screener = self.screeners[succ]
 
-                x0_batch = pick_x0_batch(
-                    self.sobol_pool[succ],
-                    self.screeners[succ],
-                    y,
-                    self.n_starts,
-                )
-                p_batch = jnp.broadcast_to(
-                    y.reshape(1, -1), (self.n_starts, self.n_fix[succ]),
-                )
+                # Per-scenario screen → (N_unc, n_starts, n_d).
+                def _screen_one(y):
+                    return pick_x0_batch(sobol, screener, y, n_starts)
+                x0_per_scenario = jax.vmap(_screen_one)(ys)
+                x0_stacked = x0_per_scenario.reshape(n_unc * n_starts, -1)
+                p_stacked  = jnp.repeat(ys, n_starts, axis=0)
 
-                result = self.factories[succ].solve_batch(x0_batch, p_batch)
-                best_f, best_c, _ = pick_best(result)
+                result = self.factories[succ].solve_batch(x0_stacked, p_stacked)
 
-                evals.append(best_f.reshape(-1, 1))
-                flags.append(best_c.reshape(-1, 1))
+                objectives = result.objective.reshape(n_unc, n_starts)
+                success    = jnp.asarray(result.success).reshape(n_unc, n_starts)
+                ranked     = jnp.where(success, objectives, objectives + 1e10)
+                best_idx   = jnp.argmin(ranked, axis=1)
+                best_obj   = jnp.take_along_axis(
+                    objectives, best_idx[:, None], axis=1,
+                ).squeeze(-1)
+                best_succ  = jnp.take_along_axis(
+                    success, best_idx[:, None], axis=1,
+                ).squeeze(-1)
+
+                evals.append(best_obj.reshape(-1, 1))
+                flags.append(best_succ.reshape(-1, 1))
 
             return jnp.hstack(evals), jnp.hstack(flags)
 
@@ -277,9 +297,9 @@ def cost_to_go_evaluator(outputs, aux, cfg, graph, node):
 
     Returns
     -------
-    evaluations   : (N_batch, N_successors) — NaN on any row where the
-                    padded-lane mask applied (defensive poison).
-    success_flags : (N_batch, N_successors)
+    evaluations   : (N_batch, N_uncertainty, N_successors) — NaN on any row
+                    where the padded-lane mask applied (defensive poison).
+    success_flags : (N_batch, N_uncertainty, N_successors)
     """
     evaluator = _get_evaluator(cfg, graph, node)
 
@@ -302,7 +322,9 @@ def cost_to_go_evaluator(outputs, aux, cfg, graph, node):
     mask_chunks = mask.reshape(n_chunks, W)
 
     devs = cpu_devs[:W]
-    pmap_fn = parallel_thread(
+    pmap_fn = cached_parallel_thread(
+        evaluator,
+        '_pmap_cache',
         evaluator._thread,
         in_axes=(0, 0, 0),
         devices=devs,

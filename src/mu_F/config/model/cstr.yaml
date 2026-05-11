@@ -1,0 +1,38 @@
+root_node_inputs:
+  - [0.8, 330.0]
+
+constraint:
+  auxiliary: 'None'
+
+node_aux: None
+
+feas_thresh: 0.1
+
+memory: false
+
+# pcgym model class to dispatch in cstr_simulator
+pcgym_model_class: cstr_ode
+
+# pcgym ENV_PARAMS that are used inside the simulator
+N: 20
+tsim: 26
+sp_ca: [0.85, 0.85, 0.85, 0.85, 0.85, 0.85, 0.85, 0.85, 0.85, 0.85,
+        0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9,]
+
+# Constraint thresholds (path constraints embedded in simulator G block)
+t_lower: 315.0
+t_upper: 331.0
+
+# Disturbance bounds (for Z, currently not injected in simulator but kept for symmetry)
+disturbance_keys: ['Ti', 'Caf']
+disturbance_low: [325.0, 0.95]
+disturbance_high: [375.0, 1.05]
+
+integration:
+  scheme: tsit5
+  step_size_controller: pid
+  t0: 0
+  tf: 0.56
+  dt0: Null
+  max_steps: 100000
+  vmap_chunk_size: 0

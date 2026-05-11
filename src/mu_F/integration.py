@@ -354,22 +354,23 @@ def classifier_construction(cfg, graph, node, iterate):
     # train the model
     ls_surrogate = surrogate(graph, node, cfg, ('classification', cfg.surrogate.classifier_selection, 'live_set_surrogate'), iterate, data_str='classifier_training')
     ls_surrogate.fit(node=node)
-    # Always store the self-scaling variant (takes real-world inputs,
-    # standardises internally using its own trained scaler).  Evaluators
-    # never apply classifier_x_scalar externally under the new contract.
-    query_model = ls_surrogate.get_model('unstandardised_model')
+
+    serialised = ls_surrogate.get_serailised_model_data()
+
+    if cfg.surrogate.classifier_selection == 'ANN':
+        from mu_F.surrogate.nn_utils import build_ann
+        query_model = build_ann(cfg, serialised, 'classifier')
+    else:
+        query_model = ls_surrogate.get_model('unstandardised_model')
 
     # store the trained model in the graph
     graph.nodes[node]["classifier"] = query_model
-    # `classifier_x_scalar` is kept on the graph for diagnostics only —
-    # nothing in the constraint-evaluator path reads it any more.  The
-    # scaler is baked into the `classifier` callable's closure.
     graph.nodes[node]['classifier_x_scalar'] = ls_surrogate.trainer.get_model_object('standardisation_metrics_input')
-    graph.nodes[node]['classifier_serialised'] = ls_surrogate.get_serailised_model_data()
+    graph.nodes[node]['classifier_serialised'] = serialised
 
     del ls_surrogate
 
-    return 
+    return
 
 
 class subproblem_model(ABC):
@@ -477,7 +478,6 @@ class subproblem_model(ABC):
             forward_constraint_evals = self.forward_constraints.evaluate(unit_inputs, aux_args) # forward constraints (rank 3 tensor n_d \times n_theta \times n_g)
             end_time = time.time()
             execution_time = end_time - start_time
-            logging.info(f'execution_time_forward_constraints: {execution_time}')
             del start_time, end_time, execution_time
             if forward_constraint_evals.ndim == 1:
                 forward_constraint_evals = forward_constraint_evals.reshape(-1,1)
@@ -500,7 +500,6 @@ class subproblem_model(ABC):
                 backward_constraint_evals = backward_constraint_evals.reshape(-1,1)
             if backward_constraint_evals.ndim == 2:
                 backward_constraint_evals = np.expand_dims(backward_constraint_evals, axis=1)
-            logging.info(f'execution_time_backward_constraints: {execution_time}')
         else:
             backward_constraint_evals = None
 
@@ -515,7 +514,6 @@ class subproblem_model(ABC):
             decentralised_constraint_evals= np.repeat(decentralised_constraint_evals, len(p), axis=1)
             end_time = time.time()
             execution_time = end_time - start_time
-            logging.info(f'execution_time_decentralised_constraints: {execution_time}')
         else:
             decentralised_constraint_evals = None
 
@@ -530,19 +528,16 @@ class subproblem_model(ABC):
             decentralised_root_constraint_evals= np.repeat(decentralised_root_constraint_evals, len(p), axis=1)
             end_time = time.time()
             execution_time = end_time - start_time
-            logging.info(f'execution_time_decentralised_constraints: {execution_time}')
         else:
             decentralised_root_constraint_evals = None
 
         # Evaluate rewards
         if node_cost_evals is not None:
             if self.G.out_degree(self.unit_index) > 0:
-                # filter to feasible outputs only before evaluating ctg surrogate
                 pre_ctg_cons = jnp.concatenate([c for c in [process_constraint_evals, forward_constraint_evals, backward_constraint_evals, decentralised_constraint_evals, decentralised_root_constraint_evals] if c is not None], axis=-1)
                 _, _, cond = apply_feasibility([outputs], [pre_ctg_cons], self.cfg, self.unit_index, self.cfg.formulation).get_feasible(return_indices=True)
-                feasible_mask = cond[0].squeeze()
+                feasible_mask = jnp.asarray(cond[0]).ravel()
                 feasible_idx = jnp.where(feasible_mask)[0]
-                logging.info(f'ctg_feasible_count: {len(feasible_idx)} / {outputs.shape[0]}')
 
                 start_time = time.time()
                 if len(feasible_idx) > 0:
@@ -559,7 +554,6 @@ class subproblem_model(ABC):
                 ctg_target = node_cost_evals + self.cfg.case_study.discount_factor * ctg_function_evals
                 end_time = time.time()
                 execution_time = end_time - start_time
-                logging.info(f'execution_time_ctg_function: {execution_time}')
             else:
                 ctg_target = node_cost_evals
             self.ctg_values = update_data(self.ctg_values, d, p, ctg_target)
@@ -583,9 +577,8 @@ class subproblem_model(ABC):
         return cons_g
     
     def s(self, d, p):
-        # evaluate feasibility and then update classifier data and number of function evaluations
+
         g = self.evaluate_subproblem_batch(d, self.max_devices, p)
-        # shape parameters for returning constraint evaluations to DEUS
 
         n_theta, n_g = g.shape[-2], g.shape[-1]
         # adding function evaluations
@@ -629,7 +622,7 @@ class subproblem_model(ABC):
         
         if self.cfg.formulation == 'probabilistic':
             param_dict = self.cfg.case_study.parameters_samples
-            if self.cfg.case_study.case_study == 'markov_process':
+            if self.cfg.case_study.get('make_markov', False):
                 param_dict = [param_dict for _ in range(self.cfg.case_study.num_nodes)]
             
             list_of_params = [jnp.array([p['c'] for p in param]) for param in param_dict]
@@ -672,17 +665,24 @@ def ctg_surrogate_construction(cfg, graph, node, iterate):
     # train the model
     ctg_surrogate = surrogate(graph, node, cfg, ('regression', cfg.surrogate.regressor_selection, 'ctg_surrogate'), iterate)
     ctg_surrogate.fit(node=None)
-    # Always use the self-scaling variant; see `classifier_construction`.
-    query_model = ctg_surrogate.get_model('unstandardised_model')
+
+    serialised = ctg_surrogate.get_serailised_model_data()
+
+    if cfg.surrogate.regressor_selection == 'ANN':
+        from mu_F.surrogate.nn_utils import build_ann
+        query_model = build_ann(cfg, serialised, 'regressor')
+    else:
+        # Always use the self-scaling variant; see `classifier_construction`.
+        query_model = ctg_surrogate.get_model('unstandardised_model')
 
     # store the trained model in the graph
     graph.nodes[node]["ctg_surrogate"] = query_model
     # Kept for diagnostics; no evaluator reads it under the new contract.
     graph.nodes[node]['ctg_surrogate_x_scalar'] = ctg_surrogate.trainer.get_model_object('standardisation_metrics_input')
-    graph.nodes[node]['ctg_surrogate_serialised'] = ctg_surrogate.get_serailised_model_data()
+    graph.nodes[node]['ctg_surrogate_serialised'] = serialised
 
     del ctg_surrogate
-    
+
     return
 
 def get_ctg_training_data(graph, node, model, cfg):
@@ -696,7 +696,7 @@ def get_ctg_training_data(graph, node, model, cfg):
 
     for x_batch, y_ctg_batch, y_d_batch in zip(x_d_list, y_ctg_list, y_d_list):
         _, _, feasible_indices = apply_feasibility([x_batch], [y_d_batch], cfg, node, cfg.formulation).get_feasible(return_indices=True)
-        feasible_idx = feasible_indices[0].squeeze()
+        feasible_idx = jnp.asarray(feasible_indices[0]).ravel()
         # Convert boolean mask to integer indices if needed
         if feasible_idx.dtype == bool:
             feasible_idx = jnp.where(feasible_idx)[0]

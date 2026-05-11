@@ -1,0 +1,60 @@
+root_node_inputs:
+  - [0.41, 0.74, 50.0, 0.5, 3.45, 60.0]
+  # [X1, X2, Z, S1, S2, C]
+  # AM2 model accounting:  CO2_dissolved = C + S2 − Z  (Eq. 19, Bernard 2001).
+  # We need that *positive* at t=0 for pH to be well-defined.
+  # Here:  60 + 3.45 − 50 = 13.45 mmol/L  →  pH(0) ≈ 7.04.
+  # Z(0)≠Z_in=65 and C(0)≠C_in=95 break the dx/dt=0 symmetries.
+  # S1(0)=0.5 starts inside COD_MAX=1.0 so COD isn't pre-violated.
+
+constraint:
+  auxiliary: 'None'
+
+node_aux: None
+
+feas_thresh: 0.1
+
+memory: false
+
+# Kinetics
+mu_1_max: 1.2     # /d
+k_s1: 7.1         # g/L
+mu_2_max: 0.74    # /d
+k_s2: 9.28        # mmol/L
+k_i2: 256.0       # mmol/L
+
+# Physical / transfer
+kl_a: 19.8        # /d
+p_t: 1.0          # atm
+k_h: 16.0         # mmol/L/atm
+
+# Yields
+k_1: 42.14
+k_2: 116.5
+k_3: 268.0
+k_4: 50.6
+k_5: 343.6
+k_6: 453.0
+
+# Constraint thresholds
+gamma: 0.064          # g COD per mmol VFA
+cod_max: 1.0          # g/L
+s2_max: 50.0          # mmol/L
+ph_min: 6.5
+ph_max: 7.5
+k_b: 6.5e-7           # mol/L
+eps_z_s2: 1.0e-3      # mmol/L safety floor on Z - S2
+
+# Reward scaling
+q_m_ref: 100.0        # mmol/L/d, nominal biogas rate
+
+alpha: 0.5
+
+integration:
+  scheme: tsit5
+  step_size_controller: pid
+  t0: 0
+  tf: 0.4          
+  dt0: Null
+  max_steps: 100000
+  vmap_chunk_size: 0
