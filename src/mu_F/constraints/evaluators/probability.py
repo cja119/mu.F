@@ -25,6 +25,7 @@ from mu_F.constraints.evaluators.base import (
     cached_parallel_thread,
     parallel_thread,
     precompute_sobol_pool,
+    shard_dispatch,
     skip_if_masked,
 )
 from mu_F.constraints.utils import (
@@ -118,7 +119,9 @@ class BackwardPmapEvaluator(BaseEvaluator):
             n_decision=n_d_k,
             n_params=n_fix,
             n_constraints=0,
-            tol=self.tol,
+            feasibility_tol=self.feasibility_tol,
+            optimality_tol=self.optimality_tol,
+            max_iter=self.max_iter,
         )
         self.sobol_pool[succ] = precompute_sobol_pool(
             bounds, n_d_k, self.n_sobol_screen,
@@ -239,11 +242,6 @@ def _drive_pmap(evaluator, outputs, aux, cfg, succ_count_fallback: int = 1):
     total = padded_out.shape[0]
     mask = batch_mask(n_real, total)
 
-    n_chunks = total // W
-    out_chunks  = padded_out.reshape((n_chunks, W) + padded_out.shape[1:])
-    aux_chunks  = padded_aux.reshape((n_chunks, W) + padded_aux.shape[1:])
-    mask_chunks = mask.reshape(n_chunks, W)
-
     devs = cpu_devs[:W]
     pmap_fn = cached_parallel_thread(
         evaluator,
@@ -253,12 +251,7 @@ def _drive_pmap(evaluator, outputs, aux, cfg, succ_count_fallback: int = 1):
         devices=devs,
         use_vmap=bool(getattr(cfg.solvers, "use_vmap", False)),
     )
-
-    evals_chunks = []
-    for i in range(n_chunks):
-        evals_chunks.append(pmap_fn(out_chunks[i], aux_chunks[i], mask_chunks[i]))
-
-    full_evals = jnp.concatenate(evals_chunks, axis=0)  # (total, N_unc, N_succ)
+    full_evals = shard_dispatch(pmap_fn, (padded_out, padded_aux, mask), W=W)  # (total, N_unc, N_succ)
     full_evals = poison_padded(full_evals, mask, fill=jnp.nan)
     return full_evals[:n_real]
 

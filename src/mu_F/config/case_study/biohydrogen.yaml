@@ -1,0 +1,75 @@
+case_study: biohydrogen
+
+make_markov: True
+
+vmap_evaluations: True
+
+eval_cost: True
+
+# 12 nodes × 4 h = 48 h total horizon (fed-batch photobiological H2 culture).
+num_nodes: 12
+
+adjacency_matrix: None
+
+n_design_args: 2
+
+n_aux_args:
+  node_0: 0
+  (0,1): 0
+
+n_input_args: 7
+
+reject_time: 0.5
+
+discount_factor: 0.99999
+
+sizes:
+  X_SIZE: 7    # X, C, N, q, O, H, F
+  U_SIZE: 2    # N_Fed, alpha
+  F_SIZE: 7
+  G_SIZE: 2    # N <= 150 mg/L, O <= 100 %
+  Z_SIZE: 0
+  L_SIZE: 1    # -Y_HX·X·(1-σ(O))·f(N)/1000
+  PHI_SIZE: 0
+
+# u = [N_Fed (mg/L), alpha (fraction of remaining daily feed budget)]
+KS_bounds:
+  design_args:
+  - - 0.0
+    - 2000.0
+  - - 0.0
+    - 1.0
+
+  aux_args:
+  - - - None
+      - None
+
+# No exogenous disturbance — single dummy scenario keeps the parameter
+# expansion machinery happy.
+parameters_samples: [{'c': [], 'w': 1.0}]
+
+parameters_best_estimate: []
+
+extendedDS_bounds: None
+
+design_space_dimensions:
+- 'N_Fed'
+- 'alpha'
+
+global_n_aux_args: 0
+
+process_space_names: ['N_Fed', 'alpha']
+
+mode:
+  - backward
+  - rollout
+
+evaluation_mode: 'jax-pmap'
+
+serial_graph: True
+
+unit_op: 'dynamic'
+
+n_theta: 0
+
+fn_evals: 0

@@ -30,16 +30,11 @@ from septal.jax.sqp import (
     SQPConfig,
 )
 
-# Default SQP settings — tuned during Phase 1 validation on the markov_process
-# CTG sub-problem (septal vs IPOPT agreement to 8 sig figs). `max_iter=300` is
-# well above the iteration count needed at our typical n_d <= 50; exact
-# Lagrangian Hessian is on because Phase 1 showed it matters for constrained
-# convergence on non-convex CTG surfaces.
 DEFAULT_SQP_CONFIG = SQPConfig(
     max_iter=300,
     use_exact_hessian=True,
-    tol_stationarity=1e-6,
-    tol_feasibility=1e-6,
+    tol_stationarity=1e-4,
+    tol_feasibility=1e-4,
 )
 
 

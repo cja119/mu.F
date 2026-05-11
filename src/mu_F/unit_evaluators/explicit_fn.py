@@ -1178,6 +1178,99 @@ def hydrogen_export_simulator(cfg: DictConfig):
     return hydrogen_export_simulator_fn
 
 
+# -------------------------------------------------------------------------------- #
+# ----- Biohydrogen (port of sample_envs/biohydrogen.py — fed-batch H2 culture) -- #
+# -------------------------------------------------------------------------------- #
+
+def _make_biohydrogen_step(cfg: DictConfig):
+    """Factory: build a JIT-compiled biohydrogen step (fed-batch H2 culture).
+
+    Port of sample_envs/biohydrogen.py.  States: X (biomass), C (carbon),
+    N (culture nitrate), q (intracellular nitrogen quota), O (oxygen %),
+    H (accumulated H2), F (accumulated feed volume).  Controls: u[0] =
+    N_Fed (feed nitrate concentration mg/L), u[1] = alpha (fraction of
+    remaining feed budget [0, 1]).  No disturbance (Z_SIZE = 0).
+
+    Returns `_step(x, u, z, node)` emitting [F | G | R] of shape
+    (7 + 2 + 1,) = 10.  Integration is in hours; the F_in /24 normaliser
+    treats u[1] as a daily-budget fraction.
+    """
+    mu_max = float(cfg.model.mu_max)
+    k_q    = float(cfg.model.k_q)
+    K_c    = float(cfg.model.k_c)
+    mu_d   = float(cfg.model.mu_d)
+    K_N    = float(cfg.model.k_n)
+    Y_NX   = float(cfg.model.y_nx)
+    Y_qX   = float(cfg.model.y_qx)
+    Y_OX   = float(cfg.model.y_ox)
+    Y_d    = float(cfg.model.y_d)
+    Y_CX   = float(cfg.model.y_cx)
+    F_max  = float(cfg.model.f_max)
+    O_Fed  = float(cfg.model.o_fed)
+    C_Fed  = float(cfg.model.c_fed)
+    Y_HX   = float(cfg.model.y_hx)
+
+    N_MAX  = float(cfg.model.n_max)
+    O_MAX  = float(cfg.model.o_max)
+    N_SWITCH = float(cfg.model.n_switch)
+
+    @jit
+    def _step(x: jnp.ndarray, u: jnp.ndarray, z: jnp.ndarray, node):
+        x = jnp.ravel(x)
+        u = jnp.ravel(u)
+        # z is unused — biohydrogen has Z_SIZE = 0.
+
+        X, C, N, q, O, H, F = x[0], x[1], x[2], x[3], x[4], x[5], x[6]
+        N_Fed, alpha_u = u[0], u[1]
+
+        # Guards: k_q/q diverges as q→0, and C/(K_c+C)=0/0 at C=0 with K_c=0.
+        q_safe = jnp.maximum(q, 1e-8)
+        t1 = mu_max * (1.0 - k_q / q_safe) * (C / (K_c + C + 1e-8))
+        t2 = N / (K_N + N)
+        t3 = jax.nn.sigmoid(O * 2.0)                  # ~0 at O≈0, ~1 at O>0
+        f_N = jax.nn.sigmoid((N_SWITCH - N) * 1.0)    # ~1 at N<switch, ~0 otherwise
+
+        # Feed flow: alpha is fraction of remaining daily budget; /24 → L/h.
+        F_in = alpha_u * jnp.maximum(F_max - F, 0.0) / 24.0
+
+        # State derivatives
+        dX = X * t1 - mu_d * X ** 2
+        dC = -Y_CX * X * t1 + F_in * C_Fed
+        dN = -Y_NX * X * t2 * mu_max + F_in * N_Fed
+        dq = Y_qX * t2 * mu_max - t1 * q
+        dO = Y_OX * X * t2 - Y_d * X ** 2 * t3 + O_Fed * F_in
+        dH = Y_HX * X * (1.0 - t3) * f_N
+        dF = F_in
+        dxdt = jnp.array([dX, dC, dN, dq, dO, dH, dF])
+
+        # Path constraints — framework convention (negative = violated, 0 feasible).
+        g_N = -jnp.maximum(N - N_MAX, 0.0) / N_MAX
+        g_O = -jnp.maximum(O - O_MAX, 0.0) / O_MAX
+        dgdt = jnp.array([g_N, g_O])
+
+        # Stage cost: negative H₂ production rate (we minimise; max H is min -H).
+        rwd = -Y_HX * X * (1.0 - t3) * f_N / 1000.0
+
+        return jnp.concatenate([jnp.ravel(dxdt), jnp.ravel(dgdt), jnp.atleast_1d(rwd)], axis=0)
+
+    return _step
+
+
+def biohydrogen_simulator(cfg: DictConfig):
+    """Factory for biohydrogen used when `unit_op == 'steady_state'`.
+
+    Real workflow uses `unit_op: 'dynamic'` and routes through
+    `unit_evaluators.ode.biohydrogen_ode`; this entry exists for symmetry
+    with the other dynamic case studies.
+    """
+    step = _make_biohydrogen_step(cfg)
+
+    def biohydrogen_simulator_fn(cfg_unused: DictConfig, design_args, input_args, aux, uncertainties, node):
+        return step(input_args, design_args, uncertainties, node)
+
+    return biohydrogen_simulator_fn
+
+
 case_studies = {'tablet_press': {0: unit_1_dynamics, 1: unit_2_dynamics, 2: unit_3_dynamics},
                 'convex_estimator': {0: sub_fn_1, 1: sub_fn_2, 2: sub_fn_3, 3: sub_fn_4, 4: sub_fn_5, 5: sub_fn_6},
                 'convex_underestimator': {0: sub_fn_1, 1: sub_fn_2, 2: sub_fn_3, 3: sub_fn_4, 4: sub_fn_5, 5: sub_fn_6},
@@ -1186,4 +1279,5 @@ case_studies = {'tablet_press': {0: unit_1_dynamics, 1: unit_2_dynamics, 2: unit
                 'markov_process': markov_process,
                 'cstr': cstr_simulator,
                 'waste_water': waste_water_simulator,
-                'hydrogen_export': hydrogen_export_simulator}
+                'hydrogen_export': hydrogen_export_simulator,
+                'biohydrogen': biohydrogen_simulator}

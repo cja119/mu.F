@@ -38,6 +38,7 @@ from mu_F.constraints.evaluators.base import (
     parallel_thread,
     pick_best,
     precompute_sobol_pool,
+    shard_dispatch,
     skip_if_masked,
 )
 from mu_F.constraints.utils import (
@@ -195,7 +196,9 @@ class BackwardEvaluator(BaseEvaluator):
             n_decision=n_d_k,
             n_params=n_fix,
             n_constraints=0,
-            tol=self.tol,
+            feasibility_tol=self.feasibility_tol,
+            optimality_tol=self.optimality_tol,
+            max_iter=self.max_iter,
         )
         self.sobol_pool[succ] = precompute_sobol_pool(
             bounds, n_d_k, self.n_sobol_screen,
@@ -250,7 +253,9 @@ class BackwardEvaluator(BaseEvaluator):
             n_decision=n_d_k,
             n_params=n_fix,
             n_constraints=0,
-            tol=self.tol,
+            feasibility_tol=self.feasibility_tol,
+            optimality_tol=self.optimality_tol,
+            max_iter=self.max_iter,
         )
         self.sobol_pool[key] = precompute_sobol_pool(
             bounds, n_d_k, self.n_sobol_screen,
@@ -299,7 +304,7 @@ class BackwardEvaluator(BaseEvaluator):
                 )
 
                 result = self.factories[succ].solve_batch(x0_batch, p_batch)
-                best_f, _, _ = pick_best(result)
+                best_f, _, _ = pick_best(result, self.factories[succ], self.feasibility_tol)
 
                 evals.append(best_f.reshape(-1, 1))
 
@@ -326,7 +331,7 @@ class BackwardEvaluator(BaseEvaluator):
         )
 
         result = self.factories[key].solve_batch(x0_batch, p_batch)
-        best_f, _, _ = pick_best(result)
+        best_f, _, _ = pick_best(result, self.factories[key], self.feasibility_tol)
 
         # Maximisation — return -shaping_function so sign matches legacy.
         return -shaping_function(best_f.reshape(-1, 1), self.cfg)
@@ -388,11 +393,6 @@ def backward_constraint_evaluator(outputs, aux, cfg, graph, node):
     total = padded_out.shape[0]
     mask = batch_mask(n_real, total)
 
-    n_chunks = total // W
-    out_chunks  = padded_out.reshape((n_chunks, W) + padded_out.shape[1:])
-    aux_chunks  = padded_aux.reshape((n_chunks, W) + padded_aux.shape[1:])
-    mask_chunks = mask.reshape(n_chunks, W)
-
     devs = cpu_devs[:W]
     pmap_fn = cached_parallel_thread(
         evaluator,
@@ -402,11 +402,6 @@ def backward_constraint_evaluator(outputs, aux, cfg, graph, node):
         devices=devs,
         use_vmap=bool(getattr(cfg.solvers, "use_vmap", False)),
     )
-
-    evals_chunks = []
-    for i in range(n_chunks):
-        evals_chunks.append(pmap_fn(out_chunks[i], aux_chunks[i], mask_chunks[i]))
-
-    full_evals = jnp.concatenate(evals_chunks, axis=0)
+    full_evals = shard_dispatch(pmap_fn, (padded_out, padded_aux, mask), W=W)
     full_evals = poison_padded(full_evals, mask, fill=jnp.nan)
     return full_evals[:n_real], None

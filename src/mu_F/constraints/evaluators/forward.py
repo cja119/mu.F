@@ -40,6 +40,7 @@ from mu_F.constraints.evaluators.base import (
     pick_best,
     pick_x0_batch,
     precompute_sobol_pool,
+    shard_dispatch,
     skip_if_masked,
 )
 from mu_F.constraints.utils import (
@@ -143,7 +144,9 @@ class ForwardEvaluator(BaseEvaluator):
             n_decision=n_d,
             n_params=n_fix,
             n_constraints=n_g,
-            tol=self.tol,
+            feasibility_tol=self.feasibility_tol,
+            optimality_tol=self.optimality_tol,
+            max_iter=self.max_iter,
             constraint_lhs=eq,
             constraint_rhs=eq,
         )
@@ -203,7 +206,7 @@ class ForwardEvaluator(BaseEvaluator):
                 )
 
                 result = self.factories[pred].solve_batch(x0_batch, p_batch)
-                best_f, best_c, _ = pick_best(result)
+                best_f, best_c, _ = pick_best(result, self.factories[pred], self.feasibility_tol)
 
                 evals.append(best_f.reshape(-1, 1))
                 flags.append(best_c.reshape(-1, 1))
@@ -260,11 +263,6 @@ def forward_constraint_evaluator(inputs, aux, cfg, graph, node):
     total = padded_in.shape[0]
     mask = batch_mask(n_real, total)
 
-    n_chunks = total // W
-    in_chunks   = padded_in.reshape((n_chunks, W) + padded_in.shape[1:])
-    aux_chunks  = padded_aux.reshape((n_chunks, W) + padded_aux.shape[1:])
-    mask_chunks = mask.reshape(n_chunks, W)
-
     devs = cpu_devs[:W]
     pmap_fn = cached_parallel_thread(
         evaluator,
@@ -274,15 +272,9 @@ def forward_constraint_evaluator(inputs, aux, cfg, graph, node):
         devices=devs,
         use_vmap=bool(getattr(cfg.solvers, "use_vmap", False)),
     )
-
-    evals_chunks, flags_chunks = [], []
-    for i in range(n_chunks):
-        e, f = pmap_fn(in_chunks[i], aux_chunks[i], mask_chunks[i])
-        evals_chunks.append(e)
-        flags_chunks.append(f)
-
-    full_evals = jnp.concatenate(evals_chunks, axis=0)
-    full_flags = jnp.concatenate(flags_chunks, axis=0)
+    full_evals, full_flags = shard_dispatch(
+        pmap_fn, (padded_in, padded_aux, mask), W=W,
+    )
     full_evals = poison_padded(full_evals, mask, fill=jnp.nan)
     full_flags = poison_padded(full_flags, mask, fill=False)
     return full_evals[:n_real], full_flags[:n_real]

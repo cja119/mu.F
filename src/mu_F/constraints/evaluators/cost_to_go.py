@@ -43,8 +43,10 @@ from mu_F.constraints.evaluators.base import (
     build_penalty_screener,
     cached_parallel_thread,
     parallel_thread,
+    pick_best_per_scenario,
     pick_x0_batch,
     precompute_sobol_pool,
+    shard_dispatch,
     skip_if_masked,
 )
 from mu_F.constraints.utils import (
@@ -164,7 +166,9 @@ class CTGEvaluator(BaseEvaluator):
             n_decision=n_d_k,
             n_params=n_fix,
             n_constraints=1,          # single classifier feasibility scalar
-            tol=self.tol,
+            feasibility_tol=self.feasibility_tol,
+            optimality_tol=self.optimality_tol,
+            max_iter=self.max_iter,
         )
         self.screeners[succ] = build_penalty_screener(
             objective, constraint, self.screen_penalty,
@@ -232,20 +236,13 @@ class CTGEvaluator(BaseEvaluator):
                 p_stacked  = jnp.repeat(ys, n_starts, axis=0)
 
                 result = self.factories[succ].solve_batch(x0_stacked, p_stacked)
-
-                objectives = result.objective.reshape(n_unc, n_starts)
-                success    = jnp.asarray(result.success).reshape(n_unc, n_starts)
-                ranked     = jnp.where(success, objectives, objectives + 1e10)
-                best_idx   = jnp.argmin(ranked, axis=1)
-                best_obj   = jnp.take_along_axis(
-                    objectives, best_idx[:, None], axis=1,
-                ).squeeze(-1)
-                best_succ  = jnp.take_along_axis(
-                    success, best_idx[:, None], axis=1,
-                ).squeeze(-1)
+                best_obj, best_viable = pick_best_per_scenario(
+                    result, self.factories[succ], self.feasibility_tol,
+                    n_unc, n_starts,
+                )
 
                 evals.append(best_obj.reshape(-1, 1))
-                flags.append(best_succ.reshape(-1, 1))
+                flags.append(best_viable.reshape(-1, 1))
 
             return jnp.hstack(evals), jnp.hstack(flags)
 
@@ -316,11 +313,6 @@ def cost_to_go_evaluator(outputs, aux, cfg, graph, node):
     total = padded_out.shape[0]
     mask = batch_mask(n_real, total)
 
-    n_chunks = total // W
-    out_chunks  = padded_out.reshape((n_chunks, W) + padded_out.shape[1:])
-    aux_chunks  = padded_aux.reshape((n_chunks, W) + padded_aux.shape[1:])
-    mask_chunks = mask.reshape(n_chunks, W)
-
     devs = cpu_devs[:W]
     pmap_fn = cached_parallel_thread(
         evaluator,
@@ -330,15 +322,9 @@ def cost_to_go_evaluator(outputs, aux, cfg, graph, node):
         devices=devs,
         use_vmap=bool(getattr(cfg.solvers, "use_vmap", False)),
     )
-
-    evals_chunks, flags_chunks = [], []
-    for i in range(n_chunks):
-        e, f = pmap_fn(out_chunks[i], aux_chunks[i], mask_chunks[i])
-        evals_chunks.append(e)
-        flags_chunks.append(f)
-
-    full_evals = jnp.concatenate(evals_chunks, axis=0)
-    full_flags = jnp.concatenate(flags_chunks, axis=0)
+    full_evals, full_flags = shard_dispatch(
+        pmap_fn, (padded_out, padded_aux, mask), W=W,
+    )
     # Defensive poison: NaN on padded rows, False on the converged flag.
     # `poison_padded` reshapes the mask to match the array's rank so 3D
     # `(total, N_unc, N_succ)` broadcasts correctly (naive `mask[:, None]`

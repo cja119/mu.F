@@ -1,0 +1,14 @@
+
+
+reconstruct:
+  - False
+  - False
+  - False
+
+post_process_sampler: True
+
+post_process_decision_indices: [0, 1]
+
+plot_reconstruction: nominal_map
+
+post_process: False

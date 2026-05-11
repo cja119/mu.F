@@ -90,7 +90,8 @@ CS_edge_holder = {  'tablet_press': {(0,1): data_IO_1, (1,2): data_IO_2}, 'seria
                     'markov_process': make_markov_edge,
                     'cstr': make_markov_edge_cfg,
                     'waste_water': make_markov_edge_cfg,
-                    'hydrogen_export': make_markov_edge_cfg}
+                    'hydrogen_export': make_markov_edge_cfg,
+                    'biohydrogen': make_markov_edge_cfg}
 
 vmap_CS_edge_holder = {'tablet_press': {(0,1): vmap_data_IO_1, (1,2): vmap_data_IO_2}, 'serial_mechanism_batch': {(0,1): vmap_data_transform},
                        'estimator': {(0,5): vmap_data_transform_cvx, (1,5): vmap_data_transform_cvx, (2,5): vmap_data_transform_cvx,
@@ -103,5 +104,6 @@ vmap_CS_edge_holder = {'tablet_press': {(0,1): vmap_data_IO_1, (1,2): vmap_data_
                         'markov_process': vmap_markov_edge,
                         'cstr': vmap_markov_edge_cfg,
                         'waste_water': vmap_markov_edge_cfg,
-                        'hydrogen_export': vmap_markov_edge_cfg}
+                        'hydrogen_export': vmap_markov_edge_cfg,
+                        'biohydrogen': vmap_markov_edge_cfg}
 

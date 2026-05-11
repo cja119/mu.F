@@ -198,10 +198,32 @@ def waste_water_ode(cfg):
     return waste_water_ode_fn
 
 
+def biohydrogen_ode(cfg):
+    """Factory: returns a diffrax-shaped ODE term for the biohydrogen case study.
+
+    Fed-batch photobiological hydrogen culture (port of sample_envs/biohydrogen.py).
+    No disturbance vector (Z_size = 0); `z` is sliced empty and ignored by step.
+    """
+    from mu_F.unit_evaluators.explicit_fn import _make_biohydrogen_step
+    X_size = int(cfg.case_study.sizes.X_SIZE)
+    U_size = int(cfg.case_study.sizes.U_SIZE)
+    Z_size = int(cfg.case_study.sizes.Z_SIZE)
+    step = _make_biohydrogen_step(cfg)
+
+    def biohydrogen_ode_fn(t: float, state: jnp.ndarray, parameters: jnp.ndarray, node=None):
+        x = state[..., :X_size]
+        u = parameters[..., :U_size]
+        z = parameters[..., U_size:U_size + Z_size]
+        return step(x, u, z, node)
+
+    return biohydrogen_ode_fn
+
+
 # define a dictionary that contains unit wise dynamics for each of the nodes in the graph in the case study
 case_studies = {'serial_mechanism_batch': {0: serial_mechanism_vc_batch_dynamics_u1, 1: serial_mechanism_vc_batch_dynamics_u2},
                 'batch_reaction_network': {0: reactor_network_4, 1: reactor_network_5},
                 'markov_process': markov_process,
                 'cstr': cstr_ode,
                 'waste_water': waste_water_ode,
+                'biohydrogen': biohydrogen_ode,
                 }

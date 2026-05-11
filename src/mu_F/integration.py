@@ -500,6 +500,8 @@ class subproblem_model(ABC):
                 backward_constraint_evals = backward_constraint_evals.reshape(-1,1)
             if backward_constraint_evals.ndim == 2:
                 backward_constraint_evals = np.expand_dims(backward_constraint_evals, axis=1)
+
+            logging.info(f"Backward constraint evaluation time for node {self.unit_index}: {execution_time:.4f} seconds")
         else:
             backward_constraint_evals = None
 
@@ -554,6 +556,7 @@ class subproblem_model(ABC):
                 ctg_target = node_cost_evals + self.cfg.case_study.discount_factor * ctg_function_evals
                 end_time = time.time()
                 execution_time = end_time - start_time
+                logging.info(f"Cost-to-go evaluation time for node {self.unit_index}: {execution_time:.4f} seconds")
             else:
                 ctg_target = node_cost_evals
             self.ctg_values = update_data(self.ctg_values, d, p, ctg_target)
@@ -578,7 +581,7 @@ class subproblem_model(ABC):
     
     def s(self, d, p):
 
-        g = self.evaluate_subproblem_batch(d, self.max_devices, p)
+        g = self.evaluate_subproblem_batch(d, self.cfg.samplers.pmap_batch, p)
 
         n_theta, n_g = g.shape[-2], g.shape[-1]
         # adding function evaluations

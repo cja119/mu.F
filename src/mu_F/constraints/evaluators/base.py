@@ -51,8 +51,11 @@ __all__ = [
     "precompute_sobol_pool",
     "pick_x0_batch",
     "pick_best",
+    "pick_best_per_scenario",
     "skip_if_masked",
     "parallel_thread",
+    "cached_parallel_thread",
+    "shard_dispatch",
 ]
 
 
@@ -67,7 +70,9 @@ def build_factory(
     n_decision: int,
     n_params: int,
     n_constraints: int,
-    tol: float,
+    feasibility_tol: float,
+    optimality_tol: float,
+    max_iter: int,
     constraint_lhs=None,
     constraint_rhs=None,
 ) -> ParametricSQPFactory:
@@ -108,8 +113,9 @@ def build_factory(
 
     sqp_cfg = replace(
         DEFAULT_SQP_CONFIG,
-        tol_stationarity=float(tol),
-        tol_feasibility=float(tol),
+        tol_stationarity=float(optimality_tol),
+        tol_feasibility=float(feasibility_tol),
+        max_iter=int(max_iter),
     )
     return ParametricSQPFactory(problem, sqp_cfg)
 
@@ -211,10 +217,45 @@ def parallel_thread(thread_fn, *, in_axes, devices, use_vmap: bool):
     argument shape, so callers that pad to a fixed batch width keep the
     cache warm in exactly the same way as the pmap path.
     """
+    # Inner vmap fuses the per-shard sample loop into the compiled program,
+    # so `shard_dispatch` can do one dispatch instead of a Python chunk loop.
+    inner = jax.vmap(thread_fn, in_axes=in_axes, out_axes=0)
     if use_vmap:
-        return jax.jit(jax.vmap(thread_fn, in_axes=in_axes, out_axes=0))
+        return jax.jit(jax.vmap(inner, in_axes=in_axes, out_axes=0))
     from jax import pmap
-    return pmap(thread_fn, in_axes=in_axes, out_axes=0, devices=devices)
+    return pmap(inner, in_axes=in_axes, out_axes=0, devices=devices)
+
+
+def shard_dispatch(pmap_fn, padded_inputs, *, W):
+    """
+    Reshape `(total, *trailing) -> (W, total//W, *trailing)`, dispatch through
+    `pmap_fn`, and reshape outputs back to `(total, *trailing)`.
+
+    `pmap_fn` is expected to come from `parallel_thread` / `cached_parallel_thread`
+    (so it already wraps `pmap(vmap(thread_fn))`).  Caller is responsible for
+    padding `padded_inputs` so the leading axis is a multiple of `W`.
+
+    Returns the same pytree type `pmap_fn` returns (tuple or single array),
+    with its leading two axes collapsed.
+    """
+    total = padded_inputs[0].shape[0]
+    if total % W != 0:
+        raise ValueError(
+            f"shard_dispatch: leading axis {total} is not a multiple of W={W}"
+        )
+    n_per_shard = total // W
+
+    sharded = tuple(
+        a.reshape((W, n_per_shard) + a.shape[1:]) for a in padded_inputs
+    )
+    out = pmap_fn(*sharded)
+
+    def _unshard(x):
+        return x.reshape((total,) + x.shape[2:])
+
+    if isinstance(out, tuple):
+        return tuple(_unshard(x) for x in out)
+    return _unshard(out)
 
 
 def cached_parallel_thread(owner, attr, thread_fn, *, in_axes, devices, use_vmap: bool):
@@ -269,23 +310,57 @@ def skip_if_masked(mask, real_fn):
     return lax.cond(mask, real_fn, dummy_fn)
 
 
-def pick_best(result: SQPResult):
-    """
-    Argmin-where-converged over a batched `SQPResult`.
+def _viable_mask(result: SQPResult, factory, feasibility_tol: float):
+    """Per-start viability mask: KKT-feasibility within tol AND iterate in bounds.
 
-    Penalises non-converged starts so the argmin prefers any converged
-    point even if an unconverged one has a lower objective value.
-
-    Returns `(best_objective, best_success, best_decision_variables)`
-    — each a scalar / vector with the multi-start axis removed.
+    Used by the multi-start pickers below.  Drops the convergence-based filter
+    so non-KKT-converged-but-feasible iterates remain candidates — septal's
+    line search guarantees the iterate is at worst as good in merit as `x0`,
+    so a feasible final iterate is still usable even when `max_iter` truncated
+    the solve.
     """
-    rank   = jnp.where(result.success, result.objective, result.objective + 1e10)
+    x = result.decision_variables                              # (..., n_d)
+    lb = factory.problem.lb
+    ub = factory.problem.ub
+    in_bounds = jnp.all((x >= lb) & (x <= ub), axis=-1)        # (...,)
+    feas_viol = jnp.asarray(result.kkt_feasibility)            # (...,)
+    return (feas_viol <= feasibility_tol) & in_bounds
+
+
+def pick_best(result: SQPResult, factory, feasibility_tol: float):
+    """Argmin-where-viable over a flat multi-start `SQPResult`.
+
+    Returns `(best_objective, best_viable, best_decision_variables)` with the
+    multi-start axis removed.  `best_viable` replaces the old `best_success`.
+    """
+    viable = _viable_mask(result, factory, feasibility_tol)
+    rank   = jnp.where(viable, result.objective, result.objective + 1e10)
     best_i = jnp.argmin(rank)
     return (
         result.objective[best_i],
-        result.success[best_i],
+        viable[best_i],
         result.decision_variables[best_i],
     )
+
+
+def pick_best_per_scenario(
+    result: SQPResult, factory, feasibility_tol: float,
+    n_unc: int, n_starts: int,
+):
+    """Argmin-where-viable per uncertainty scenario over a `(n_unc × n_starts)` solve.
+
+    Used by CTG which screens starts per-scenario and stacks them into one
+    `solve_batch` call.  Returns `(best_obj, best_viable)` each of shape
+    `(n_unc,)`.
+    """
+    viable_flat = _viable_mask(result, factory, feasibility_tol)
+    viable      = viable_flat.reshape(n_unc, n_starts)
+    objectives  = result.objective.reshape(n_unc, n_starts)
+    rank        = jnp.where(viable, objectives, objectives + 1e10)
+    best_idx    = jnp.argmin(rank, axis=1)
+    best_obj    = jnp.take_along_axis(objectives, best_idx[:, None], axis=1).squeeze(-1)
+    best_viable = jnp.take_along_axis(viable,     best_idx[:, None], axis=1).squeeze(-1)
+    return best_obj, best_viable
 
 
 # =============================================================================
@@ -317,7 +392,8 @@ class BaseEvaluator(ABC):
     Common state populated in `__init__`:
 
       self.cfg, self.graph, self.node
-      self.n_starts, self.tol, self.n_sobol_screen, self.screen_penalty
+      self.n_starts, self.feasibility_tol, self.optimality_tol, self.max_iter,
+      self.n_sobol_screen, self.screen_penalty
       self.factories : dict[key -> ParametricSQPFactory]
       self.screeners : dict[key -> Callable]
       self.sobol_pool: dict[key -> jnp.ndarray]
@@ -336,10 +412,12 @@ class BaseEvaluator(ABC):
         # Cached scalar knobs — pulled out of OmegaConf once.  Reading
         # `cfg.solvers.*` inside a tight loop in `evaluate` would add
         # measurable Python overhead on every call.
-        self.n_starts       = int(cfg.solvers.n_starts)
-        self.tol            = float(cfg.solvers.tol)
-        self.n_sobol_screen = int(getattr(cfg.solvers, "n_sobol_screen", 16_384))
-        self.screen_penalty = float(getattr(cfg.solvers, "screen_penalty", 1000.0))
+        self.n_starts        = int(cfg.solvers.n_starts)
+        self.feasibility_tol = float(cfg.solvers.feasibility_tol)
+        self.optimality_tol  = float(cfg.solvers.optimality_tol)
+        self.max_iter        = int(cfg.solvers.max_iter)
+        self.n_sobol_screen  = int(cfg.solvers.n_sobol_screen)
+        self.screen_penalty  = float(getattr(cfg.solvers, "screen_penalty", 1000.0))
 
         # Deprecation warning for legacy configs that set the flag.  Fires
         # once per evaluator construction; harmless otherwise.  Remove the

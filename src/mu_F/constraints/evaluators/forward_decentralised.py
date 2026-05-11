@@ -155,7 +155,9 @@ class ForwardDecentralisedEvaluator(BaseEvaluator):
             n_decision=n_d,
             n_params=n_fix,
             n_constraints=n_g,
-            tol=self.tol,
+            feasibility_tol=self.feasibility_tol,
+            optimality_tol=self.optimality_tol,
+            max_iter=self.max_iter,
         )
         self.screeners[key] = build_penalty_screener(
             objective, constraint, self.screen_penalty,

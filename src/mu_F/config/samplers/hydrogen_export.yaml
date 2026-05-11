@@ -8,6 +8,8 @@ notion_of_feasibility: 'positive'
 ku_approximation: 'box'
 vol_scale: 0.05
 
+pmap_batch: 10  # samples per pmap/vmap dispatch in evaluate_subproblem_batch
+
 ns:
   n_live: 512
   final_sample_live: 2500

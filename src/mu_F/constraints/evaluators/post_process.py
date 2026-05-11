@@ -159,7 +159,9 @@ class PostProcessUpperLevelEvaluator(BaseEvaluator):
             n_decision=n_d,
             n_params=0,
             n_constraints=n_g,
-            tol=self.tol,
+            feasibility_tol=self.feasibility_tol,
+            optimality_tol=self.optimality_tol,
+            max_iter=self.max_iter,
         )
         # Sobol pool kept for optional multi-start; midpoint seed is the
         # canonical behaviour preserved from the casadi path.

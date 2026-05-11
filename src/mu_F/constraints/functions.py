@@ -256,13 +256,15 @@ CS_holder = {'tablet_press': {0: [unit1_volume_ub], 1: [unit2_volume_ub, tablet_
              'markov_process': make_markov_cons,
              'cstr': make_markov_cons_cfg,
              'waste_water': make_markov_cons_cfg,
-             'hydrogen_export': make_markov_cons_cfg}
+             'hydrogen_export': make_markov_cons_cfg,
+             'biohydrogen': make_markov_cons_cfg}
 
 COST_holder = {
     'markov_process': make_markov_cost,
     'cstr': make_markov_cost_cfg,
     'waste_water': make_markov_cost_cfg,
     'hydrogen_export': make_markov_cost_cfg,
+    'biohydrogen': make_markov_cost_cfg,
 }
 
 post_process_visualiser = {

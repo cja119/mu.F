@@ -1,6 +1,9 @@
 
 target_reliability: 1.
 unit_wise_target_reliability: 1.
+
+pmap_batch: 100  # samples per pmap/vmap dispatch in evaluate_subproblem_batch
+
 deus:
   activity_type: 'dsc'
 
@@ -8,14 +11,10 @@ notion_of_feasibility: 'positive'
 ku_approximation: 'box'
 vol_scale: 0.05
 
-# n_replacement / pmap_batch = number of pmap dispatches per iteration
-# Good idea to set this the same as n_replacement to start with
-pmap_batch: 250 
-
 ns:
-  n_live: 2500
-  final_sample_live: 5000
-  n_replacements: 250
+  n_live: 1000
+  final_sample_live: 2500
+  n_replacements: 100
   n_iter: 10000
   f0: 0.1
   alpha: 0.2

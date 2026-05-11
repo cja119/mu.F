@@ -1,0 +1,47 @@
+root_node_inputs:
+  - [0.1, 30.0, 50.0, 0.8, 20.0, 0.0, 0.0]
+  # [X, C, N, q, O, H, F]
+  # X(0)=0.1 g/L small culture, C(0)=30 mmol/L, N(0)=50 mg/L (well below 150 max),
+  # q(0)=0.8 (above k_q=0.628 so the kinetic factor (1 - k_q/q) is non-negative),
+  # O(0)=20 % (smooth sigmoid region), H(0)=0, F(0)=0 (no feed used yet).
+
+constraint:
+  auxiliary: 'None'
+
+node_aux: None
+
+feas_thresh: 0.1
+
+memory: false
+
+# Kinetics (Eq. 1, sample_envs/biohydrogen.py)
+mu_max: 0.04765    # 1/h
+k_q: 0.6281        # –
+k_c: 0.0           # mmol/L
+mu_d: 0.008559     # L/g/h
+k_n: 50.0          # mg/L
+y_nx: 244.6        # mg/g
+y_qx: 1.723        # –
+y_ox: 14.6         # %·L/g/h
+y_d: 26.22         # %·L/g
+y_cx: 20.83        # mmol/g
+y_hx: 2.34         # mL/g
+
+# Feed
+f_max: 0.1         # L (total feed budget over the horizon)
+o_fed: 20.0        # %  (feed oxygen concentration)
+c_fed: 50.0        # mmol/L
+
+# Path-constraint thresholds
+n_max: 150.0       # mg/L culture nitrate ceiling
+o_max: 100.0       # % oxygen ceiling
+n_switch: 100.0    # mg/L H₂-production switch (Eq. 1g f(N))
+
+integration:
+  scheme: tsit5
+  step_size_controller: pid
+  t0: 0
+  tf: 4            # hours per node (4 h × 12 nodes = 48 h horizon)
+  dt0: Null
+  max_steps: 100000
+  vmap_chunk_size: 0
