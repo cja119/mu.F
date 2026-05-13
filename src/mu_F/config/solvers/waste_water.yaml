@@ -19,3 +19,5 @@ monolithic:
   max_iter: 30
   use_exact_hessian: true
   use_vmap: true
+
+  scale_variables: true   # rescale decision vector + defect residuals to [0, 1] coords

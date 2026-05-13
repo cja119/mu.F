@@ -29,17 +29,36 @@ class MultipleShooting(SolveDirect):
         Solves the problem using the loaded solver.  Returns septal's native
         `SQPResult` unchanged — no adapter tuple.
         """
+        from dataclasses import replace as dc_replace
+
         problem_data = self._prepare_model(self.G)
         solver = self._load_solver()
-        result = solver(
-            problem_data["objective_fn"],
-            problem_data["constraints"],
-            problem_data["var_bounds"],
-            initial_guess(problem_data["var_bounds"]),
-            problem_data["eq_lhs"],
-            problem_data["eq_rhs"],
-            config=self._monolithic_sqp_config(),
-        )
+        x0 = initial_guess(problem_data["var_bounds"])
+
+        if bool(getattr(self.cfg.solvers, "scale_variables", False)):
+            s_obj, s_cons, s_bounds, s_x0, s_lhs, s_rhs, to_real = scale_problem(
+                problem_data["objective_fn"], problem_data["constraints"],
+                problem_data["var_bounds"], x0,
+                problem_data["eq_lhs"], problem_data["eq_rhs"],
+            )
+            result = solver(
+                s_obj, s_cons, s_bounds, s_x0, s_lhs, s_rhs,
+                config=self._monolithic_sqp_config(),
+            )
+            result = dc_replace(
+                result,
+                decision_variables=to_real(jnp.asarray(result.decision_variables)),
+            )
+        else:
+            result = solver(
+                problem_data["objective_fn"],
+                problem_data["constraints"],
+                problem_data["var_bounds"],
+                x0,
+                problem_data["eq_lhs"],
+                problem_data["eq_rhs"],
+                config=self._monolithic_sqp_config(),
+            )
         self._log_outputs(result)
         return result
 
@@ -64,6 +83,18 @@ class MultipleShooting(SolveDirect):
         total_inp = sum(graph.nodes[node]["n_input_args"] for node in graph.nodes)
         des_curr = n_aux
         inp_curr = n_aux + total_des
+
+        # Per-state-dim scale used to normalise multiple-shooting defect
+        # residuals.  Same vector is shared across every inter-node edge in
+        # the markov chain (uniform F_size per node).  None disables
+        # equality residual scaling (legacy behaviour).
+        scale_per_edge = None
+        if bool(getattr(self.cfg.solvers, "scale_variables", False)):
+            non_root = next(n for n in graph.nodes if graph.in_degree(n) > 0)
+            n_inp_per = graph.nodes[non_root]["n_input_args"]
+            edge_scale = get_edge_input_scale(self.cfg, n_inp_per)
+            scale_per_edge = {(p, n): edge_scale
+                              for n in graph.nodes for p in graph.predecessors(n)}
 
         for node in nx.topological_sort(graph):
 
@@ -100,7 +131,10 @@ class MultipleShooting(SolveDirect):
             if graph.in_degree(node) > 0:
                 inp_idx_map = input_index_map(node, graph, inp_idx_map, input_slice)
             inp_fn_map = build_input_fn(node, graph, composed_eval[node], inp_fn_map)
-            eql_cons = build_equality_constraints(node, graph, inp_fn_map, inp_idx_map, eql_cons)
+            eql_cons = build_equality_constraints(
+                node, graph, inp_fn_map, inp_idx_map, eql_cons,
+                scale_per_edge=scale_per_edge,
+            )
 
         curr_idx = inp_curr
 

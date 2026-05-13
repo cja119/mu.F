@@ -14,8 +14,10 @@ decomposition:
 monolithic:
   n_starts: 4
   n_sobol_screen: 16384
-  feasibility_tol: 1.0e-6
-  optimality_tol:  1.0e-6
-  max_iter: 30
+  feasibility_tol: 1.0e-3
+  optimality_tol:  1.0e-3
+  max_iter: 150
   use_exact_hessian: true
-  use_vmap: false
+  use_vmap: true
+
+  scale_variables: true   # rescale decision vector + defect residuals to [0, 1] coords

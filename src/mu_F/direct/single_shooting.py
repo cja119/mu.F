@@ -31,17 +31,36 @@ class SingleShooting(SolveDirect):
         Solves the problem using the loaded solver.  Returns septal's native
         `SQPResult` unchanged — no adapter tuple.
         """
+        from dataclasses import replace as dc_replace
+
         problem_data = self._prepare_model(self.G)
         solver = self._load_solver()
-        result = solver(
-            problem_data["objective_fn"],
-            problem_data["constraints"],
-            problem_data["var_bounds"],
-            initial_guess(problem_data["var_bounds"]),
-            problem_data["eq_lhs"],
-            problem_data["eq_rhs"],
-            config=self._monolithic_sqp_config(),
-        )
+        x0 = initial_guess(problem_data["var_bounds"])
+
+        if bool(getattr(self.cfg.solvers, "scale_variables", False)):
+            s_obj, s_cons, s_bounds, s_x0, s_lhs, s_rhs, to_real = scale_problem(
+                problem_data["objective_fn"], problem_data["constraints"],
+                problem_data["var_bounds"], x0,
+                problem_data["eq_lhs"], problem_data["eq_rhs"],
+            )
+            result = solver(
+                s_obj, s_cons, s_bounds, s_x0, s_lhs, s_rhs,
+                config=self._monolithic_sqp_config(),
+            )
+            result = dc_replace(
+                result,
+                decision_variables=to_real(jnp.asarray(result.decision_variables)),
+            )
+        else:
+            result = solver(
+                problem_data["objective_fn"],
+                problem_data["constraints"],
+                problem_data["var_bounds"],
+                x0,
+                problem_data["eq_lhs"],
+                problem_data["eq_rhs"],
+                config=self._monolithic_sqp_config(),
+            )
         self._log_outputs(result)
         return result
 

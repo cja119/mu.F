@@ -1064,6 +1064,23 @@ def waste_water_simulator(cfg: DictConfig):
 
 
 # -------------------------------------------------------------------------------- #
+# ----- Softplus-based smooth min/max helpers (used by smooth-dynamics models) --- #
+# `_smooth_max(x, y, β) → max(x, y)` as `β → ∞`.  Inside the rounding zone
+# `|x − y| ≲ 1/β` it's a smooth (C^∞) transition; outside it's effectively
+# the hard max.  Composed for `_smooth_clip`.  Replaces kinks (`jnp.maximum(·, 0)`
+# and `jnp.clip(·, lo, hi)`) that fundamentally break smooth-Newton SQP.
+# -------------------------------------------------------------------------------- #
+
+def _smooth_max(x, y, beta):
+    """Softplus-smooth max(x, y).  beta -> inf recovers jnp.maximum."""
+    return y + jnp.logaddexp(beta * (x - y), 0.0) / beta
+
+def _smooth_min(x, y, beta):
+    """Softplus-smooth min(x, y).  beta -> inf recovers jnp.minimum."""
+    return -_smooth_max(-x, -y, beta)
+
+
+# -------------------------------------------------------------------------------- #
 # ----------------- Hydrogen export (port of sample_envs/hydrogen3.py) ----------- #
 # -------------------------------------------------------------------------------- #
 
@@ -1105,6 +1122,20 @@ def _make_hydrogen_export_step(cfg: DictConfig):
     lambda_penalty          = float(cfg.model.lambda_penalty)
 
     train_throughput_max = vector_calorific_value * train_throughput_cap
+    storage_lo = lower_storage_limit * upper_storage_limit
+    storage_hi = upper_storage_limit
+
+    # `smooth_eps` is the rounding-zone width as a fraction of each variable's
+    # range.  At 1 % the smoothed dynamics differ from hard clip / max(·, 0)
+    # by only ~log(2) · smooth_eps · range on the boundary — physically
+    # negligible — but the result is C^∞ everywhere, which is what
+    # smooth-Newton SQP needs to converge.
+    SMOOTH_EPS = float(cfg.model.smooth_eps)
+    beta_tt      = 1.0 / (SMOOTH_EPS * train_throughput_max)
+    beta_storage = 1.0 / (SMOOTH_EPS * (storage_hi - storage_lo))
+    # h2_throughput / efficiency lives on the train_throughput_max scale to
+    # within a factor of `1/efficiency`; use that as the smoothing scale too.
+    beta_h2      = 1.0 / (SMOOTH_EPS * train_throughput_max)
 
     @jit
     def _step(x: jnp.ndarray, u: jnp.ndarray, z: jnp.ndarray, node):
@@ -1117,11 +1148,17 @@ def _make_hydrogen_export_step(cfg: DictConfig):
         ramp_t             = u[0]
         hydrogen_throughput = u[1]
 
-        # Disturbance: z is the renewable-energy value 
+        # Disturbance: z is the renewable-energy value
         _renewable_energy = z[0]
 
-        # All three trains share the same state and ramp
-        train_throughput = jnp.clip(_train_throughput + ramp_t, 0.0, train_throughput_max)
+        # All three trains share the same state and ramp.  Smooth saturation
+        # at [0, train_throughput_max] so derivatives are well-defined at the
+        # active set.
+        tt_pre  = _train_throughput + ramp_t
+        train_throughput = _smooth_min(
+            _smooth_max(tt_pre, 0.0, beta_tt),
+            train_throughput_max, beta_tt,
+        )
 
         # Vector energy per train (3 identical trains).
         vector_energy_per_train = (
@@ -1131,9 +1168,10 @@ def _make_hydrogen_export_step(cfg: DictConfig):
         )
         vector_energy_total = 3.0 * vector_energy_per_train
 
-        # Electrolyser / fuel cell.
-        energy_electrolysis = jnp.maximum(hydrogen_throughput / electrolyser_efficiency, 0.0)
-        energy_fuelcell     = jnp.maximum(-hydrogen_throughput / fuelcell_efficiency, 0.0)
+        # Electrolyser / fuel cell — smooth max(·, 0) so the kink at
+        # hydrogen_throughput = 0 disappears.
+        energy_electrolysis = _smooth_max(hydrogen_throughput / electrolyser_efficiency, 0.0, beta_h2)
+        energy_fuelcell     = _smooth_max(-hydrogen_throughput / fuelcell_efficiency, 0.0, beta_h2)
 
         # Hydrogen consumption (3 trains).
         hydrogen_consumption = 3.0 * train_throughput / vector_molar_efficiency
@@ -1142,17 +1180,16 @@ def _make_hydrogen_export_step(cfg: DictConfig):
         hydrogen_storage = _hydrogen_storage + hydrogen_throughput - hydrogen_consumption
 
         # Constraints: positive = feasible margin (already in framework convention).
-        lower_h2 = (hydrogen_storage - lower_storage_limit * upper_storage_limit) / upper_storage_limit
+        lower_h2 = (hydrogen_storage - storage_lo) / upper_storage_limit
         upper_h2 = (upper_storage_limit - hydrogen_storage) / upper_storage_limit
         energy_balance = (
             n_turbines * _renewable_energy - energy_electrolysis - vector_energy_total + energy_fuelcell
         ) / (11.88 * n_turbines)
 
-        # Clip storage for state passthrough (saturate at physical limits).
-        hydrogen_storage = jnp.clip(
-            hydrogen_storage,
-            lower_storage_limit * upper_storage_limit,
-            upper_storage_limit,
+        # Smooth-clip storage for state passthrough.
+        hydrogen_storage = _smooth_min(
+            _smooth_max(hydrogen_storage, storage_lo, beta_storage),
+            storage_hi, beta_storage,
         )
 
         # Reward: cost convention (lower = better). 3 identical trains, 3 identical ramps.

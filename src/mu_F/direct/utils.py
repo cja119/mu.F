@@ -51,15 +51,28 @@ def build_input_fn(node, graph, node_eval, fn_map):
 
     return fn_map
 
-def build_equality_constraints(node, graph, fn_map, index_map, eql_cons):
-
+def build_equality_constraints(node, graph, fn_map, index_map, eql_cons,
+                               scale_per_edge=None):
+    """Build the multiple-shooting defect constraints `edge_fn(prev) − x_input`
+    per incoming edge.  If `scale_per_edge` is provided (dict mapping
+    `(prec, node)` → per-state-dim scale array), divide the residual by it so
+    the SQP's `feasibility_tol` applies in relative units rather than
+    against physical-units residuals (which range over many orders of
+    magnitude for case studies like hydrogen_export)."""
     eql_cons = eql_cons or []
 
-    def cons_fn(edge_fn, inp_indices):
-        return lambda ctrl: (jnp.ravel(edge_fn(ctrl)) - _slice_index_1d(ctrl, inp_indices)).reshape(-1, 1)
+    def cons_fn(edge_fn, inp_indices, scale_inp):
+        if scale_inp is None:
+            return lambda ctrl: (
+                jnp.ravel(edge_fn(ctrl)) - _slice_index_1d(ctrl, inp_indices)
+            ).reshape(-1, 1)
+        return lambda ctrl: (
+            (jnp.ravel(edge_fn(ctrl)) - _slice_index_1d(ctrl, inp_indices)) / scale_inp
+        ).reshape(-1, 1)
 
     for prec in graph.predecessors(node):
-        eql_cons.append(cons_fn(fn_map[(prec, node)], index_map[(prec, node)]))
+        scale_inp = scale_per_edge.get((prec, node)) if scale_per_edge else None
+        eql_cons.append(cons_fn(fn_map[(prec, node)], index_map[(prec, node)], scale_inp))
 
     return eql_cons
 
@@ -228,23 +241,88 @@ def get_bounds(cfg):
 
 
 def get_bounds_ms(cfg, graph, total_inp):
+    from omegaconf import OmegaConf, ListConfig, DictConfig
 
     base = get_bounds(cfg)
 
     non_root = next(n for n in graph.nodes if graph.in_degree(n) > 0)
     ext = graph.nodes[non_root]["extendedDS_bounds"]
+    n_inp_per = graph.nodes[non_root]["n_input_args"]
+    reps = total_inp // n_inp_per
+
     if ext not in (None, "None"):
-        n_inp_per = graph.nodes[non_root]["n_input_args"]
-        inp_lbs = jnp.array(ext[0][0, -n_inp_per:])
-        inp_ubs = jnp.array(ext[1][0, -n_inp_per:])
-        reps = total_inp // n_inp_per
-        inp_lbs = jnp.tile(inp_lbs, reps)
-        inp_ubs = jnp.tile(inp_ubs, reps)
+        # Priority 1: backward-sweep-derived box from the live set.
+        inp_lbs_per = jnp.array(ext[0][0, -n_inp_per:])
+        inp_ubs_per = jnp.array(ext[1][0, -n_inp_per:])
+    elif getattr(cfg.case_study, "edge_clip", None) not in (None, "None"):
+        # Priority 2: physical state-component limits declared in the case study.
+        ec = cfg.case_study.edge_clip
+        if isinstance(ec, (ListConfig, DictConfig)):
+            ec = OmegaConf.to_container(ec, resolve=True)
+        inp_lbs_per = jnp.array([p[0] for p in ec])
+        inp_ubs_per = jnp.array([p[1] for p in ec])
     else:
-        inp_lbs = -jnp.inf * jnp.ones(total_inp)
-        inp_ubs = jnp.inf * jnp.ones(total_inp)
+        # No bounds known.  The monolithic SQP will be poorly conditioned.
+        inp_lbs_per = -jnp.inf * jnp.ones(n_inp_per)
+        inp_ubs_per =  jnp.inf * jnp.ones(n_inp_per)
+
+    inp_lbs = jnp.tile(inp_lbs_per, reps)
+    inp_ubs = jnp.tile(inp_ubs_per, reps)
 
     return jnp.concatenate([base, jnp.stack([inp_lbs, inp_ubs])], axis=1)
+
+
+def get_edge_input_scale(cfg, n_inp_per):
+    """Per-state-dim scale used to normalise the multiple-shooting defect
+    residuals.  Returns `edge_clip_hi − edge_clip_lo` when available; ones
+    otherwise (no relative-scaling — residuals stay in absolute units)."""
+    from omegaconf import OmegaConf, ListConfig, DictConfig
+    ec = getattr(cfg.case_study, "edge_clip", None)
+    if ec in (None, "None"):
+        return jnp.ones(n_inp_per)
+    if isinstance(ec, (ListConfig, DictConfig)):
+        ec = OmegaConf.to_container(ec, resolve=True)
+    return jnp.array([p[1] - p[0] for p in ec])
+
+
+def _safe_scale_offset(lb, ub):
+    """Per-element (scale, offset) for the [0, 1]^n affine transform, falling
+    back to (1, 0) when a slot is unbounded or zero-width."""
+    lb_arr = jnp.asarray(lb, dtype=jnp.float64).reshape(-1)
+    ub_arr = jnp.asarray(ub, dtype=jnp.float64).reshape(-1)
+    width = ub_arr - lb_arr
+    finite = jnp.isfinite(lb_arr) & jnp.isfinite(ub_arr) & (width > 0)
+    scale = jnp.where(finite, width, jnp.ones_like(width))
+    offset = jnp.where(finite, lb_arr, jnp.zeros_like(lb_arr))
+    return scale, offset
+
+
+def scale_problem(objective, constraints, var_bounds, x0, eq_lhs, eq_rhs):
+    """Wrap a monolithic NLP for solve in scaled coordinates `x_s = (x − lo) / (hi − lo)`.
+
+    Returns the scaled callables + bounds + initial guess + a `to_real`
+    un-scaler the caller uses to convert the result back to physical units.
+    Slots whose bound is missing / unbounded pass through (scale=1, offset=0)
+    so the wrapper degrades gracefully.
+    """
+    lb = jnp.asarray(var_bounds[0]).reshape(-1)
+    ub = jnp.asarray(var_bounds[1]).reshape(-1)
+    scale, offset = _safe_scale_offset(lb, ub)
+
+    def to_real(x_s):
+        return jnp.asarray(x_s).reshape(-1) * scale + offset
+
+    def wrap(fn):
+        return lambda x_s: fn(to_real(x_s))
+
+    s_obj = wrap(objective)
+    s_cons = [wrap(c) for c in constraints]
+
+    s_lb = jnp.where(jnp.isfinite(lb), jnp.zeros_like(lb), lb)
+    s_ub = jnp.where(jnp.isfinite(ub), jnp.ones_like(ub),  ub)
+    s_x0 = (jnp.asarray(x0).reshape(-1) - offset) / scale
+
+    return s_obj, s_cons, [s_lb, s_ub], s_x0, eq_lhs, eq_rhs, to_real
 
 
 def initial_guess(bounds):
