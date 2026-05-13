@@ -16,7 +16,7 @@ monolithic:
   n_sobol_screen: 16384
   feasibility_tol: 1.0e-3
   optimality_tol:  1.0e-3
-  max_iter: 150
+  max_iter: 500
   use_exact_hessian: true
   use_vmap: true
 

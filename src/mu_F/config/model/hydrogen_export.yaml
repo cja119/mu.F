@@ -30,7 +30,7 @@ lower_storage_limit: 0.2
 upper_storage_limit: 295435
 
 
-lambda_penalty: 500
+lambda_penalty: 1e-3
 smooth_eps: 1.0e-2
 
 # Steady-state case study — integration block kept for parity with other yamls

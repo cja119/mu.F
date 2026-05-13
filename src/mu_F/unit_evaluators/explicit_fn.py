@@ -1184,7 +1184,7 @@ def _make_hydrogen_export_step(cfg: DictConfig):
 
         # Reward: cost convention (lower = better). 3 identical trains, 3 identical ramps.
         penalty = 3.0 * jnp.square(ramp_t)
-        reward = -(3.0 * train_throughput + 0.0001 * _hydrogen_storage - lambda_penalty * penalty)
+        reward = -(3.0 * train_throughput + 0.001 * _hydrogen_storage - lambda_penalty * penalty)
 
         outputs     = jnp.array([hydrogen_storage, train_throughput])      # F
         constraints = jnp.array([lower_h2, upper_h2, energy_balance])       # G

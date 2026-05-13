@@ -614,10 +614,11 @@ class subproblem_model(ABC):
         n_cost = self.node_costs.evaluate(decision, inputs, aux, outputs)
         
         # Determine feasibility and status
-        feasible = jnp.all(p_cons >= 0) 
+        feasible = jnp.all(p_cons >= 0)
         status = 'feasible' if feasible else 'infeasible'
+        opt_converged = 'converged' if bool(opt_status) else 'NOT_CONVERGED'
 
-        logging.info(f"Rollout decision: {decision}, Cost-to-go: {opt_ctg}, Status: {status}")
+        logging.info(f"Rollout decision: {decision}, Cost-to-go: {opt_ctg}, Optimizer: {opt_converged}, Actual: {status}")
 
         return outputs, n_cost, decision
 

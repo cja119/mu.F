@@ -312,6 +312,12 @@ class CurrentCostEvaluator(BaseEvaluator):
         params    = jnp.asarray(best_x).reshape(1, -1)   # (1, n_d_k)
         objective = jnp.asarray(best_f).reshape(1, 1)    # (1, 1)
         converged = jnp.asarray(best_c).reshape(1, 1)    # (1, 1)
+
+        # Log classifier prediction at the chosen decision
+        import logging
+        cls_pred = self.constraint_fn[key](best_x, p)
+        logging.info(f"CurrentCostEvaluator: classifier_pred={float(cls_pred):.4f}, viable={bool(best_c)}")
+
         return params, objective, converged
 
 
