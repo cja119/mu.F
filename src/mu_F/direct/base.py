@@ -1,5 +1,9 @@
 
 from abc import ABC, abstractmethod
+from dataclasses import replace
+
+from mu_F.solvers.septal import DEFAULT_SQP_CONFIG
+
 
 class SolveDirect(ABC):
     def __init__(self, cfg, G):
@@ -7,6 +11,19 @@ class SolveDirect(ABC):
         self.G = G
         self.pos_feas = (
             True if cfg.samplers.notion_of_feasibility.lower() == "positive" else False
+        )
+
+    def _monolithic_sqp_config(self):
+        """SQPConfig for the single/multiple shooting paths.  Reads the
+        monolithic solver block (promoted to `cfg.solvers` by
+        `main._select_solver_block`) and overrides the default `SQPConfig`."""
+        s = self.cfg.solvers
+        return replace(
+            DEFAULT_SQP_CONFIG,
+            tol_stationarity=float(s.optimality_tol),
+            tol_feasibility=float(s.feasibility_tol),
+            max_iter=int(s.max_iter),
+            use_exact_hessian=bool(s.use_exact_hessian),
         )
 
     @abstractmethod

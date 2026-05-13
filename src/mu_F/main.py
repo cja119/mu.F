@@ -47,10 +47,30 @@ def _set_jax(max_devices):
     logging.info(f"Jax maximum devices set to: {n_jax_devices}")
     return n_jax_devices
 
+_DECOMP_METHODS = {'decomposition', 'decomposition_constraint_tuner'}
+_MONO_METHODS   = {'direct', 'single_shooting', 'multiple_shooting'}
+
+
+def _select_solver_block(cfg: DictConfig) -> DictConfig:
+    """Promote `cfg.solvers.<decomposition|monolithic>` to `cfg.solvers` based
+    on `cfg.method`.  Downstream consumers read `cfg.solvers.*` flat."""
+    if cfg.method in _DECOMP_METHODS:
+        cfg.solvers = cfg.solvers.decomposition
+    elif cfg.method in _MONO_METHODS:
+        cfg.solvers = cfg.solvers.monolithic
+    else:
+        raise ValueError(
+            f"Unknown method {cfg.method!r}; expected one of "
+            f"{sorted(_DECOMP_METHODS | _MONO_METHODS)}"
+        )
+    return cfg
+
+
 @hydra.main(config_path="config", config_name="integrator")
 def main(cfg: DictConfig) -> None:
     # Configure logging level from config
     _set_log(cfg.log_level)
+    cfg = _select_solver_block(cfg)
     max_devices = _set_jax(cfg.max_devices)
 
     from mu_F.direct.constructor import apply_direct_method

@@ -38,6 +38,7 @@ class MultipleShooting(SolveDirect):
             initial_guess(problem_data["var_bounds"]),
             problem_data["eq_lhs"],
             problem_data["eq_rhs"],
+            config=self._monolithic_sqp_config(),
         )
         self._log_outputs(result)
         return result

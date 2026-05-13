@@ -1,12 +1,21 @@
 # Septal SQP solver settings.
 
-
 standardised: false  # DEPRECATED: no effect — every surrogate self-scales
 
-n_starts: 4              # multi-start count for Sobol initial guesses
-n_sobol_screen: 256     # pre-generated Sobol points used to seed each shard
-feasibility_tol: 1.0e-4  # SQP constraint-satisfaction tolerance
-optimality_tol:  1.0e-4  # SQP KKT stationarity tolerance
-max_iter: 30             # SQP Newton-step budget (scan length; runs all steps regardless of convergence)
+decomposition:
+  n_starts: 4
+  n_sobol_screen: 256
+  feasibility_tol: 1.0e-4
+  optimality_tol:  1.0e-4
+  max_iter: 30
+  use_exact_hessian: true
+  use_vmap: false
 
-use_vmap: false       # set true to swap pmap for jit(vmap(...)) in the pmap-backed evaluators
+monolithic:
+  n_starts: 4
+  n_sobol_screen: 256
+  feasibility_tol: 1.0e-4
+  optimality_tol:  1.0e-4
+  max_iter: 30
+  use_exact_hessian: true
+  use_vmap: false

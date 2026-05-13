@@ -1,11 +1,24 @@
-# Septal SQP solver settings.
+# Septal SQP solver settings — two blocks with identical schema.  `main.py`
+# picks the active block at runtime based on `cfg.method`:
+#   decomposition / decomposition_constraint_tuner  →  cfg.solvers.decomposition
+#   single_shooting / multiple_shooting             →  cfg.solvers.monolithic
 
 standardised: false  # DEPRECATED: no effect — every surrogate self-scales
 
-n_starts: 4              # multi-start count for Sobol initial guesses
-n_sobol_screen: 4096     # pre-generated Sobol points used to seed each shard
-feasibility_tol: 1.0e-4  # SQP constraint-satisfaction tolerance
-optimality_tol:  1.0e-4  # SQP KKT stationarity tolerance
-max_iter: 30             # SQP Newton-step budget (scan length; runs all steps regardless of convergence)
+decomposition:
+  n_starts: 4
+  n_sobol_screen: 4096
+  feasibility_tol: 1.0e-4
+  optimality_tol:  1.0e-4
+  max_iter: 30
+  use_exact_hessian: true
+  use_vmap: false
 
-use_vmap: false       # set true to swap pmap for jit(vmap(...)) in the pmap-backed evaluators
+monolithic:
+  n_starts: 4
+  n_sobol_screen: 4096
+  feasibility_tol: 1.0e-4
+  optimality_tol:  1.0e-4
+  max_iter: 30
+  use_exact_hessian: false   # skips 2nd-order AD through chained diffrax solves
+  use_vmap: false
