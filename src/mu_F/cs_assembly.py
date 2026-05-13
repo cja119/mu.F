@@ -37,13 +37,10 @@ def case_study_constructor(cfg):
 
     # Create a graph constructor object
     if cfg.case_study.get('make_markov', False):
-        # Markov-style case study: chain DAG of identical nodes. Two sub-paths:
-        #   - legacy hydrogen-style: env_file points at sample_envs/*.py and a
-        #     MarkovEnvironment is built from it (case_study == 'markov_process').
-        #   - cfg-driven (e.g. cstr): no env_file; simulator + slicers come from
-        #     the case-study registries keyed on cfg.case_study.case_study.
-        env_file = cfg.case_study.get('env_file', None)
-        G = markov_graph_constructor(cfg, env_file)
+        # Markov-style case study: chain DAG of identical nodes.
+        # cfg-driven: simulator + slicers come from the case-study registries
+        # keyed on cfg.case_study.case_study.
+        G = markov_graph_constructor(cfg)
     else:
         G = graph_constructor(cfg, cfg.case_study.adjacency_matrix)
 

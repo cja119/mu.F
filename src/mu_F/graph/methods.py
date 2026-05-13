@@ -3,8 +3,6 @@ from jax import vmap, jit
 from functools import partial
 from omegaconf import DictConfig
 
-from mu_F.utils import requires_param
-from mu_F.control.environment import MarkovEnvironment
 
 
 """ insert case study specific functions for graph edges here"""
@@ -57,15 +55,6 @@ def affine_cs35(dynamic_profile):
 
 vmap_cs34 = vmap(vmap(affine_cs34, in_axes=(0), out_axes=0), in_axes=(1), out_axes=1)
 vmap_cs35 = vmap(vmap(affine_cs35, in_axes=(0), out_axes=0), in_axes=(1), out_axes=1)
-
-
-def make_markov_edge(env: MarkovEnvironment):
-    return lambda rollout: env.F(rollout)
-
-
-def vmap_markov_edge(env: MarkovEnvironment):
-    fn = make_markov_edge(env)
-    return vmap(vmap(fn, in_axes=0, out_axes=0), in_axes=1, out_axes=1)
 
 
 def make_markov_edge_cfg(cfg):
@@ -128,9 +117,6 @@ def _vmap_with_clip(cfg):
     return vmap(vmap(fn, in_axes=0, out_axes=0), in_axes=1, out_axes=1)
 
 
-def make_markov_process_edge(cfg):    return make_markov_edge_cfg(cfg)
-def vmap_markov_process_edge(cfg):    return vmap_markov_edge_cfg(cfg)
-
 def make_cstr_edge(cfg):              return _markov_edge_with_clip(cfg)
 def vmap_cstr_edge(cfg):              return _vmap_with_clip(cfg)
 
@@ -151,7 +137,6 @@ CS_edge_holder = {  'tablet_press': {(0,1): data_IO_1, (1,2): data_IO_2}, 'seria
                     'convex_underestimator': {(0,5): data_transform_cvx, (1,5): data_transform_cvx, (2,5): data_transform_cvx,
                                         (3,5): data_transform_cvx, (4,5): data_transform_cvx},
                     'affine_study': {(0,2): data_transform_cvx, (1,2): data_transform_cvx, (2,3): affine_cs34, (2,4): affine_cs35},
-                    'markov_process': make_markov_edge,
                     'cstr': make_cstr_edge,
                     'waste_water': make_waste_water_edge,
                     'hydrogen_export': make_hydrogen_export_edge,
@@ -165,7 +150,6 @@ vmap_CS_edge_holder = {'tablet_press': {(0,1): vmap_data_IO_1, (1,2): vmap_data_
                         'convex_underestimator': {(0,5): vmap_data_transform_cvx, (1,5): vmap_cs34, (2,5): vmap_cs34,
                                             (3,5): vmap_data_transform_cvx, (4,5): vmap_data_transform_cvx},
                         'affine_study': {(0,2): vmap_data_transform_cvx, (1,2): vmap_data_transform_cvx, (2,3): vmap_cs34, (2,4): vmap_cs35},
-                        'markov_process': vmap_markov_edge,
                         'cstr': vmap_cstr_edge,
                         'waste_water': vmap_waste_water_edge,
                         'hydrogen_export': vmap_hydrogen_export_edge,

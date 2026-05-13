@@ -29,18 +29,8 @@ upper_ramp_limit: 0.1
 lower_storage_limit: 0.2
 upper_storage_limit: 295435
 
-# Control-effort weight on the squared-ramp penalty in the reward.
-# Original `lambda` keyword renamed to lambda_penalty (yaml-safe).
-lambda_penalty: 1.0e-4
 
-# Rounding-zone width as a fraction of each variable's range, applied to the
-# `_smooth_max` / `_smooth_min` substitutes for `jnp.maximum(·, 0)` and
-# `jnp.clip(·, lo, hi)` in the simulator.  Smaller → sharper kink → closer to
-# hard clip but worse SQP convergence; larger → smoother → physically less
-# accurate at the boundary but faster Newton convergence.  1 % is a good
-# default — physical error is ~log(2) · 0.01 · range at the boundary
-# (~ 1640 units on h2_storage, < 0.7 % of full scale; ~ 15 units on
-# train_throughput, < 1 %).
+lambda_penalty: 500
 smooth_eps: 1.0e-2
 
 # Steady-state case study — integration block kept for parity with other yamls

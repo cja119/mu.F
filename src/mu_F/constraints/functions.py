@@ -4,8 +4,6 @@ from jax import jit, vmap
 import jax.numpy as jnp
 from functools import partial
 
-from mu_F.control.environment import MarkovEnvironment
-from mu_F.utils import requires_param
 
 # ----------------------------------------------------------------------------- #
 # ---------------------------- Serial Mechanism Batch ------------------------- #
@@ -191,28 +189,6 @@ def negative_output_constraint(output, cfg):
     return -output 
 
 # -------------------------------------------------------------------------------- #
-# --------------------- Control problem constraint definition ---------------------#
-# -------------------------------------------------------------------------------- #
-
-def _markov_cons(env: MarkovEnvironment, i: int, rollout, cfg=None):
-    return env.G(rollout)[..., i]
-
-
-@requires_param('env')
-def make_markov_cons(env):
-    return [partial(_markov_cons, env, i) for i in range(env.G_SIZE)]
-
-
-def _markov_cost(env: MarkovEnvironment, rollout, cfg=None):
-    return env.R(rollout) + env.phi(rollout) if env.phi(rollout).shape[-1] > 0 else env.R(rollout)
-
-
-@requires_param('env')
-def make_markov_cost(env):
-    return [partial(_markov_cost, env)]
-
-
-# -------------------------------------------------------------------------------- #
 # ----------- cfg-driven Markov slicers (no MarkovEnvironment needed) ------------ #
 # -------------------------------------------------------------------------------- #
 
@@ -247,14 +223,7 @@ def make_markov_cost_cfg(cfg):
 
 # -------------------------------------------------------------------------------- #
 # ----- Per-case-study cost / constraint factories ------------------------------- #
-# Each factory has the same return contract as the generic markov helpers above
-# (a list of (rollout, cfg) -> array callables) and starts as a thin delegate.
-# Add state-dependent terms by editing the factory body (extract the simulator
-# rollout's F slice as the terminal state and combine with the path term).
 # -------------------------------------------------------------------------------- #
-
-def make_markov_process_cost(cfg):  return make_markov_cost_cfg(cfg)
-def make_markov_process_cons(cfg):  return make_markov_cons_cfg(cfg)
 
 def make_cstr_cost(cfg):            return make_markov_cost_cfg(cfg)
 def make_cstr_cons(cfg):            return make_markov_cons_cfg(cfg)
@@ -276,14 +245,12 @@ CS_holder = {'tablet_press': {0: [unit1_volume_ub], 1: [unit2_volume_ub, tablet_
              'convex_underestimator': {0: [], 1: [log_term_hess_1], 2: [log_term_hess_1], 3: [], 4: [psd_constraint], 5: [underestimation_constraint]},
              'estimator': {0: [], 1: [], 2: [], 3: [], 4: [], 5: [estimation_g_aux]},
              'affine_study': {0: [negative_output_constraint], 1: [negative_output_constraint], 2: [negative_output_constraint], 3: [negative_output_constraint], 4: [negative_output_constraint]},
-             'markov_process': make_markov_cons,
              'cstr': make_cstr_cons,
              'waste_water': make_waste_water_cons,
              'hydrogen_export': make_hydrogen_export_cons,
              'biohydrogen': make_biohydrogen_cons}
 
 COST_holder = {
-    'markov_process': make_markov_cost,
     'cstr': make_cstr_cost,
     'waste_water': make_waste_water_cost,
     'hydrogen_export': make_hydrogen_export_cost,

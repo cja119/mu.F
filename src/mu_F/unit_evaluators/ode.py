@@ -3,10 +3,6 @@
 from jax import jit 
 import jax.numpy as jnp
 
-from mu_F.utils import requires_param
-from mu_F.control.environment import MarkovEnvironment
-from omegaconf import DictConfig
-
 
 @jit
 def serial_mechanism_vc_batch_dynamics_u1(
@@ -138,18 +134,6 @@ def reactor_network_5(t: float, state: jnp.ndarray, parameters: jnp.ndarray):
 
     return jnp.array([dCi, dCj, dCk, dCl, dCb, dCm, dCn])
 
-@requires_param('env')
-def markov_process(env: MarkovEnvironment):
-    def markov_process_fn(t: float, state: jnp.ndarray, parameters: jnp.ndarray, node=None):
-
-        # Extracting the input args, design args, uncertainty params and node from the parameters vector
-        inputs = state[..., :env.X_SIZE]
-        design_args = parameters[..., :env.U_SIZE]
-        uncertainties = parameters[..., env.U_SIZE:env.U_SIZE + env.Z_SIZE]
-        return env(inputs, design_args, uncertainties, node=node)
-
-    return markov_process_fn
-
 
 def cstr_ode(cfg):
     """Factory: returns a diffrax-shaped ODE term for the cstr case study.
@@ -222,7 +206,6 @@ def biohydrogen_ode(cfg):
 # define a dictionary that contains unit wise dynamics for each of the nodes in the graph in the case study
 case_studies = {'serial_mechanism_batch': {0: serial_mechanism_vc_batch_dynamics_u1, 1: serial_mechanism_vc_batch_dynamics_u2},
                 'batch_reaction_network': {0: reactor_network_4, 1: reactor_network_5},
-                'markov_process': markov_process,
                 'cstr': cstr_ode,
                 'waste_water': waste_water_ode,
                 'biohydrogen': biohydrogen_ode,

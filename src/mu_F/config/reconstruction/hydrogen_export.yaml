@@ -5,7 +5,7 @@ reconstruct:
   - False
   - False
 
-post_process_sampler: True
+post_process_sampler: False
 
 post_process_decision_indices: [0]
 

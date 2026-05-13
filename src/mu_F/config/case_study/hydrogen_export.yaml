@@ -6,7 +6,6 @@ vmap_evaluations: True
 
 eval_cost: True
 
-# 24-h horizon by default (one node per hour). Adjust as needed.
 num_nodes: 24
 
 adjacency_matrix: None
@@ -43,9 +42,6 @@ KS_bounds:
   - - - None
       - None
 
-# Renewable-energy disturbance is fed directly as the energy value (no inverse_cdf).
-# `c` is a 5-bin discrete distribution over the renewable-energy values; `w` are
-# the corresponding probabilities. `parameters_best_estimate` is the expected value.
 parameters_samples: [{'c': [0.02048169, 11.87977224, 0.29061465, 7.13482955, 7.78359092],
                       'w': [0.07390548, 0.54504614, 0.12598331, 0.12247117, 0.13259390]}]
 
@@ -53,11 +49,6 @@ parameters_best_estimate: [8.420454054312653]
 
 extendedDS_bounds: None
 
-# Per-state clip applied by `make_hydrogen_export_edge` to the F slice
-# that flows between nodes.  One [lo, hi] entry per F-state-dim (F_SIZE=2).
-# Order: [hydrogen_storage, train_throughput].  Lifted from the legacy
-# extendedDS_bounds [u0, u1, hydrogen_storage, train_throughput]; the
-# design-variable entries aren't part of the F slice so don't belong here.
 edge_clip:
   - [59087, 295435]
   - [0, 2143.2]

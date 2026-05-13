@@ -2,13 +2,10 @@
 from functools import partial
 import logging 
 from jax import jit
-from mu_F.utils import requires_param
 from omegaconf import DictConfig
 import jax.numpy as jnp
 from jax import hessian
 from jax.nn import sigmoid
-
-from mu_F.control.environment import MarkovEnvironment
 
 # --- tablet press case study --- # 
 
@@ -884,13 +881,6 @@ def affine_case_study_5(
 
     return A @ design_args.T + B @ input_args
 
-@requires_param('env')
-def markov_process(env: MarkovEnvironment):
-    def markov_process_fn(cfg: DictConfig, design_args: jnp.ndarray, input_args: jnp.ndarray, aux:None, uncertainties: jnp.ndarray, node: int):
-        return env(input_args, design_args, uncertainties, node=node)
-    return markov_process_fn
-
-
 # -------------------------------------------------------------------------------- #
 # ----------------------------- CSTR (pcgym, jax) -------------------------------- #
 # -------------------------------------------------------------------------------- #
@@ -1194,7 +1184,7 @@ def _make_hydrogen_export_step(cfg: DictConfig):
 
         # Reward: cost convention (lower = better). 3 identical trains, 3 identical ramps.
         penalty = 3.0 * jnp.square(ramp_t)
-        reward = -(3.0 * train_throughput + 0.1 * _hydrogen_storage - lambda_penalty * penalty)
+        reward = -(3.0 * train_throughput + 0.0001 * _hydrogen_storage - lambda_penalty * penalty)
 
         outputs     = jnp.array([hydrogen_storage, train_throughput])      # F
         constraints = jnp.array([lower_h2, upper_h2, energy_balance])       # G
@@ -1290,16 +1280,8 @@ def _make_biohydrogen_step(cfg: DictConfig):
         g_O = -jnp.maximum(O - O_MAX, 0.0) / O_MAX
         dgdt = jnp.array([g_N, g_O])
 
-        # Stage cost: negative H₂ production rate (we minimise; max H is min -H).
-        # No /1000 scaling — keeps the CTG band wide enough for the surrogate
-        # to discriminate trajectories cleanly.
+        # Cost
         rwd = -Y_HX * X * gate * f_N
-
-        # Terminal-style cost: `dPHI/dt = -H / tf` so the integral over one
-        # node equals the mean H over that node, giving a "running-H" reward
-        # signal that grows monotonically across the horizon and sharpens
-        # discrimination of trajectories that build H stock early.  Summed
-        # with the path reward by `_markov_cost_cfg` when PHI_SIZE > 0.
         phi = -H / TF
 
         return jnp.concatenate([
@@ -1330,7 +1312,6 @@ case_studies = {'tablet_press': {0: unit_1_dynamics, 1: unit_2_dynamics, 2: unit
                 'convex_underestimator': {0: sub_fn_1, 1: sub_fn_2, 2: sub_fn_3, 3: sub_fn_4, 4: sub_fn_5, 5: sub_fn_6},
                 'estimator': {0: esub_fn_1, 1: esub_fn_2, 2: esub_fn_3, 3: esub_fn_4, 4: esub_fn_5, 5: esub_fn_6},
                 'affine_study': {0: affine_case_study_1, 1: affine_case_study_2, 2: affine_case_study_3, 3: affine_case_study_4, 4: affine_case_study_5},
-                'markov_process': markov_process,
                 'cstr': cstr_simulator,
                 'waste_water': waste_water_simulator,
                 'hydrogen_export': hydrogen_export_simulator,
