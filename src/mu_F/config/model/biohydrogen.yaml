@@ -38,10 +38,6 @@ n_max: 150.0       # mg/L culture nitrate ceiling
 o_max: 100.0       # % oxygen ceiling
 n_switch: 100.0    # mg/L H₂-production switch (Eq. 1g f(N))
 
-# Floor on (1 - σ(2·O)) gate; physically negligible, prevents the H
-# state collapsing to identically zero across the first node integration.
-eps_h_gate: 1.0e-6
-
 integration:
   scheme: tsit5
   step_size_controller: pid

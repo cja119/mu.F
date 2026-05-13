@@ -208,7 +208,7 @@ class ForwardDecentralisedEvaluator(BaseEvaluator):
             )
 
             result = self.factories[key].solve_batch(x0_batch, p_batch)
-            best_f, best_c, _ = pick_best(result)
+            best_f, best_c, _ = pick_best(result, self.factories[key], self.feasibility_tol)
 
             evals.append((-best_f).reshape(-1))
             flags.append(best_c.reshape(-1))

@@ -29,7 +29,7 @@ disturbance_low: [325.0, 0.95]
 disturbance_high: [375.0, 1.05]
 
 integration:
-  scheme: tsit5
+  scheme: Kvaerno5
   step_size_controller: pid
   t0: 0
   tf: 0.56

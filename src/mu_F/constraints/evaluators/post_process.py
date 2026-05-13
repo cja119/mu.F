@@ -192,7 +192,7 @@ class PostProcessUpperLevelEvaluator(BaseEvaluator):
         p_batch  = jnp.zeros((1, 0))
 
         result = self.factories[None].solve_batch(x0_batch, p_batch)
-        best_f, _, best_x = pick_best(result)
+        best_f, _, best_x = pick_best(result, self.factories[None], self.feasibility_tol)
         return best_f.reshape(()), best_x.reshape(-1)
 
 

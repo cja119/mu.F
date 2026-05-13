@@ -19,6 +19,7 @@ classifier_args:
   ann:
     hidden_size_options:
       - [100, 100]
+      - [200, 200]
       - [50, 50]
       - [25, 10]
       - [10, 10]

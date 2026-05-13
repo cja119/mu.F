@@ -47,18 +47,9 @@ def unit_dynamics(design_params, u, aux, decision_dependent, uncertainty_params,
 
     # defining the dynamics
     if cfg.case_study.eval_cost:
-        # Markov-style: registered value is a factory.
-        #   - legacy 'markov_process': factory takes the MarkovEnvironment
-        #     attached to the graph (graph.env).
-        #   - cfg-driven (e.g. cstr): factory takes cfg, returns a diffrax-shaped
-        #     (t, state, parameters, node) function. Sizes come from cfg.case_study.sizes.
-        if cfg.case_study.case_study == 'markov_process':
-            term = ODETerm(partial(case_studies[cfg.case_study.case_study](graph.env), node=node))
-            pad = graph.env.G_SIZE + 1
-        else:
-            term = ODETerm(partial(case_studies[cfg.case_study.case_study](cfg), node=node))
-            sizes = cfg.case_study.sizes
-            pad = int(sizes.G_SIZE) + int(sizes.L_SIZE)
+        term = ODETerm(partial(case_studies[cfg.case_study.case_study](cfg), node=node))
+        sizes = cfg.case_study.sizes
+        pad = int(sizes.G_SIZE) + int(sizes.L_SIZE) + int(sizes.PHI_SIZE)
         u = jnp.concatenate([u, jnp.zeros(u.shape[:-1] + (pad,))], axis=-1) # Path constraints + stage cost both start at 0.
     else:
         term = ODETerm(case_studies[cfg.case_study.case_study][node])
@@ -72,16 +63,6 @@ def unit_dynamics(design_params, u, aux, decision_dependent, uncertainty_params,
     # define step size controller for solver
     step_size_controller = dispatcher[cfg.model.integration.step_size_controller]
 
-    # `DirectAdjoint()` disables the default `RecursiveCheckpointAdjoint`'s
-    # checkpoint stack.  That stack is built only to support reverse-mode
-    # autodiff through the ODE — we never differentiate through
-    # `diffeqsolve` in mu_F (gradients come from surrogates), so
-    # checkpointing is pure overhead.  The payoff is significant under
-    # outer `vmap`: the checkpointed while-loop's buffer grows to
-    # `(vmap_width, n_checkpoints, n_state)`, and XLA's while-loop
-    # compile passes scale super-linearly with that tensor.  Dropping
-    # the buffer removes the biggest contributor to the pmap_all
-    # vmap-over-samples compile blowup.
     try:
         start = time.time()
         return diffeqsolve(
@@ -118,10 +99,7 @@ def unit_dynamics(design_params, u, aux, decision_dependent, uncertainty_params,
     finally:
         logging.info(f"Integration took {time.time() - start} seconds")
 
-
-
 # defining the dispatcher for the dynamics
-
 
 dispatcher = {
     "tsit5": Tsit5(),

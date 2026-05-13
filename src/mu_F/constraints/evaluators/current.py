@@ -77,14 +77,10 @@ def _current_reduced_space(graph, node, cfg):
     aux_indices   = np.arange(ndim - n_aux, ndim).astype(int)
     fix_indices   = np.hstack([input_indices, aux_indices]).astype(int)
 
-    # Extract design-variable bounds from extendedDS_bounds by removing
-    # the input and aux columns (which are fixed during optimisation).
-    decision_bounds = graph.nodes[node]["extendedDS_bounds"]
-    decision_bounds = [
-        jnp.delete(bound, fix_indices, axis=1) for bound in decision_bounds
-    ]
-    lb = jnp.asarray(decision_bounds[0]).reshape(-1)
-    ub = jnp.asarray(decision_bounds[1]).reshape(-1)
+
+    ks_design = graph.nodes[node]['KS_bounds']
+    lb = jnp.asarray([b[0] for b in ks_design]).reshape(-1)
+    ub = jnp.asarray([b[1] for b in ks_design]).reshape(-1)
 
     return ndim, input_indices, aux_indices, fix_indices, [lb, ub]
 
@@ -202,7 +198,7 @@ class CurrentConstraintEvaluator(BaseEvaluator):
 
         result = self.factories[key].solve_batch(x0_batch, p_batch)
 
-        best_f, best_c, best_x = pick_best(result)
+        best_f, best_c, best_x = pick_best(result, self.factories[key], self.feasibility_tol)
         params    = jnp.asarray(best_x).reshape(1, -1)   # (1, n_d_k)
         objective = jnp.asarray(best_f).reshape(1, 1)    # (1, 1)
         converged = jnp.asarray(best_c).reshape(1, 1)    # (1, 1)
@@ -312,7 +308,7 @@ class CurrentCostEvaluator(BaseEvaluator):
 
         result = self.factories[key].solve_batch(x0_batch, p_batch)
 
-        best_f, best_c, best_x = pick_best(result)
+        best_f, best_c, best_x = pick_best(result, self.factories[key], self.feasibility_tol)
         params    = jnp.asarray(best_x).reshape(1, -1)   # (1, n_d_k)
         objective = jnp.asarray(best_f).reshape(1, 1)    # (1, 1)
         converged = jnp.asarray(best_c).reshape(1, 1)    # (1, 1)

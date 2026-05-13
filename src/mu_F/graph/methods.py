@@ -89,15 +89,38 @@ def vmap_markov_edge_cfg(cfg):
 # -------------------------------------------------------------------------------- #
 
 def _markov_edge_with_clip(cfg):
-    """Slice F then clamp per-dim if cfg.case_study.edge_clip is provided."""
+    """Edge function for case studies with bounds"""
+
+    from omegaconf import OmegaConf, ListConfig, DictConfig
+
     F_size = int(cfg.case_study.sizes.F_SIZE)
+    
     clip = getattr(cfg.case_study, "edge_clip", None)
-    if clip is None:
+    
+    if clip is None or (isinstance(clip, str) and clip.lower() == "none"):
         return lambda rollout: rollout[..., :F_size]
-    bounds = jnp.asarray(clip)                                   # (F_size, 2)
+    
+    if isinstance(clip, (ListConfig, DictConfig)):
+        clip = OmegaConf.to_container(clip, resolve=True)
+
+    bounds = jnp.asarray(clip, dtype=jnp.float64)
+
+    if bounds.ndim != 2 or bounds.shape != (F_size, 2):
+        raise ValueError(
+            f"edge_clip for {cfg.case_study.case_study} must be a list of "
+            f"{F_size} [lo, hi] pairs; got shape {bounds.shape}"
+        )
     lo = bounds[:, 0]
     hi = bounds[:, 1]
-    return lambda rollout: jnp.clip(rollout[..., :F_size], lo, hi)
+
+    eps = float(getattr(cfg.case_study, "edge_clip_eps", 1.0e-6))
+
+    def _clip(rollout):
+        x = rollout[..., :F_size]
+        c = jnp.clip(x, lo, hi)
+        return c + eps * (x - c)
+    
+    return _clip
 
 
 def _vmap_with_clip(cfg):

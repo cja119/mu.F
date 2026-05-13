@@ -2,7 +2,7 @@
 target_reliability: 1.
 unit_wise_target_reliability: 1.
 
-pmap_batch: 100  # samples per pmap/vmap dispatch in evaluate_subproblem_batch
+pmap_batch: 500  # samples per pmap/vmap dispatch in evaluate_subproblem_batch
 
 deus:
   activity_type: 'dsc'
@@ -12,9 +12,9 @@ ku_approximation: 'box'
 vol_scale: 0.05
 
 ns:
-  n_live: 2500
+  n_live: 5000
   final_sample_live: 2500
-  n_replacements: 100
+  n_replacements: 500
   n_iter: 10000
   f0: 0.1
   alpha: 0.2

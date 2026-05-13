@@ -1214,12 +1214,7 @@ def _make_biohydrogen_step(cfg: DictConfig):
     N_MAX    = float(cfg.model.n_max)
     O_MAX    = float(cfg.model.o_max)
     N_SWITCH = float(cfg.model.n_switch)
-    # Floor on (1 - σ(2·O)).  At O≈20 % the sigmoid saturates and the gate
-    # rounds to ~4e-18, so H stays identically zero and DEUS's box-bound at
-    # downstream nodes collapses to [0, 0] (failing lbound < ubound).  A
-    # small floor leaks a physically negligible amount of H per sample,
-    # enough to keep the bound non-degenerate.
-    EPS_H_GATE = float(cfg.model.eps_h_gate)
+    TF       = float(cfg.model.integration.tf)
 
     @jit
     def _step(x: jnp.ndarray, u: jnp.ndarray, z: jnp.ndarray, node):
@@ -1235,10 +1230,10 @@ def _make_biohydrogen_step(cfg: DictConfig):
         t1 = mu_max * (1.0 - k_q / q_safe) * (C / (K_c + C + 1e-8))
         t2 = N / (K_N + N)
         t3 = sigmoid(O * 2.0)                  # ~0 at O≈0, ~1 at O>0
+        # Numerically-stable (1 - σ(2·O)): σ(-2·O) avoids the catastrophic
+        # cancellation that makes (1 - σ(2·20)) round to 0 in float64.
+        gate = sigmoid(-O * 2.0)
         f_N = sigmoid((N_SWITCH - N) * 1.0)    # ~1 at N<switch, ~0 otherwise
-
-        # O-gated H2 production — floored so the gate never numerically zeros.
-        gate = jnp.maximum(1.0 - t3, EPS_H_GATE)
 
         # Feed flow: alpha is fraction of remaining daily budget; /24 → L/h.
         F_in = alpha_u * jnp.maximum(F_max - F, 0.0) / 24.0
@@ -1259,9 +1254,21 @@ def _make_biohydrogen_step(cfg: DictConfig):
         dgdt = jnp.array([g_N, g_O])
 
         # Stage cost: negative H₂ production rate (we minimise; max H is min -H).
-        rwd = -Y_HX * X * gate * f_N / 1000.0
+        # No /1000 scaling — keeps the CTG band wide enough for the surrogate
+        # to discriminate trajectories cleanly.
+        rwd = -Y_HX * X * gate * f_N
 
-        return jnp.concatenate([jnp.ravel(dxdt), jnp.ravel(dgdt), jnp.atleast_1d(rwd)], axis=0)
+        # Terminal-style cost: `dPHI/dt = -H / tf` so the integral over one
+        # node equals the mean H over that node, giving a "running-H" reward
+        # signal that grows monotonically across the horizon and sharpens
+        # discrimination of trajectories that build H stock early.  Summed
+        # with the path reward by `_markov_cost_cfg` when PHI_SIZE > 0.
+        phi = -H / TF
+
+        return jnp.concatenate([
+            jnp.ravel(dxdt), jnp.ravel(dgdt),
+            jnp.atleast_1d(rwd), jnp.atleast_1d(phi),
+        ], axis=0)
 
     return _step
 
