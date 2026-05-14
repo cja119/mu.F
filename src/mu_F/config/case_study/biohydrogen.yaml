@@ -38,7 +38,7 @@ KS_bounds:
   - - 1.0
     - 3000.0
   - - 0.0
-    - 1.0
+    - 0.333
 
   aux_args:
   - - - None
@@ -54,10 +54,6 @@ parameters_best_estimate: [0.0]
 #   [N_Fed, alpha, X, C, N, q, O, H, F]
 extendedDS_bounds: None
 
-# Per-state clip applied by `make_biohydrogen_edge` to the F slice that
-# flows between nodes.  One [lo, hi] entry per F-state-dim (F_SIZE=7).
-# Order: [X, C, N, q, O, H, F_acc].  Comment out / delete to disable
-# clipping (the factory then no-ops back to the generic markov slicer).
 edge_clip:
   - [0.0, 5.0]      # X    biomass
   - [0.0, 60.0]     # C    carbon

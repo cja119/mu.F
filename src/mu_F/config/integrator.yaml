@@ -1,14 +1,14 @@
 
 defaults:
-  - case_study: hydrogen_export #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator # affine_study  #serial_batch_reactor #tablet_press # convex_estimator # serial_batch_reactor #convex_estimator # serial_batch_reactor # tablet_press #
-  - model: hydrogen_export #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator # affine_study  #serial_batch_reactor #tablet_press # convex_estimator # serial_batch_reactor #convex_estimator # serial_batch_reactor #tablet_press #serial_batch_reactor
-  - surrogate: hydrogen_export #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator # affine_study  #serial_batch_reactor #tablet_press # convex_estimator # serial_batch_reactor #convex_estimator # serial_batch_reactor #tablet_press #serial_batch_reactor
-  - solvers: hydrogen_export #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator # affine_study  #serial_batch_reactor #tablet_press # convex_estimator # serial_batch_reactor #convex_estimator # serial_batch_reactor #tablet_press #serial_batch_reactor
-  - samplers: hydrogen_export #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator # affine_study  #serial_batch_reactor #tablet_press # convex_estimator # serial_batch_reactor #convex_estimator # serial_batch_reactor #tablet_press #serial_batch_reactor
-  - reconstruction: hydrogen_export #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator # affine_study  #serial_batch_reactor #tablet_press # convex_estimator # serial_batch_reactor #convex_estimator # serial_batch_reactor #tablet_press #serial_batch_reactor
-  - init: hydrogen_export #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator # affine_study  #serial_batch_reactor #tablet_press # convex_estimator # serial_batch_reactor #convex_estimator # serial_batch_reactor #tablet_press #serial_batch_reactor
+  - case_study: waste_water #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator # affine_study  #serial_batch_reactor #tablet_press # convex_estimator # serial_batch_reactor #convex_estimator # serial_batch_reactor # tablet_press #
+  - model: waste_water #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator # affine_study  #serial_batch_reactor #tablet_press # convex_estimator # serial_batch_reactor #convex_estimator # serial_batch_reactor #tablet_press #serial_batch_reactor
+  - surrogate: waste_water #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator # affine_study  #serial_batch_reactor #tablet_press # convex_estimator # serial_batch_reactor #convex_estimator # serial_batch_reactor #tablet_press #serial_batch_reactor
+  - solvers: waste_water #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator # affine_study  #serial_batch_reactor #tablet_press # convex_estimator # serial_batch_reactor #convex_estimator # serial_batch_reactor #tablet_press #serial_batch_reactor
+  - samplers: waste_water #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator # affine_study  #serial_batch_reactor #tablet_press # convex_estimator # serial_batch_reactor #convex_estimator # serial_batch_reactor #tablet_press #serial_batch_reactor
+  - reconstruction: waste_water #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator # affine_study  #serial_batch_reactor #tablet_press # convex_estimator # serial_batch_reactor #convex_estimator # serial_batch_reactor #tablet_press #serial_batch_reactor
+  - init: waste_water #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator # affine_study  #serial_batch_reactor #tablet_press # convex_estimator # serial_batch_reactor #convex_estimator # serial_batch_reactor #tablet_press #serial_batch_reactor
 
-max_devices: 12
+max_devices: 10
 formulation: deterministic # probabilistic  # #  #  #
 method: multiple_shooting #decomposition_constraint_tuner #decomposition #direct # decomposition # # #direct # decomposition_constraint_tuner # direct # decomposition # #decomposition #decomposition # direct #
 max_uncertain_samples: 50
