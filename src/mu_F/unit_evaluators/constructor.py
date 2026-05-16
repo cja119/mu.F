@@ -72,9 +72,49 @@ class unit_evaluation(base_unit):
         dd_params = expand_dims(dd_params, axis=-1)
         input_args = expand_dims(input_args, axis=1)
         design_args = expand_dims(design_args, axis=1)
-        aux_args = expand_dims(aux_args, axis=1)            
+        aux_args = expand_dims(aux_args, axis=1)
 
-        return self.unit_cfg.evaluator(design_args, input_args, aux_args, dd_params, uncertain_params)
+        try:
+            return self.unit_cfg.evaluator(
+                design_args, input_args, aux_args, dd_params, uncertain_params,
+            )
+        except Exception as outer_exc:
+
+            n_batch = int(design_args.shape[0])
+            logging.error(
+                "[unit_eval] vmapped evaluator failed; isolating offender "
+                "row-by-row over %d rows.  Outer error: %r",
+                n_batch, outer_exc,
+            )
+            for i in range(n_batch):
+                d_i   = design_args[i:i+1]
+                u_i   = input_args[i:i+1]
+                a_i   = aux_args[i:i+1]
+                dd_i  = dd_params[i:i+1]
+                try:
+                    self.unit_cfg.evaluator(d_i, u_i, a_i, dd_i, uncertain_params)
+                except Exception as row_exc:
+                    np.set_printoptions(suppress=True, precision=6, linewidth=200)
+                    logging.error(
+                        "[unit_eval] FAILING ROW %d / %d\n"
+                        "  design_args      = %s\n"
+                        "  input_args       = %s\n"
+                        "  aux_args         = %s\n"
+                        "  dd_params        = %s\n"
+                        "  uncertain_params = %s\n"
+                        "  row exception    = %r",
+                        i, n_batch,
+                        np.asarray(d_i).squeeze(),
+                        np.asarray(u_i).squeeze(),
+                        np.asarray(a_i).squeeze(),
+                        np.asarray(dd_i).squeeze(),
+                        np.asarray(uncertain_params).squeeze(),
+                        row_exc,
+                    )
+                    raise
+            # Loop finished without re-failing → outer error came from
+            # something other than a deterministic single-row failure.
+            raise
 
 
 def expand_dims(array, axis):

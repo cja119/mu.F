@@ -51,10 +51,10 @@ q_m_ref: 100.0        # mmol/L/d, nominal biogas rate
 alpha: 0.5
 
 integration:
-  scheme: tsit5
+  scheme: Kvaerno5
   step_size_controller: pid
   t0: 0
   tf: 0.4
   dt0: Null
-  max_steps: 5000
+  max_steps: 100000
   vmap_chunk_size: 0

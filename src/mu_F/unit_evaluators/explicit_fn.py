@@ -7,6 +7,7 @@ import jax.numpy as jnp
 from jax import hessian
 from jax.nn import sigmoid
 
+
 # --- tablet press case study --- # 
 
 @partial(jit, static_argnums=(0,))
@@ -1010,7 +1011,7 @@ def _make_waste_water_step(cfg: DictConfig):
         mu_2 = mu_2_max * S2 / (S2 + k_s2 + S2 * S2 / k_i2)
 
         # CO2 in liquid 
-        co2 = C + S2 - Z
+        co2 = _softplus(C + S2 - Z, beta=10.0)
         phi = co2 + k_h * p_t + (k_6 / kl_a) * mu_2 * X2
         p_c = (phi - jnp.sqrt(phi * phi - 4.0 * k_h * p_t * co2)) / (2.0 * k_h)
         q_c = kl_a * (co2 - k_h * p_c)
@@ -1069,6 +1070,10 @@ def _smooth_min(x, y, beta):
     """Softplus-smooth min(x, y).  beta -> inf recovers jnp.minimum."""
     return -_smooth_max(-x, -y, beta)
 
+def _softplus(x, beta):
+    """Softplus function with smoothness parameter beta.  beta -> inf recovers relu."""
+    return jnp.logaddexp(x * beta, 0.0) / beta
+
 
 # -------------------------------------------------------------------------------- #
 # ----------------- Hydrogen export (port of sample_envs/hydrogen3.py) ----------- #
@@ -1115,11 +1120,6 @@ def _make_hydrogen_export_step(cfg: DictConfig):
     storage_lo = lower_storage_limit * upper_storage_limit
     storage_hi = upper_storage_limit
 
-    # `smooth_eps` is the rounding-zone width as a fraction of each variable's
-    # range.  At 1 % the smoothed dynamics differ from hard clip / max(·, 0)
-    # by only ~log(2) · smooth_eps · range on the boundary — physically
-    # negligible — but the result is C^∞ everywhere, which is what
-    # smooth-Newton SQP needs to converge.
     SMOOTH_EPS = float(cfg.model.smooth_eps)
     beta_tt      = 1.0 / (SMOOTH_EPS * train_throughput_max)
     beta_storage = 1.0 / (SMOOTH_EPS * (storage_hi - storage_lo))

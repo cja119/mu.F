@@ -151,8 +151,6 @@ def cstr_ode(cfg):
     def cstr_ode_fn(t: float, state: jnp.ndarray, parameters: jnp.ndarray, node=None):
         x = state[..., :X_size]
         u = parameters[..., :U_size]
-        # uncertainties live at parameters[..., U_size:U_size + Z_size] but
-        # cstr does not consume them (disturbances aren't injected here).
         return step(x, u, node)
 
     return cstr_ode_fn

@@ -39,7 +39,7 @@ o_max: 100.0       # % oxygen ceiling
 n_switch: 100.0    # mg/L H₂-production switch (Eq. 1g f(N))
 
 integration:
-  scheme: tsit5
+  scheme: Kvaerno5
   step_size_controller: pid
   t0: 0
   tf: 24           # hours per node
