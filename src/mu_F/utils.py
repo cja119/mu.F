@@ -358,13 +358,6 @@ class apply_feasibility(feasibility_base):
         else:
             return  jnp.vstack(X), jnp.vstack(labels), cond
 
-def requires_param(param_name: str):
-    def deco(fn):
-        sig = inspect.signature(fn)
-        if param_name not in sig.parameters:
-            raise TypeError(f"{fn.__name__} must have parameter '{param_name}', got {sig}")
-        return fn
-    return deco
 
 def check_requires(fn, param_name: str) -> bool:
     """True if `fn` can accept `param_name` (explicitly or via **kwargs)."""

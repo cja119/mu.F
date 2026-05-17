@@ -44,5 +44,5 @@ integration:
   t0: 0
   tf: 24           # hours per node
   dt0: Null
-  max_steps: 100000
+  max_steps: 5000
   vmap_chunk_size: 0
