@@ -6,9 +6,7 @@ vmap_evaluations: True
 
 eval_cost: True
 
-num_nodes: 20
-# 20 nodes × 0.4 d = 8 d total horizon (~6 methanogen time constants).
-# Long enough to see biology settle, short enough not to compound washout.
+num_nodes: 72
 
 adjacency_matrix: None
 
