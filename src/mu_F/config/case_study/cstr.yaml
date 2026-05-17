@@ -74,3 +74,5 @@ unit_op: 'dynamic'
 n_theta: 2
 
 fn_evals: 0
+
+bypass_visualisations: True

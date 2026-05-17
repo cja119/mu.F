@@ -82,3 +82,5 @@ unit_op: 'steady_state'
 n_theta: 1
 
 fn_evals: 0
+
+bypass_visualisations: True
