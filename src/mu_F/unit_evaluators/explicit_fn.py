@@ -992,11 +992,11 @@ def _make_waste_water_step(cfg: DictConfig):
     PH_MAX   = float(cfg.model.ph_max)
     K_B      = float(cfg.model.k_b)
     EPS_Z_S2 = float(cfg.model.eps_z_s2)
+    LOG_FLOOR = 1e-30
+
     # Reward scaling
     Q_M_REF  = float(cfg.model.q_m_ref)
-    # α (biomass-in-liquid fraction) is supplied at runtime via the aux slot.
-    # The rollout-time default lives in cfg.case_study.aux_default; during DEUS
-    # sampling/optimization, aux is drawn from KS_bounds.aux_args.
+
 
     # Day-indexed
     CODin = jnp.array([  # g/l
@@ -1063,9 +1063,9 @@ def _make_waste_water_step(cfg: DictConfig):
         # CO2 in liquid 
         co2 = _softplus(C + S2 - Z, beta=10.0)
         phi = co2 + k_h * p_t + (k_6 / kl_a) * mu_2 * X2
-        p_c = (phi - jnp.sqrt(_softplus(phi * phi - 4.0 * k_h * p_t * co2, beta=10.0))) / (2.0 * k_h)
+        p_c = (phi - jnp.sqrt(LOG_FLOOR + _softplus(phi * phi - 4.0 * k_h * p_t * co2, beta=10.0))) / (2.0 * k_h)
         q_c = kl_a * (co2 - k_h * p_c)
-        pH = jnp.log10(_softplus(Z - S2, beta=20.0)) - jnp.log10(_softplus(C - Z + S2, beta=20.0)) - jnp.log10(K_B)
+        pH = jnp.log10(_softplus(Z - S2, beta=20.0)+LOG_FLOOR) - jnp.log10(_softplus(C - Z + S2, beta=20.0)+LOG_FLOOR) - jnp.log10(K_B)
 
         # Mass balances (Eqs. 20-25)
         dX1 = (mu_1 - alpha * D) * X1
