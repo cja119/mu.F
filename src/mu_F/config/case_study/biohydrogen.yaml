@@ -17,10 +17,6 @@ n_aux_args:
   node_0: 0
   (0,1): 0
 
-# One global aux variable (max_fr_per_node ∈ [0, 1]) shared across all
-# nodes — sampled by Sobol / DEUS alongside per-node decisions.  Used inside
-# the step as a per-node F_in cap (path constraint g_rate); see
-# _make_biohydrogen_step.
 global_n_aux_args: 1
 
 aux_default: [1.0]
@@ -43,17 +39,7 @@ sizes:
   L_SIZE: 1    # path reward: -Y_HX·X·(1-σ(2O))·f(N) (no /1000 scaling)
   PHI_SIZE: 1  # terminal-style: dPHI/dt = -H/tf -> integral per node = -mean(H)
 
-# u = [N_Fed (mg/L), log_F_in (natural log of feed flow rate L/h)]
-# u[1] is sampled in log space so Sobol naturally explores the
-# budget-feasible region: with linear-uniform sampling on [0, F_in_max] the
-# median trajectory blows the budget 5×; with log-uniform on
-# [log(1e-6), log(1.39e-3)] the median trajectory uses ~27 % of budget.
-# Inside the step: F_in = exp(u[1]).  Bounds:
-#   F_in_min = 1e-6 L/h   (effectively "off"; full horizon ≈ 7e-4 L)
-#   F_in_max = 1.39e-3 L/h (matches the old alpha=0.333 envelope at F=0)
-# Aux (global): max_fr_per_node ∈ [0, 1] — Sobol/DEUS-sampled per trajectory.
-# Inside the step, per-node F_in cap = max_fr_per_node · F_max / tf is
-# enforced via the g_rate path constraint.
+
 KS_bounds:
   design_args:
   - - 1.0
