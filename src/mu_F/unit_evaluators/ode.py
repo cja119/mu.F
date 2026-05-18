@@ -190,13 +190,20 @@ def biohydrogen_ode(cfg):
     X_size = int(cfg.case_study.sizes.X_SIZE)
     U_size = int(cfg.case_study.sizes.U_SIZE)
     Z_size = int(cfg.case_study.sizes.Z_SIZE)
+    AUX_size = int(cfg.case_study.get('global_n_aux_args', 0))
     step = _make_biohydrogen_step(cfg)
+
+    # unit_dynamics packs params as [design | decision_dependent | aux | uncertainty].
+    # biohydrogen has decision_dependent_size = 0, so aux sits at U_size+Z_size.
+    aux_lo = U_size + Z_size
+    aux_hi = aux_lo + AUX_size
 
     def biohydrogen_ode_fn(t: float, state: jnp.ndarray, parameters: jnp.ndarray, node=None):
         x = state[..., :X_size]
         u = parameters[..., :U_size]
         z = parameters[..., U_size:U_size + Z_size]
-        return step(x, u, z, node)
+        aux = parameters[..., aux_lo:aux_hi]
+        return step(x, u, z, aux, node)
 
     return biohydrogen_ode_fn
 

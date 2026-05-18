@@ -169,10 +169,34 @@ def unit_params_fn(cfg, G):
     
 
 def aux_filter(cfg, G):
-    if G.G.graph['n_aux_args'] == 0:
-        return {edge: lambda x: x for edge in G.G.edges}
-    else:
-        return {edge: lambda x: [x[0][:,:-G.G.graph['n_aux_args']], x[1][:,:-G.G.graph['n_aux_args']]] for edge in G.G.edges}
+    """Per-edge filter trimming `input_data_bounds` to the successor's
+    `n_input_args` columns.
+
+    `input_data_bounds` has whatever column count the edge's `edge_fn`
+    produces.  For markov-style edges (`_markov_edge_with_clip`) that's
+    already `n_input_args`.  For older edges (e.g. `data_transform_cvx`,
+    which returns the full dynamics profile) it can exceed `n_input_args`;
+    the bounds dict for the backward sub-problem still needs exactly
+    `n_input_args` columns per predecessor.
+
+    The trim uses the universal per-node `n_input_args` (set by
+    `cs_assembly.add_n_input_args`) instead of the markov-only
+    `sizes.F_SIZE`, so it's correct across all case studies regardless
+    of whether they declare the F/G/L/PHI bundle layout.
+
+    No-op when the column count already matches.
+    """
+    def make_filter(successor):
+        n_inp = int(G.G.nodes[successor]['n_input_args'])
+
+        def _filter(x):
+            n_cols = int(x[0].shape[-1])
+            if n_cols <= n_inp:
+                return x
+            return [x[0][:, :n_inp], x[1][:, :n_inp]]
+        return _filter
+
+    return {edge: make_filter(edge[1]) for edge in G.G.edges}
 
 def solver_constructor(cfg, G):
     """

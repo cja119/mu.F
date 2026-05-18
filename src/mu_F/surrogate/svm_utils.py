@@ -83,7 +83,7 @@ def compute_best_svm_classifier(
     
     # build classification model
     x_r = sum(labels) / labels.shape[0]
-    clf = Pipeline([("scaler", StandardScaler()), ("svc", svm.SVC())])
+    clf = Pipeline([("scaler", StandardScaler()), ("svc", svm.SVC(cache_size=2000))])
     parameters = [
         {
             "svc__kernel": cfg.surrogate.classifier_args.svm.kernel,
@@ -92,8 +92,8 @@ def compute_best_svm_classifier(
             "svc__probability": cfg.surrogate.classifier_args.svm.probability,
         }
     ]
-    # grid search over parameters
-    model = GridSearchCV(clf, parameters, scoring="accuracy", cv=num_folds)
+    n_jobs = int(getattr(cfg, 'max_devices', 1))
+    model = GridSearchCV(clf, parameters, scoring="accuracy", cv=num_folds, n_jobs=n_jobs)
     try:
         if data_points.ndim > 2: data_points = data_points.squeeze()
         model.fit(data_points, labels.squeeze())

@@ -17,6 +17,12 @@ n_aux_args:
   node_0: 0
   (0,1): 0
 
+# One global aux variable (max_fr_per_node ∈ [0, 1]) shared across all
+# nodes — sampled by Sobol / DEUS alongside per-node decisions.  Used inside
+# the step as a per-node F_in cap (path constraint g_rate); see
+# _make_biohydrogen_step.
+global_n_aux_args: 1
+
 n_input_args: 7
 
 reject_time: 0.5
@@ -25,24 +31,34 @@ discount_factor: 0.99999
 
 sizes:
   X_SIZE: 7    # X, C, N, q, O, H, F
-  U_SIZE: 2    # N_Fed, alpha
+  U_SIZE: 2    # N_Fed, F_in
   F_SIZE: 7
-  G_SIZE: 2    # N <= 150 mg/L, O <= 100 %
+  G_SIZE: 4    # N <= 150 mg/L, O <= 100 %, F <= F_max, F_in <= max_fr·F_max/tf
   Z_SIZE: 0
   L_SIZE: 1    # path reward: -Y_HX·X·(1-σ(2O))·f(N) (no /1000 scaling)
   PHI_SIZE: 1  # terminal-style: dPHI/dt = -H/tf -> integral per node = -mean(H)
 
-# u = [N_Fed (mg/L), alpha (fraction of remaining daily feed budget [0,1])]
+# u = [N_Fed (mg/L), log_F_in (natural log of feed flow rate L/h)]
+# u[1] is sampled in log space so Sobol naturally explores the
+# budget-feasible region: with linear-uniform sampling on [0, F_in_max] the
+# median trajectory blows the budget 5×; with log-uniform on
+# [log(1e-6), log(1.39e-3)] the median trajectory uses ~27 % of budget.
+# Inside the step: F_in = exp(u[1]).  Bounds:
+#   F_in_min = 1e-6 L/h   (effectively "off"; full horizon ≈ 7e-4 L)
+#   F_in_max = 1.39e-3 L/h (matches the old alpha=0.333 envelope at F=0)
+# Aux (global): max_fr_per_node ∈ [0, 1] — Sobol/DEUS-sampled per trajectory.
+# Inside the step, per-node F_in cap = max_fr_per_node · F_max / tf is
+# enforced via the g_rate path constraint.
 KS_bounds:
   design_args:
   - - 1.0
     - 3000.0
-  - - 0.0
-    - 0.333
+  - - -13.81551    # log(1e-6)
+    - -6.57897     # log(1.39e-3)
 
   aux_args:
-  - - - None
-      - None
+  - - - 0.0
+      - 1.0
 
 # Single dummy scenario — biohydrogen has no exogenous disturbance, but the
 # parameter expansion machinery wants at least one entry.
@@ -51,25 +67,23 @@ parameters_samples: [{'c': [0.0], 'w': 1.0}]
 parameters_best_estimate: [0.0]
 
 # 9-d extended DS for reconstruction plotting:
-#   [N_Fed, alpha, X, C, N, q, O, H, F]
+#   [N_Fed, F_in, X, C, N, q, O, H, F]
 extendedDS_bounds: None
 
 edge_clip:
-  - [0.0, 5.0]      # X    biomass
-  - [0.0, 60.0]     # C    carbon
-  - [0.0, 250.0]    # N    culture nitrate
-  - [0.01, 5.0]     # q    quota (keep above 1e-2 so k_q/q stays bounded)
-  - [0.0, 110.0]    # O    oxygen %
-  - [0.0, 1000.0]   # H    H2 accumulator
-  - [0.0, 0.1]      # F    feed accumulator (capped at F_max)
+  - [0.0, 5.0]         # X    biomass
+  - [0.0, 60.0]        # C    carbon
+  - [0.0, 250.0]       # N    culture nitrate
+  - [0.01, 5.0]        # q    quota (keep above 1e-2 so k_q/q stays bounded)
+  - [0.0, 110.0]       # O    oxygen %
+  - [0.0, 10000.0]     # H    H2 accumulator (was 1000; physical max ~8400)
+  - [-1.0e6, 1.0e6]    # F    feed accumulator — no clip; g_F PC enforces ≤ F_max
 
 design_space_dimensions:
 - 'u0'
 - 'u1'
 
-global_n_aux_args: 0
-
-process_space_names: ['N', 'alpha']
+process_space_names: ['N', 'log_F_in']
 
 mode:
   - backward

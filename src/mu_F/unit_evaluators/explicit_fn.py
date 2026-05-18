@@ -1264,12 +1264,21 @@ def _make_biohydrogen_step(cfg: DictConfig):
     Port of sample_envs/biohydrogen.py.  States: X (biomass), C (carbon),
     N (culture nitrate), q (intracellular nitrogen quota), O (oxygen %),
     H (accumulated H2), F (accumulated feed volume).  Controls: u[0] =
-    N_Fed (feed nitrate concentration mg/L), u[1] = alpha (fraction of
-    remaining feed budget [0, 1]).  No disturbance (Z_SIZE = 0).
+    N_Fed (feed nitrate concentration mg/L), u[1] = log_F_in (natural log
+    of feed flow rate L/h).  F_in = exp(u[1]) inside the step.  Sampling
+    u[1] in log space biases Sobol/DEUS toward small F_in values, which
+    is where the budget-feasible region lives.  No disturbance (Z_SIZE = 0).
 
-    Returns `_step(x, u, z, node)` emitting [F | G | R] of shape
-    (7 + 2 + 1,) = 10.  Integration is in hours; the F_in /24 normaliser
-    treats u[1] as a daily-budget fraction.
+    Global aux variable (sampled per trajectory): max_fr_per_node ∈ [0, 1].
+    Sets the per-node F_in cap to max_fr_per_node · F_max / tf via the
+    g_rate path constraint.  Lets Sobol / DEUS explore both how much to
+    feed (u[1]) and how concentrated the feed strategy is (aux).
+
+    Budget F ≤ F_max is also enforced as a path constraint (g_F).  Both
+    PCs use the framework's negative-violated / zero-feasible convention.
+
+    Returns `_step(x, u, z, aux, node)` emitting [F | G | R | Φ] of shape
+    (7 + 4 + 1 + 1,) = 13.  Integration is in hours.
     """
     mu_max = float(cfg.model.mu_max)
     k_q    = float(cfg.model.k_q)
@@ -1292,13 +1301,16 @@ def _make_biohydrogen_step(cfg: DictConfig):
     TF       = float(cfg.model.integration.tf)
 
     @jit
-    def _step(x: jnp.ndarray, u: jnp.ndarray, z: jnp.ndarray, node):
+    def _step(x: jnp.ndarray, u: jnp.ndarray, z: jnp.ndarray, aux: jnp.ndarray, node):
         x = jnp.ravel(x)
         u = jnp.ravel(u)
+        aux = jnp.ravel(aux)
         # z is unused — biohydrogen has Z_SIZE = 0.
 
         X, C, N, q, O, H, F = x[0], x[1], x[2], x[3], x[4], x[5], x[6]
-        N_Fed, alpha_u = u[0], u[1]
+        N_Fed, log_F_in = u[0], u[1]
+        F_in = jnp.exp(log_F_in)                  # decision is in log space
+        max_fr_per_node = aux[0]
 
         # Guards: k_q/q diverges as q→0, and C/(K_c+C)=0/0 at C=0 with K_c=0.
         q_safe = jnp.maximum(q, 1e-8)
@@ -1310,10 +1322,8 @@ def _make_biohydrogen_step(cfg: DictConfig):
         gate = sigmoid(-O * 2.0)
         f_N = sigmoid((N_SWITCH - N) * 1.0)    # ~1 at N<switch, ~0 otherwise
 
-        # Feed flow: alpha is fraction of remaining daily budget; /24 → L/h.
-        F_in = alpha_u * jnp.maximum(F_max - F, 0.0) / 24.0
-
-        # State derivatives
+        # State derivatives.  F_in is the decision directly (L/h); cumulative
+        # budget is enforced via g_F below, per-node cap via g_rate.
         dX = X * t1 - mu_d * X ** 2
         dC = -Y_CX * X * t1 + F_in * C_Fed
         dN = -Y_NX * X * t2 * mu_max + F_in * N_Fed
@@ -1326,7 +1336,11 @@ def _make_biohydrogen_step(cfg: DictConfig):
         # Path constraints — framework convention (negative = violated, 0 feasible).
         g_N = -jnp.maximum(N - N_MAX, 0.0) / N_MAX
         g_O = -jnp.maximum(O - O_MAX, 0.0) / O_MAX
-        dgdt = jnp.array([g_N, g_O])
+        g_F = -jnp.maximum(F - F_max, 0.0) / F_max
+        # Per-node feed cap from the global aux: F_in ≤ max_fr·F_max/tf
+        f_in_cap = max_fr_per_node * F_max / TF
+        g_rate = -jnp.maximum(F_in - f_in_cap, 0.0) / (F_max / TF)
+        dgdt = jnp.array([g_N, g_O, g_F, g_rate])
 
         # Cost
         rwd = -Y_HX * X * gate * f_N
@@ -1350,7 +1364,7 @@ def biohydrogen_simulator(cfg: DictConfig):
     step = _make_biohydrogen_step(cfg)
 
     def biohydrogen_simulator_fn(cfg_unused: DictConfig, design_args, input_args, aux, uncertainties, node):
-        return step(input_args, design_args, uncertainties, node)
+        return step(input_args, design_args, uncertainties, aux, node)
 
     return biohydrogen_simulator_fn
 

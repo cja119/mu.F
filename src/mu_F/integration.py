@@ -544,7 +544,8 @@ class subproblem_model(ABC):
                 start_time = time.time()
                 if len(feasible_idx) > 0:
                     outputs_feasible = outputs[feasible_idx]
-                    ctg_evals_feasible, ctg_success = self.backward_cost_to_go.evaluate(outputs_feasible, aux_args)
+                    aux_feasible = aux_args[feasible_idx] if aux_args.shape[0] == outputs.shape[0] else aux_args
+                    ctg_evals_feasible, ctg_success = self.backward_cost_to_go.evaluate(outputs_feasible, aux_feasible)
                     ctg_evals_flagged = jnp.where(ctg_success.reshape(-1), ctg_evals_feasible.reshape(-1), jnp.nan)
                     ctg_function_evals = jnp.full(outputs.shape[0], jnp.nan).at[feasible_idx].set(ctg_evals_flagged)
                 else:
