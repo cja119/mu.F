@@ -919,10 +919,10 @@ def _make_cstr_step(cfg: DictConfig):
         u = jnp.ravel(u)
         dxdt = model(x, u).squeeze()
 
-        g_lower = -jnp.minimum(0.0, (x[1] - t_lower) / t_upper)
-        g_upper = -jnp.minimum(0.0, (t_upper - x[1]) / t_upper)
-        dgdt = jnp.concatenate([jnp.atleast_1d(g_lower), jnp.atleast_1d(g_upper)], axis=0)
+        g_lower = jnp.atleast_1d((t_lower - x[1]) / t_upper)
+        g_upper = jnp.atleast_1d((x[1] - t_upper) / t_upper)
 
+        dgdt = - jnp.maximum(jnp.array([g_lower, g_upper]), 0.0)
         rwd = _smooth_log(jnp.abs(jnp.take(sp_ca, node) - x[0]))
 
         return jnp.concatenate([jnp.ravel(dxdt), jnp.ravel(dgdt), jnp.ravel(rwd)], axis=0)
@@ -1077,12 +1077,12 @@ def _make_waste_water_step(cfg: DictConfig):
         dxdt = jnp.array([dX1, dX2, dZ, dS1, dS2, dC])
 
         # Path constraints. 
-        g_cod   = (COD_MAX - (S1 + GAMMA * S2)) / COD_MAX
-        g_s2    = (S2_MAX - S2) / S2_MAX
-        g_ph_hi = (PH_MAX - pH) / PH_MAX
-        g_ph_lo = (pH - PH_MIN) / PH_MIN
-        g_zs2   = (Z - S2 - EPS_Z_S2) / (jnp.abs(Z)+ jnp.abs(S2))
-        dgdt = -jnp.minimum(jnp.array([g_cod, g_s2, g_ph_hi, g_ph_lo, g_zs2]), 0.0)
+        g_cod   = ((S1 + GAMMA * S2) - COD_MAX) / COD_MAX
+        g_s2    = (S2 - S2_MAX) / S2_MAX
+        g_ph_hi = (pH - PH_MAX) / PH_MAX
+        g_ph_lo = (PH_MIN - pH) / PH_MIN
+        g_zs2   = (S2 + EPS_Z_S2 - Z) / (jnp.abs(Z)+ jnp.abs(S2))
+        dgdt = -jnp.maximum(jnp.array([g_cod, g_s2, g_ph_hi, g_ph_lo, g_zs2]), 0.0)
 
         # Stage cost
         q_m = k_6 * mu_2 * X2
@@ -1337,13 +1337,13 @@ def _make_biohydrogen_step(cfg: DictConfig):
         dxdt = jnp.array([dX, dC, dN, dq, dO, dH, dF])
 
         # Path constraints — framework convention (negative = violated, 0 feasible).
-        g_N = -jnp.maximum(N - N_MAX, 0.0) / N_MAX
-        g_O = -jnp.maximum(O - O_MAX, 0.0) / O_MAX
-        g_F = -jnp.maximum(F - F_max, 0.0) / F_max
-        # Per-node feed cap from the global aux: F_in ≤ max_fr·F_max/tf
         f_in_cap = max_fr_per_node * F_max / TF
-        g_rate = -jnp.maximum(F_in - f_in_cap, 0.0) / (F_max / TF)
-        dgdt = jnp.array([g_N, g_O, g_F, g_rate])
+        g_N = (N - N_MAX) / N_MAX
+        g_O = (O - O_MAX) / O_MAX
+        g_F = (F - F_max) / F_max
+        g_rate = (F_in - f_in_cap) / (F_max / TF)
+
+        dgdt = -jnp.maximum(jnp.array([g_N, g_O, g_F, g_rate]), 0.0)
 
         # Cost
         rwd = -Y_HX * X * gate * f_N
