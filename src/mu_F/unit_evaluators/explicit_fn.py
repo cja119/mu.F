@@ -1044,7 +1044,8 @@ def _make_waste_water_step(cfg: DictConfig):
         z   = jnp.ravel(z)
 
         X1, X2, Z, S1, S2, C = x[0], x[1], x[2], x[3], x[4], x[5]
-        D = u[0]
+        log_D = u[0]
+        D = jnp.exp(log_D)
         alpha = aux[0]
         #S1_in, S2_in, pH_in, C_in = z[0], z[1], z[2], z[3]
 

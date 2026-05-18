@@ -39,7 +39,7 @@ k_6: 453.0
 
 # Constraint thresholds
 gamma: 0.064          # g COD per mmol VFA
-cod_max: 1.0          # g/L
+cod_max: 3.0          # g/L
 s2_max: 50.0          # mmol/L
 ph_min: 6.5
 ph_max: 7.5

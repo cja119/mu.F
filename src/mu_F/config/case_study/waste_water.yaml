@@ -33,10 +33,11 @@ sizes:
 
 KS_bounds:
   design_args:
-  - - 0.0
-    - 2.0
-  # D upper bound raised from 0.5 → 2.0 /d so the methanogen washout edge
-  # (D_crit ≈ μ_2,max / α; ≈ 1.48 /d at α = 0.5; ≈ 0.74 /d at α = 1) is reachable.
+  - - -4.60517    # log(0.01)
+    - 0.693147    # log(2.0)
+  # u[0] = log(D); D = exp(u[0]) inside the step.  Log-uniform Sobol
+  # crowds the small-D (near-steady-state, more-feasible) region while
+  # still reaching the washout edge near D = 2.
 
   aux_args:
   - - - 0.5
@@ -55,7 +56,7 @@ parameters_best_estimate: [3.0, 30.0, 65.0, 95.0]
 extendedDS_bounds: None
 
 design_space_dimensions:
-- 'D'
+- 'log_D'
 
 global_n_aux_args: 1
 
@@ -65,7 +66,7 @@ aux_default: [0.5]
 # when aux is not supplied externally; the DEUS sampling/optimization paths
 # instead draw aux from KS_bounds.aux_args.
 
-process_space_names: ['D']
+process_space_names: ['log_D']
 
 mode:
   - backward
