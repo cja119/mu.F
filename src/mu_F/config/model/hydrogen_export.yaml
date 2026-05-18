@@ -28,8 +28,9 @@ lower_ramp_limit: 0.25
 upper_ramp_limit: 0.1
 lower_storage_limit: 0.2
 upper_storage_limit: 295435
+switch_time: 84
 
-
+smooth_beta_export: 40
 lambda_penalty: 1e-3
 smooth_eps: 1.0e-2
 

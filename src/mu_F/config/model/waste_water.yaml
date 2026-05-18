@@ -8,7 +8,7 @@ root_node_inputs:
   # S1(0)=0.5 starts inside COD_MAX=1.0 so COD isn't pre-violated.
 
 constraint:
-  auxiliary: 'None'
+  auxiliary: 'global'
 
 node_aux: None
 
@@ -27,6 +27,7 @@ k_i2: 256.0       # mmol/L
 kl_a: 19.8        # /d
 p_t: 1.0          # atm
 k_h: 16.0         # mmol/L/atm
+K_a: 1.5e-5      # mol/L
 
 # Yields
 k_1: 42.14
@@ -38,7 +39,7 @@ k_6: 453.0
 
 # Constraint thresholds
 gamma: 0.064          # g COD per mmol VFA
-cod_max: 1.0          # g/L
+cod_max: 3.0          # g/L
 s2_max: 50.0          # mmol/L
 ph_min: 6.5
 ph_max: 7.5
@@ -46,15 +47,15 @@ k_b: 6.5e-7           # mol/L
 eps_z_s2: 1.0e-3      # mmol/L safety floor on Z - S2
 
 # Reward scaling
-q_m_ref: 100.0        # mmol/L/d, nominal biogas rate
+q_m_ref: 100.0        
 
 alpha: 0.5
 
 integration:
-  scheme: tsit5
+  scheme: Kvaerno5
   step_size_controller: pid
   t0: 0
-  tf: 0.4
+  tf: 1.0
   dt0: Null
-  max_steps: 5000
+  max_steps: 100000
   vmap_chunk_size: 0

@@ -7,6 +7,7 @@ import jax.numpy as jnp
 from jax import hessian
 from jax.nn import sigmoid
 
+
 # --- tablet press case study --- # 
 
 @partial(jit, static_argnums=(0,))
@@ -918,10 +919,10 @@ def _make_cstr_step(cfg: DictConfig):
         u = jnp.ravel(u)
         dxdt = model(x, u).squeeze()
 
-        g_lower = -jnp.minimum(0.0, (x[1] - t_lower) / t_upper)
-        g_upper = -jnp.minimum(0.0, (t_upper - x[1]) / t_upper)
-        dgdt = jnp.concatenate([jnp.atleast_1d(g_lower), jnp.atleast_1d(g_upper)], axis=0)
+        g_lower = jnp.atleast_1d((t_lower - x[1]) / t_upper)
+        g_upper = jnp.atleast_1d((x[1] - t_upper) / t_upper)
 
+        dgdt = - jnp.maximum(jnp.array([g_lower, g_upper]), 0.0)
         rwd = _smooth_log(jnp.abs(jnp.take(sp_ca, node) - x[0]))
 
         return jnp.concatenate([jnp.ravel(dxdt), jnp.ravel(dgdt), jnp.ravel(rwd)], axis=0)
@@ -975,6 +976,7 @@ def _make_waste_water_step(cfg: DictConfig):
     kl_a     = float(cfg.model.kl_a)
     p_t      = float(cfg.model.p_t)
     k_h      = float(cfg.model.k_h)
+    K_a      = float(cfg.model.K_a)
     # Yields
     k_1 = float(cfg.model.k_1)
     k_2 = float(cfg.model.k_2)
@@ -990,30 +992,81 @@ def _make_waste_water_step(cfg: DictConfig):
     PH_MAX   = float(cfg.model.ph_max)
     K_B      = float(cfg.model.k_b)
     EPS_Z_S2 = float(cfg.model.eps_z_s2)
+    LOG_FLOOR = 1e-30
+
     # Reward scaling
     Q_M_REF  = float(cfg.model.q_m_ref)
-    # Auxiliary (biomass-in-liquid fraction)
-    alpha    = float(cfg.model.alpha)
+
+
+    # Day-indexed
+    CODin = jnp.array([  # g/l
+        9.5, 9.5, 9.5, 9.5, 9.5, 9.5, 9.5, 9.5, 9.5, 9.5,        # 1-10
+        9.5, 9.5, 9.5, 9.5, 9.5, 9.5, 9.5, 9.5, 9.5, 9.5,        # 11-20
+        9.3, 9.3, 14.7, 14.7, 14.7, 14.7, 9.3, 9.3, 9.3, 9.3,    # 21-30
+        4.8, 4.8, 4.8, 4.8, 4.8, 4.8, 4.8, 4.8, 15.0, 15.0,      # 31-40
+        15.0, 10.8, 10.8, 10.8, 10.8, 10.8, 10.8, 10.8, 10.7, 10.7,  # 41-50
+        10.7, 10.7, 10.7, 10.7, 10.7, 10.7, 10.7, 10.7, 10.7, 10.7,  # 51-60
+        10.7, 10.7, 10.7, 10.7, 10.7, 10.7, 10.7, 10.7, 10.7, 10.7,  # 61-70
+        9.3, 9.3                                                  # 71-72
+    ])
+
+    VFAin = jnp.array([  # mmol/l
+        93, 93, 93, 93, 93, 93, 93, 93, 93, 93,            # 1-10
+        93, 93, 93, 93, 90, 90, 90, 90, 90, 90,            # 11-20
+        90, 90, 114, 114, 114, 114, 73, 73, 73, 73,        # 21-30
+        38, 38, 38, 38, 38, 38, 38, 38, 113, 113,          # 31-40
+        113, 73, 73, 73, 73, 73, 73, 73, 72, 72,           # 41-50
+        72, 72, 72, 72, 72, 72, 72, 72, 72, 72,            # 51-60
+        72, 72, 72, 72, 72, 72, 72, 72, 70, 70,            # 61-70
+        70, 70                                              # 71-72
+    ])
+
+    pHin = jnp.array([
+        5.13, 5.13, 5.13, 5.13, 5.13, 5.13, 5.13, 5.13, 5.13, 5.13,  # 1-10
+        5.13, 5.13, 5.13, 5.13, 5.13, 5.05, 5.05, 5.05, 5.05, 5.05,  # 11-20
+        5.05, 5.05, 4.40, 4.40, 4.40, 4.40, 4.40, 4.40, 4.40, 4.40,  # 21-30
+        4.40, 4.40, 4.50, 4.50, 4.50, 4.50, 4.50, 4.50, 4.50, 4.50,  # 31-40
+        4.40, 4.40, 4.40, 4.40, 4.40, 4.40, 4.40, 4.40, 4.40, 4.40,  # 41-50
+        4.40, 4.40, 4.40, 4.40, 4.40, 4.40, 4.40, 4.40, 4.40, 4.40,  # 51-60
+        4.40, 4.40, 4.40, 4.40, 4.40, 4.40, 4.40, 4.40, 4.40, 5.30,  # 61-70
+        5.30, 5.30                                                   # 71-72
+    ])
+
+    Cin = 55.0  # mmol/l, influent CO2 concentration (assumed constant)
+
+
 
     @jit
-    def _step(x: jnp.ndarray, u: jnp.ndarray, z: jnp.ndarray, node):
-        x = jnp.ravel(x)
-        u = jnp.ravel(u)
-        z = jnp.ravel(z)
+    def _step(x: jnp.ndarray, u: jnp.ndarray, aux: jnp.ndarray, z: jnp.ndarray, node):
+        x   = jnp.ravel(x)
+        u   = jnp.ravel(u)
+        aux = jnp.ravel(aux)
+        z   = jnp.ravel(z)
 
         X1, X2, Z, S1, S2, C = x[0], x[1], x[2], x[3], x[4], x[5]
-        D = u[0]
-        S1_in, S2_in, Z_in, C_in = z[0], z[1], z[2], z[3]
+        log_D = u[0]
+        D = jnp.exp(log_D)
+        alpha = aux[0]
+        #S1_in, S2_in, pH_in, C_in = z[0], z[1], z[2], z[3]
+
+        S1_in = jnp.take(CODin, node)
+        S2_in = jnp.take(VFAin, node)
+        pH_in = jnp.take(pHin, node)
+        C_in = Cin
+
+        # pH
+        Z_in = (K_a / (K_a + 10.0 ** (-pH_in))) * S2_in
 
         # Kinetics
         mu_1 = mu_1_max * S1 / (k_s1 + S1)
         mu_2 = mu_2_max * S2 / (S2 + k_s2 + S2 * S2 / k_i2)
 
         # CO2 in liquid 
-        co2 = C + S2 - Z
+        co2 = _softplus(C + S2 - Z, beta=10.0)
         phi = co2 + k_h * p_t + (k_6 / kl_a) * mu_2 * X2
-        p_c = (phi - jnp.sqrt(phi * phi - 4.0 * k_h * p_t * co2)) / (2.0 * k_h)
+        p_c = (phi - jnp.sqrt(LOG_FLOOR + _softplus(phi * phi - 4.0 * k_h * p_t * co2, beta=10.0))) / (2.0 * k_h)
         q_c = kl_a * (co2 - k_h * p_c)
+        pH = jnp.log10(_softplus(Z - S2, beta=20.0)+LOG_FLOOR) - jnp.log10(_softplus(C - Z + S2, beta=20.0)+LOG_FLOOR) - jnp.log10(K_B)
 
         # Mass balances (Eqs. 20-25)
         dX1 = (mu_1 - alpha * D) * X1
@@ -1025,11 +1078,11 @@ def _make_waste_water_step(cfg: DictConfig):
         dxdt = jnp.array([dX1, dX2, dZ, dS1, dS2, dC])
 
         # Path constraints. 
-        g_cod   = (S1 + GAMMA * S2) - COD_MAX
-        g_s2    = S2 - S2_MAX
-        g_ph_hi = 10.0 ** (-PH_MAX) * (Z - S2) - K_B * (C - Z + S2)
-        g_ph_lo = K_B * (C - Z + S2) - 10.0 ** (-PH_MIN) * (Z - S2)
-        g_zs2   = EPS_Z_S2 - (Z - S2)
+        g_cod   = ((S1 + GAMMA * S2) - COD_MAX) / COD_MAX
+        g_s2    = (S2 - S2_MAX) / S2_MAX
+        g_ph_hi = (pH - PH_MAX) / PH_MAX
+        g_ph_lo = (PH_MIN - pH) / PH_MIN
+        g_zs2   = (S2 + EPS_Z_S2 - Z) / (jnp.abs(Z)+ jnp.abs(S2))
         dgdt = -jnp.maximum(jnp.array([g_cod, g_s2, g_ph_hi, g_ph_lo, g_zs2]), 0.0)
 
         # Stage cost
@@ -1048,7 +1101,7 @@ def waste_water_simulator(cfg: DictConfig):
     step = _make_waste_water_step(cfg)
 
     def waste_water_simulator_fn(cfg_unused: DictConfig, design_args, input_args, aux, uncertainties, node):
-        return step(input_args, design_args, uncertainties, node)
+        return step(input_args, design_args, aux, uncertainties, node)
 
     return waste_water_simulator_fn
 
@@ -1068,6 +1121,10 @@ def _smooth_max(x, y, beta):
 def _smooth_min(x, y, beta):
     """Softplus-smooth min(x, y).  beta -> inf recovers jnp.minimum."""
     return -_smooth_max(-x, -y, beta)
+
+def _softplus(x, beta):
+    """Softplus function with smoothness parameter beta.  beta -> inf recovers relu."""
+    return jnp.logaddexp(x * beta, 0.0) / beta
 
 
 # -------------------------------------------------------------------------------- #
@@ -1115,11 +1172,6 @@ def _make_hydrogen_export_step(cfg: DictConfig):
     storage_lo = lower_storage_limit * upper_storage_limit
     storage_hi = upper_storage_limit
 
-    # `smooth_eps` is the rounding-zone width as a fraction of each variable's
-    # range.  At 1 % the smoothed dynamics differ from hard clip / max(·, 0)
-    # by only ~log(2) · smooth_eps · range on the boundary — physically
-    # negligible — but the result is C^∞ everywhere, which is what
-    # smooth-Newton SQP needs to converge.
     SMOOTH_EPS = float(cfg.model.smooth_eps)
     beta_tt      = 1.0 / (SMOOTH_EPS * train_throughput_max)
     beta_storage = 1.0 / (SMOOTH_EPS * (storage_hi - storage_lo))
@@ -1216,12 +1268,21 @@ def _make_biohydrogen_step(cfg: DictConfig):
     Port of sample_envs/biohydrogen.py.  States: X (biomass), C (carbon),
     N (culture nitrate), q (intracellular nitrogen quota), O (oxygen %),
     H (accumulated H2), F (accumulated feed volume).  Controls: u[0] =
-    N_Fed (feed nitrate concentration mg/L), u[1] = alpha (fraction of
-    remaining feed budget [0, 1]).  No disturbance (Z_SIZE = 0).
+    N_Fed (feed nitrate concentration mg/L), u[1] = log_F_in (natural log
+    of feed flow rate L/h).  F_in = exp(u[1]) inside the step.  Sampling
+    u[1] in log space biases Sobol/DEUS toward small F_in values, which
+    is where the budget-feasible region lives.  No disturbance (Z_SIZE = 0).
 
-    Returns `_step(x, u, z, node)` emitting [F | G | R] of shape
-    (7 + 2 + 1,) = 10.  Integration is in hours; the F_in /24 normaliser
-    treats u[1] as a daily-budget fraction.
+    Global aux variable (sampled per trajectory): max_fr_per_node ∈ [0, 1].
+    Sets the per-node F_in cap to max_fr_per_node · F_max / tf via the
+    g_rate path constraint.  Lets Sobol / DEUS explore both how much to
+    feed (u[1]) and how concentrated the feed strategy is (aux).
+
+    Budget F ≤ F_max is also enforced as a path constraint (g_F).  Both
+    PCs use the framework's negative-violated / zero-feasible convention.
+
+    Returns `_step(x, u, z, aux, node)` emitting [F | G | R | Φ] of shape
+    (7 + 4 + 1 + 1,) = 13.  Integration is in hours.
     """
     mu_max = float(cfg.model.mu_max)
     k_q    = float(cfg.model.k_q)
@@ -1244,13 +1305,16 @@ def _make_biohydrogen_step(cfg: DictConfig):
     TF       = float(cfg.model.integration.tf)
 
     @jit
-    def _step(x: jnp.ndarray, u: jnp.ndarray, z: jnp.ndarray, node):
+    def _step(x: jnp.ndarray, u: jnp.ndarray, z: jnp.ndarray, aux: jnp.ndarray, node):
         x = jnp.ravel(x)
         u = jnp.ravel(u)
+        aux = jnp.ravel(aux)
         # z is unused — biohydrogen has Z_SIZE = 0.
 
         X, C, N, q, O, H, F = x[0], x[1], x[2], x[3], x[4], x[5], x[6]
-        N_Fed, alpha_u = u[0], u[1]
+        N_Fed, log_F_in = u[0], u[1]
+        F_in = jnp.exp(log_F_in)                  # decision is in log space
+        max_fr_per_node = aux[0]
 
         # Guards: k_q/q diverges as q→0, and C/(K_c+C)=0/0 at C=0 with K_c=0.
         q_safe = jnp.maximum(q, 1e-8)
@@ -1262,10 +1326,8 @@ def _make_biohydrogen_step(cfg: DictConfig):
         gate = sigmoid(-O * 2.0)
         f_N = sigmoid((N_SWITCH - N) * 1.0)    # ~1 at N<switch, ~0 otherwise
 
-        # Feed flow: alpha is fraction of remaining daily budget; /24 → L/h.
-        F_in = alpha_u * jnp.maximum(F_max - F, 0.0) / 24.0
-
-        # State derivatives
+        # State derivatives.  F_in is the decision directly (L/h); cumulative
+        # budget is enforced via g_F below, per-node cap via g_rate.
         dX = X * t1 - mu_d * X ** 2
         dC = -Y_CX * X * t1 + F_in * C_Fed
         dN = -Y_NX * X * t2 * mu_max + F_in * N_Fed
@@ -1276,9 +1338,13 @@ def _make_biohydrogen_step(cfg: DictConfig):
         dxdt = jnp.array([dX, dC, dN, dq, dO, dH, dF])
 
         # Path constraints — framework convention (negative = violated, 0 feasible).
-        g_N = -jnp.maximum(N - N_MAX, 0.0) / N_MAX
-        g_O = -jnp.maximum(O - O_MAX, 0.0) / O_MAX
-        dgdt = jnp.array([g_N, g_O])
+        f_in_cap = max_fr_per_node * F_max / TF
+        g_N = (N - N_MAX) / N_MAX
+        g_O = (O - O_MAX) / O_MAX
+        g_F = (F - F_max) / F_max
+        g_rate = (F_in - f_in_cap) / (F_max / TF)
+
+        dgdt = -jnp.maximum(jnp.array([g_N, g_O, g_F, g_rate]), 0.0)
 
         # Cost
         rwd = -Y_HX * X * gate * f_N
@@ -1302,7 +1368,7 @@ def biohydrogen_simulator(cfg: DictConfig):
     step = _make_biohydrogen_step(cfg)
 
     def biohydrogen_simulator_fn(cfg_unused: DictConfig, design_args, input_args, aux, uncertainties, node):
-        return step(input_args, design_args, uncertainties, node)
+        return step(input_args, design_args, uncertainties, aux, node)
 
     return biohydrogen_simulator_fn
 

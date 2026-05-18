@@ -163,7 +163,7 @@ class BackwardEvaluator(BaseEvaluator):
             dtype=int,
         )
         aux_indices = np.array(
-            self.graph.edges[self.node, succ]['auxiliary_indices'],
+            [n_d_succ + idx for idx in self.graph.edges[self.node, succ]['auxiliary_indices']],
             dtype=int,
         )
         fix_indices = np.hstack([input_indices, aux_indices]).astype(int)
@@ -293,11 +293,11 @@ class BackwardEvaluator(BaseEvaluator):
 
             evals = []
             for succ in self._keys():
-                # `y` passed through in real units; classifier self-scales.
-                y = succ_inputs[succ][0]
+                ys = succ_inputs[succ]
+                if aux_s is not None and aux_s.size > 0:
+                    ys = jnp.concatenate([ys, aux_s], axis=-1)
+                y = ys[0]
 
-                # Box-only — no constraint to penalise, so take the first
-                # n_starts Sobol points directly.
                 x0_batch = self.sobol_pool[succ][:self.n_starts]
                 p_batch = jnp.broadcast_to(
                     y.reshape(1, -1), (self.n_starts, self.n_fix[succ]),

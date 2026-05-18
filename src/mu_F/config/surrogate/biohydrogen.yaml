@@ -1,6 +1,6 @@
 
 classifier: true
-classifier_selection: 'SVM'
+classifier_selection: 'ANN'
 regressor_selection: 'ANN'
 probability_map: false
 

@@ -85,7 +85,7 @@ class BackwardPmapEvaluator(BaseEvaluator):
             dtype=int,
         )
         aux_indices = np.array(
-            self.graph.edges[self.node, succ]['auxiliary_indices'],
+            [n_d_succ + idx for idx in self.graph.edges[self.node, succ]['auxiliary_indices']],
             dtype=int,
         )
         fix_indices = np.hstack([input_indices, aux_indices]).astype(int)
@@ -167,7 +167,9 @@ class BackwardPmapEvaluator(BaseEvaluator):
 
             evals = []
             for succ in self._keys():
-                ys = succ_inputs[succ]                 # (N_unc, n_fix)
+                ys = succ_inputs[succ]
+                if aux_s is not None and aux_s.size > 0:
+                    ys = jnp.concatenate([ys, aux_s], axis=-1)
                 n_unc = ys.shape[0]
                 n_starts = self.n_starts
                 sobol = self.sobol_pool[succ][:n_starts]   # (n_starts, n_d)

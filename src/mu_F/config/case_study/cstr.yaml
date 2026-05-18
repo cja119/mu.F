@@ -59,6 +59,9 @@ design_space_dimensions:
 
 global_n_aux_args: 0
 
+aux_default: []
+# Rollout-time default for the global aux slot (empty: no global aux vars here).
+
 process_space_names: ['Tc']
 
 mode:
@@ -74,3 +77,5 @@ unit_op: 'dynamic'
 n_theta: 2
 
 fn_evals: 0
+
+bypass_visualisations: True

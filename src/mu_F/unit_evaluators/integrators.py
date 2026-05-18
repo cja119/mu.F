@@ -80,22 +80,38 @@ def unit_dynamics(design_params, u, aux, decision_dependent, uncertainty_params,
     ).ys[
         :, :
     ][-1,:]  # t x n_components
-    except: # case study specific splodge
-        return diffeqsolve(
-        term,
-        solver,
-        cfg.model.integration.t0,
-        cfg.model.integration.tf,
-        cfg.model.integration.dt0,
-        y0=jnp.hstack([u.reshape(1,-1), jnp.zeros(1).reshape(1,1)]).squeeze(),
-        args=params,
-        max_steps=cfg.model.integration.max_steps,
-        stepsize_controller=step_size_controller,
-        saveat=saveat,
-        adjoint=DirectAdjoint(),
-    ).ys[
-        :, :
-    ][-1,:]  # t x n_components
+    except:
+        try:
+            return diffeqsolve(
+            term,
+            solver,
+            cfg.model.integration.t0,
+            cfg.model.integration.tf,
+            cfg.model.integration.dt0,
+            y0=u,
+            args=params,
+            max_steps=cfg.model.integration.max_steps * 500,
+            stepsize_controller=step_size_controller,
+            saveat=saveat,
+            adjoint=DirectAdjoint(),
+            )
+
+        except: # case study specific splodge
+            return diffeqsolve(
+            term,
+            solver,
+            cfg.model.integration.t0,
+            cfg.model.integration.tf,
+            cfg.model.integration.dt0,
+            y0=jnp.hstack([u.reshape(1,-1), jnp.zeros(1).reshape(1,1)]).squeeze(),
+            args=params,
+            max_steps=cfg.model.integration.max_steps,
+            stepsize_controller=step_size_controller,
+            saveat=saveat,
+            adjoint=DirectAdjoint(),
+        ).ys[
+            :, :
+        ][-1,:]  # t x n_components
     finally:
         logging.info(f"Integration took {time.time() - start} seconds")
 

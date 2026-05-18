@@ -6,27 +6,27 @@ vmap_evaluations: True
 
 eval_cost: True
 
-num_nodes: 24
+num_nodes: 168
 
 adjacency_matrix: None
 
-n_design_args: 2
+n_design_args: 5
 
 n_aux_args:
   node_0: 0
   (0,1): 0
 
-n_input_args: 2
+n_input_args: 4
 
 reject_time: 5
 
 discount_factor: 0.99999
 
 sizes:
-  X_SIZE: 2
-  U_SIZE: 2
-  F_SIZE: 2
-  G_SIZE: 3
+  X_SIZE: 4
+  U_SIZE: 5
+  F_SIZE: 4
+  G_SIZE: 5
   Z_SIZE: 1
   L_SIZE: 1
   PHI_SIZE: 0
@@ -34,10 +34,16 @@ sizes:
 # u = [ramp_t, hydrogen_throughput]
 KS_bounds:
   design_args:
+  - - 0.0
+    - 1387.8
+  - - 0.0
+    - 18954.2
   - - -535.8
     - 214.32
-  - - -1387.8
-    - 18954.2
+  - - -535.8
+    - 214.32
+  - - -535.8
+    - 214.32
   aux_args:
   - - - None
       - None
@@ -52,12 +58,17 @@ extendedDS_bounds: None
 edge_clip:
   - [59087, 295435]
   - [0, 2143.2]
+  - [0, 2143.2]
+  - [0, 2143.2]
 
 design_space_dimensions:
 - 'u0'
 - 'u1'
 
 global_n_aux_args: 0
+
+aux_default: []
+# Rollout-time default for the global aux slot (empty: no global aux vars here).
 
 process_space_names: ['u0', 'u1']
 
@@ -74,3 +85,5 @@ unit_op: 'steady_state'
 n_theta: 1
 
 fn_evals: 0
+
+bypass_visualisations: True

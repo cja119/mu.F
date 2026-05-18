@@ -109,15 +109,19 @@ class markov_graph_constructor(graph_constructor):
         return
     
     def add_n_aux_args(self, n_aux_args):
+        if hasattr(n_aux_args, 'keys'):
+            edge_count = int(n_aux_args.get('(0,1)', 0))
+            node_count = int(n_aux_args.get('node_0', 0))
+        else:
+            edge_count = int(n_aux_args)
+            node_count = int(n_aux_args)
 
         for (i, j) in self.G.edges:
-            self.G.edges[i,j]["n_auxiliary_args"] = n_aux_args
-
+            self.G.edges[i,j]["n_auxiliary_args"] = edge_count
         for node in self.G.nodes:
-            self.G.nodes[node]["n_auxiliary_args"] = n_aux_args
-
+            self.G.nodes[node]["n_auxiliary_args"] = node_count
         return
-   
+
 
     def add_arg_to_nodes(self, arg_name, arg_value):
         for node in self.G.nodes:

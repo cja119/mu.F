@@ -6,17 +6,15 @@ vmap_evaluations: True
 
 eval_cost: True
 
-num_nodes: 20
-# 20 nodes × 0.4 d = 8 d total horizon (~6 methanogen time constants).
-# Long enough to see biology settle, short enough not to compound washout.
+num_nodes: 72
 
 adjacency_matrix: None
 
 n_design_args: 1
 
 n_aux_args:
-  node_0: 0
-  (0,1): 0
+  node_0: 1
+  (0,1): 1
 
 n_input_args: 6
 
@@ -35,12 +33,17 @@ sizes:
 
 KS_bounds:
   design_args:
-  - - 0.0
-    - 0.5
+  - - -4.60517    # log(0.01)
+    - 0.693147    # log(2.0)
+  # u[0] = log(D); D = exp(u[0]) inside the step.  Log-uniform Sobol
+  # crowds the small-D (near-steady-state, more-feasible) region while
+  # still reaching the washout edge near D = 2.
 
   aux_args:
-  - - - None
-      - None
+  - - - 0.5
+      - 1.0
+  # Global aux: α (biomass-in-liquid fraction). 0.5 = published AM2 fixed-bed
+  # retention (Bernard 2001); 1.0 = perfect-mixing chemostat (no retention).
 
 parameters_samples: [{'c': [3.0, 30.0, 65.0, 95.0], 'w': 1.0}]
 
@@ -53,11 +56,17 @@ parameters_best_estimate: [3.0, 30.0, 65.0, 95.0]
 extendedDS_bounds: None
 
 design_space_dimensions:
-- 'D'
+- 'log_D'
 
-global_n_aux_args: 0
+global_n_aux_args: 1
 
-process_space_names: ['D']
+aux_default: [0.5]
+# Rollout-time default for the global aux slot. Here: α = 0.5 (published AM2
+# fixed-bed retention from Bernard 2001). Used by subproblem_model.rollout
+# when aux is not supplied externally; the DEUS sampling/optimization paths
+# instead draw aux from KS_bounds.aux_args.
+
+process_space_names: ['log_D']
 
 mode:
   - backward
@@ -72,3 +81,13 @@ unit_op: 'dynamic'
 n_theta: 4
 
 fn_evals: 0
+
+bypass_visualisations: True
+
+edge_clip:
+  - [0.0, 10.0]      # X1   (acidogenic biomass, g/L)
+  - [0.0, 10.0]      # X2   (methanogenic biomass, g/L)
+  - [0.0, 200.0]     # Z    (alkalinity, mmol/L)
+  - [0.0, 20.0]      # S1   (COD, g/L)
+  - [1.0e-4, 100.0]  # S2   (VFA, mmol/L) — strict positive floor
+  - [0.0, 300.0]     # C    (TIC, mmol/L

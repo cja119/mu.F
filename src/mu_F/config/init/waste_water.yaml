@@ -1,5 +1,11 @@
 sobol_samples: 4096
 sampler: 'sobol'
-# 4× the previous 1024 — gives the per-node propagated-state distribution
-# enough coverage that DEUS bounds at deep nodes don't over-include
-# pathological washout / acidification states.
+
+# Evolutionary refinement settings
+evolutionary_refinement: true     # Set to true to enable
+scoring_method: ['min_cost', 'l1_constraint']        # Options: 'min_cost' or 'l1_constraint'
+n_best: 32                        # Number of best samples to select
+n_children_per_best: 16           # Children generated per best sample
+perturbation_scale: 0.15          # Fraction of bound range for perturbation std
+n_iterations: 16                  # Number of refinement iterations
+

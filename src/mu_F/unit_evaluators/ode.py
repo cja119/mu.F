@@ -151,8 +151,6 @@ def cstr_ode(cfg):
     def cstr_ode_fn(t: float, state: jnp.ndarray, parameters: jnp.ndarray, node=None):
         x = state[..., :X_size]
         u = parameters[..., :U_size]
-        # uncertainties live at parameters[..., U_size:U_size + Z_size] but
-        # cstr does not consume them (disturbances aren't injected here).
         return step(x, u, node)
 
     return cstr_ode_fn
@@ -162,22 +160,26 @@ def waste_water_ode(cfg):
     """Factory: returns a diffrax-shaped ODE term for the waste_water case study.
 
     Bernard et al. (2001) AM2 anaerobic digestion. Unlike cstr, this case study
-    *consumes* the uncertainty / disturbance vector z = [S_1in, S_2in, Z_in, C_in].
+    *consumes* the uncertainty / disturbance vector z = [S_1in, S_2in, Z_in, C_in],
+    and (when global_n_aux_args > 0) the biomass retention fraction α from the
+    global aux slot.
     Layout of `parameters` (set in unit_dynamics):
-        [design_args | dd | aux | uncertainty]  with n_dd = 0 and n_aux = 0
-    so the disturbances slice cleanly to parameters[..., U_size:U_size + Z_size].
+        [design_args | dd | aux | uncertainty]  with n_dd = 0
+    where `aux` carries the global auxiliary variables (here: α).
     """
     from mu_F.unit_evaluators.explicit_fn import _make_waste_water_step
     X_size = int(cfg.case_study.sizes.X_SIZE)
     U_size = int(cfg.case_study.sizes.U_SIZE)
     Z_size = int(cfg.case_study.sizes.Z_SIZE)
+    A_size = int(cfg.case_study.global_n_aux_args)
     step = _make_waste_water_step(cfg)
 
     def waste_water_ode_fn(t: float, state: jnp.ndarray, parameters: jnp.ndarray, node=None):
-        x = state[..., :X_size]
-        u = parameters[..., :U_size]
-        z = parameters[..., U_size:U_size + Z_size]
-        return step(x, u, z, node)
+        x   = state[..., :X_size]
+        u   = parameters[..., :U_size]
+        aux = parameters[..., U_size:U_size + A_size]
+        z   = parameters[..., U_size + A_size:U_size + A_size + Z_size]
+        return step(x, u, aux, z, node)
 
     return waste_water_ode_fn
 
@@ -192,13 +194,20 @@ def biohydrogen_ode(cfg):
     X_size = int(cfg.case_study.sizes.X_SIZE)
     U_size = int(cfg.case_study.sizes.U_SIZE)
     Z_size = int(cfg.case_study.sizes.Z_SIZE)
+    AUX_size = int(cfg.case_study.get('global_n_aux_args', 0))
     step = _make_biohydrogen_step(cfg)
+
+    # unit_dynamics packs params as [design | decision_dependent | aux | uncertainty].
+    # biohydrogen has decision_dependent_size = 0, so aux sits at U_size+Z_size.
+    aux_lo = U_size + Z_size
+    aux_hi = aux_lo + AUX_size
 
     def biohydrogen_ode_fn(t: float, state: jnp.ndarray, parameters: jnp.ndarray, node=None):
         x = state[..., :X_size]
         u = parameters[..., :U_size]
         z = parameters[..., U_size:U_size + Z_size]
-        return step(x, u, z, node)
+        aux = parameters[..., aux_lo:aux_hi]
+        return step(x, u, z, aux, node)
 
     return biohydrogen_ode_fn
 
