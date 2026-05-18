@@ -34,11 +34,15 @@ sizes:
 KS_bounds:
   design_args:
   - - 0.0
-    - 0.5
+    - 2.0
+  # D upper bound raised from 0.5 → 2.0 /d so the methanogen washout edge
+  # (D_crit ≈ μ_2,max / α; ≈ 1.48 /d at α = 0.5; ≈ 0.74 /d at α = 1) is reachable.
 
   aux_args:
-  - - - None
-      - None
+  - - - 0.5
+      - 1.0
+  # Global aux: α (biomass-in-liquid fraction). 0.5 = published AM2 fixed-bed
+  # retention (Bernard 2001); 1.0 = perfect-mixing chemostat (no retention).
 
 parameters_samples: [{'c': [3.0, 30.0, 65.0, 95.0], 'w': 1.0}]
 
@@ -53,7 +57,13 @@ extendedDS_bounds: None
 design_space_dimensions:
 - 'D'
 
-global_n_aux_args: 0
+global_n_aux_args: 1
+
+aux_default: [0.5]
+# Rollout-time default for the global aux slot. Here: α = 0.5 (published AM2
+# fixed-bed retention from Bernard 2001). Used by subproblem_model.rollout
+# when aux is not supplied externally; the DEUS sampling/optimization paths
+# instead draw aux from KS_bounds.aux_args.
 
 process_space_names: ['D']
 

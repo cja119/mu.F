@@ -152,6 +152,11 @@ design_space_dimensions:
 
 global_n_aux_args: 3
 
+aux_default: [0.0, 0.15, 0.125]
+# Rollout-time defaults for the 3 global aux slots. Midpoints of the configured
+# KS_bounds.aux_args ranges ([-0.5, 0.5]; [0.0, 0.3]; [0.0, 0.25]). Adjust if a
+# specific reference value is preferred.
+
 process_space_names:
   - ['N1: P1', 'G.A. 1', 'G.A. 2', 'G.A. 3']
   - ['N2: P1', 'N2: P2', 'G.A. 1', 'G.A. 2', 'G.A. 3']

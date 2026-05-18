@@ -595,12 +595,23 @@ class subproblem_model(ABC):
         return self.s(d, p)
 
     def rollout(self, inputs, aux=None):
-        
+
         # Edge handling if inputs or aux are None
         if inputs is None:
             inputs = jnp.empty((1,0))
         if aux is None:
-            aux = jnp.empty((inputs.shape[0],0))
+            # Pull the rollout-time aux default from the case_study config.
+            # When global_n_aux_args > 0 the case study must define `aux_default`
+            # as a list whose length matches the global aux dimension; for
+            # case studies with no global aux this is an empty list.
+            aux_default = list(self.cfg.case_study.get('aux_default', []) or [])
+            if len(aux_default) > 0:
+                aux = jnp.tile(
+                    jnp.asarray(aux_default, dtype=jnp.float32).reshape(1, -1),
+                    (inputs.shape[0], 1),
+                )
+            else:
+                aux = jnp.empty((inputs.shape[0], 0))
 
         # Make a decision
         decision, opt_ctg, opt_status = self.rollout_costs.evaluate(inputs, aux)

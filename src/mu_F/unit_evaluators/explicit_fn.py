@@ -994,8 +994,9 @@ def _make_waste_water_step(cfg: DictConfig):
     EPS_Z_S2 = float(cfg.model.eps_z_s2)
     # Reward scaling
     Q_M_REF  = float(cfg.model.q_m_ref)
-    # Auxiliary (biomass-in-liquid fraction)
-    alpha    = float(cfg.model.alpha)
+    # α (biomass-in-liquid fraction) is supplied at runtime via the aux slot.
+    # The rollout-time default lives in cfg.case_study.aux_default; during DEUS
+    # sampling/optimization, aux is drawn from KS_bounds.aux_args.
 
     # Day-indexed
     CODin = jnp.array([  # g/l
@@ -1036,13 +1037,15 @@ def _make_waste_water_step(cfg: DictConfig):
 
 
     @jit
-    def _step(x: jnp.ndarray, u: jnp.ndarray, z: jnp.ndarray, node):
-        x = jnp.ravel(x)
-        u = jnp.ravel(u)
-        z = jnp.ravel(z)
+    def _step(x: jnp.ndarray, u: jnp.ndarray, aux: jnp.ndarray, z: jnp.ndarray, node):
+        x   = jnp.ravel(x)
+        u   = jnp.ravel(u)
+        aux = jnp.ravel(aux)
+        z   = jnp.ravel(z)
 
         X1, X2, Z, S1, S2, C = x[0], x[1], x[2], x[3], x[4], x[5]
         D = u[0]
+        alpha = aux[0]
         #S1_in, S2_in, pH_in, C_in = z[0], z[1], z[2], z[3]
 
         S1_in = jnp.take(CODin, node)
@@ -1097,7 +1100,7 @@ def waste_water_simulator(cfg: DictConfig):
     step = _make_waste_water_step(cfg)
 
     def waste_water_simulator_fn(cfg_unused: DictConfig, design_args, input_args, aux, uncertainties, node):
-        return step(input_args, design_args, uncertainties, node)
+        return step(input_args, design_args, aux, uncertainties, node)
 
     return waste_water_simulator_fn
 
