@@ -8,7 +8,7 @@ root_node_inputs:
   # S1(0)=0.5 starts inside COD_MAX=1.0 so COD isn't pre-violated.
 
 constraint:
-  auxiliary: 'None'
+  auxiliary: 'global'
 
 node_aux: None
 

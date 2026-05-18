@@ -14,8 +14,8 @@ adjacency_matrix: None
 n_design_args: 2
 
 n_aux_args:
-  node_0: 0
-  (0,1): 0
+  node_0: 1
+  (0,1): 1
 
 global_n_aux_args: 1
 

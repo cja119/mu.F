@@ -13,8 +13,8 @@ adjacency_matrix: None
 n_design_args: 1
 
 n_aux_args:
-  node_0: 0
-  (0,1): 0
+  node_0: 1
+  (0,1): 1
 
 n_input_args: 6
 
