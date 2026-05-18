@@ -35,6 +35,12 @@ from mu_F.constraints.utils import (
     batch_mask,
     poison_padded,
 )
+from mu_F.solvers.mixed_integer import (
+    mixed_integer_solve,
+    resolve_integer_spec,
+    slack_from_cfg,
+)
+from types import SimpleNamespace
 
 
 __all__ = [
@@ -164,6 +170,10 @@ class BackwardPmapEvaluator(BaseEvaluator):
         """
         def real():
             succ_inputs = get_successor_inputs(self.graph, self.node, outputs_s)
+            int_dims, int_values = resolve_integer_spec(
+                self.cfg.case_study.get('design_domain', None)
+            )
+            slack = slack_from_cfg(self.cfg)
 
             evals = []
             for succ in self._keys():
@@ -172,26 +182,30 @@ class BackwardPmapEvaluator(BaseEvaluator):
                     ys = jnp.concatenate([ys, aux_s], axis=-1)
                 n_unc = ys.shape[0]
                 n_starts = self.n_starts
-                sobol = self.sobol_pool[succ][:n_starts]   # (n_starts, n_d)
+                sobol = self.sobol_pool[succ][:n_starts]
 
-                # Stack (start, scenario): row k → start (k % n_starts),
-                # scenario (k // n_starts).
-                x0_stacked = jnp.tile(sobol, (n_unc, 1))             # (n_unc*n_starts, n_d)
-                p_stacked  = jnp.repeat(ys, n_starts, axis=0)        # (n_unc*n_starts, n_fix)
+                x0_stacked = jnp.tile(sobol, (n_unc, 1))
+                p_stacked  = jnp.repeat(ys, n_starts, axis=0)
 
-                result = self.factories[succ].solve_batch(x0_stacked, p_stacked)
+                def _leaf(_lb, _ub, _x0, succ=succ):
+                    res = self.factories[succ].solve_batch(x0_stacked, p_stacked)
+                    objectives = res.objective.reshape(n_unc, n_starts)
+                    success    = jnp.asarray(res.success).reshape(n_unc, n_starts)
+                    ranked     = jnp.where(success, objectives, objectives + 1e10)
+                    best_idx   = jnp.argmin(ranked, axis=1)
+                    best_obj   = jnp.take_along_axis(
+                        objectives, best_idx[:, None], axis=1,
+                    ).squeeze(-1)
+                    return SimpleNamespace(decision_variables=None, objective=best_obj, success=True)
 
-                # Reshape and argmin per scenario.
-                objectives = result.objective.reshape(n_unc, n_starts)
-                success    = jnp.asarray(result.success).reshape(n_unc, n_starts)
-                ranked     = jnp.where(success, objectives, objectives + 1e10)
-                best_idx   = jnp.argmin(ranked, axis=1)              # (n_unc,)
-                best_obj   = jnp.take_along_axis(
-                    objectives, best_idx[:, None], axis=1,
-                ).squeeze(-1)                                        # (n_unc,)
+                result = mixed_integer_solve(
+                    _leaf, self.bounds[succ], self.bounds[succ][0],
+                    int_dims=int_dims, int_values=int_values,
+                    mode='best', slack=slack,
+                )
 
                 # objective = -P_feas → negate to recover the probability.
-                evals.append((-best_obj).reshape(-1, 1))
+                evals.append((-jnp.asarray(result.objective)).reshape(-1, 1))
 
             return jnp.hstack(evals)  # (n_unc, N_succ)
 

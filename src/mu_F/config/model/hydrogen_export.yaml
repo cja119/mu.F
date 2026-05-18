@@ -1,5 +1,5 @@
 root_node_inputs:
-  - [147717.5, 700]    # [hydrogen_storage (50% of capacity), train_throughput]
+  - [147717.5, 700, 2]    # [hydrogen_storage (50 % of capacity), throughput, n_active]
 
 constraint:
   auxiliary: 'None'

@@ -91,10 +91,12 @@ class _ScalerShim:
         self.mean_ = np.array(mean)
         self.scale_ = np.array(scale)
 
-def hyperparameter_selection(cfg: DictConfig, D, num_folds: int, model_type, rng_key: random.PRNGKey=jax.random.PRNGKey(0), x_scalar_override=None): 
-    # Define the hyperparameters to search over
+def hyperparameter_selection(cfg: DictConfig, D, num_folds: int, model_type, model_surrogate=None, rng_key: random.PRNGKey=jax.random.PRNGKey(0), x_scalar_override=None):
     if model_type == 'regressor':
-        surrogate_cfg = cfg.surrogate.surrogate_forward.ann
+        if model_surrogate == 'ctg_surrogate':
+            surrogate_cfg = cfg.surrogate.surrogate_ctg.ann
+        else:
+            surrogate_cfg = cfg.surrogate.surrogate_forward.ann
     elif model_type == 'classifier':
         surrogate_cfg = cfg.surrogate.classifier_args.ann
     else:

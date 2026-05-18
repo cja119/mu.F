@@ -54,9 +54,9 @@ class trainer(trainer_base):
     def load_trainer_methods(self) -> None:
         if self.model_subclass == 'ANN':
             if self.model_class == 'regression':
-                self.trainer = partial(train_ann, model_type='regressor', x_scalar_override=self.x_scalar_override)
+                self.trainer = partial(train_ann, model_type='regressor', model_surrogate=self.model_surrogate, x_scalar_override=self.x_scalar_override)
             elif self.model_class == 'classification':
-                self.trainer = partial(train_ann, model_type='classifier')
+                self.trainer = partial(train_ann, model_type='classifier', model_surrogate=self.model_surrogate)
         elif self.model_subclass == 'GP':
             self.trainer = train_gp
         elif self.model_subclass == 'SVM':

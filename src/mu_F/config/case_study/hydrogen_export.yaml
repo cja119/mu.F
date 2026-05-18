@@ -6,44 +6,44 @@ vmap_evaluations: True
 
 eval_cost: True
 
-num_nodes: 168
+num_nodes: 48
 
 adjacency_matrix: None
 
-n_design_args: 5
+n_design_args: 4
 
 n_aux_args:
   node_0: 0
   (0,1): 0
 
-n_input_args: 4
+n_input_args: 3
 
 reject_time: 5
 
 discount_factor: 0.99999
 
 sizes:
-  X_SIZE: 4
-  U_SIZE: 5
-  F_SIZE: 4
+  X_SIZE: 3
+  U_SIZE: 4
+  F_SIZE: 3
   G_SIZE: 5
   Z_SIZE: 1
   L_SIZE: 1
   PHI_SIZE: 0
 
-# u = [ramp_t, hydrogen_throughput]
+# u = [n_active, throughput, fuel_cell_energy, electrolysis_energy]
+# throughput is aggregated across up to 3 active trains in calorific-energy
+# units (= train_throughput_cap × vector_calorific_value × n_trains).
 KS_bounds:
   design_args:
+  - - 1.0
+    - 4.0
+  - - 0.0
+    - 6429.6
   - - 0.0
     - 1387.8
   - - 0.0
     - 18954.2
-  - - -535.8
-    - 214.32
-  - - -535.8
-    - 214.32
-  - - -535.8
-    - 214.32
   aux_args:
   - - - None
       - None
@@ -56,14 +56,22 @@ parameters_best_estimate: [8.420454054312653]
 extendedDS_bounds: None
 
 edge_clip:
-  - [59087, 295435]
-  - [0, 2143.2]
-  - [0, 2143.2]
-  - [0, 2143.2]
+  - [59087, 295435]    # storage
+  - [0.0, 6429.6]      # throughput (aggregated across 3 trains, calorific units)
+  - [1, 4]             # n_active
 
 design_space_dimensions:
 - 'u0'
 - 'u1'
+
+design_domain:
+- [1, 2, 3, 4]   # n_active (integer — number of active conversion trains)
+- 'real'         # throughput
+- 'real'         # fuel_cell_energy
+- 'real'         # electrolysis_energy
+# Per-design-arg domain (length = n_design_args). 'real' = continuous;
+# replace with a list of allowed integer values to declare an integer dim.
+# make_markov tiles this template across nodes.
 
 global_n_aux_args: 0
 

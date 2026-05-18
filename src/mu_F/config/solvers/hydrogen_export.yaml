@@ -21,3 +21,6 @@ monolithic:
   use_vmap: true
 
   scale_variables: true   # rescale decision vector + defect residuals to [0, 1] coords
+
+mixed_integer:
+  slack: 0.0   # pruning tolerance for 'best' mode; < 0 disables pruning

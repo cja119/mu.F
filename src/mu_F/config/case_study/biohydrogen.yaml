@@ -74,6 +74,13 @@ design_space_dimensions:
 - 'u0'
 - 'u1'
 
+design_domain:
+- 'real'
+- 'real'
+# Per-design-arg domain. 'real' = continuous; replace with a list of allowed
+# integer values (e.g. [1, 2, 3]) to declare an integer dim.  make_markov
+# tiles this template across nodes.
+
 process_space_names: ['N', 'log_F_in']
 
 mode:

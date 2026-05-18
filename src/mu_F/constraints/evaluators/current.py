@@ -42,6 +42,12 @@ from mu_F.constraints.evaluators.base import (
 from mu_F.constraints.utils import (
     mask_classifier,
 )
+from mu_F.solvers.mixed_integer import (
+    mixed_integer_solve,
+    resolve_integer_spec,
+    slack_from_cfg,
+)
+from types import SimpleNamespace
 
 
 __all__ = [
@@ -196,12 +202,23 @@ class CurrentConstraintEvaluator(BaseEvaluator):
             p.reshape(1, -1), (self.n_starts, self.n_fix[key]),
         )
 
-        result = self.factories[key].solve_batch(x0_batch, p_batch)
+        def _leaf(_lb, _ub, _x0):
+            res = self.factories[key].solve_batch(x0_batch, p_batch)
+            f, c, x = pick_best(res, self.factories[key], self.feasibility_tol)
+            return SimpleNamespace(decision_variables=x, objective=float(f), success=bool(c))
 
-        best_f, best_c, best_x = pick_best(result, self.factories[key], self.feasibility_tol)
-        params    = jnp.asarray(best_x).reshape(1, -1)   # (1, n_d_k)
-        objective = jnp.asarray(best_f).reshape(1, 1)    # (1, 1)
-        converged = jnp.asarray(best_c).reshape(1, 1)    # (1, 1)
+        int_dims, int_values = resolve_integer_spec(
+            self.cfg.case_study.get('design_domain', None)
+        )
+        result = mixed_integer_solve(
+            _leaf, self.bounds[key], self.bounds[key][0],
+            int_dims=int_dims, int_values=int_values,
+            mode='best', slack=slack_from_cfg(self.cfg),
+        )
+
+        params    = jnp.asarray(result.decision_variables).reshape(1, -1)
+        objective = jnp.asarray(result.objective).reshape(1, 1)
+        converged = jnp.asarray(result.success).reshape(1, 1)
         return params, objective, converged
 
 
@@ -306,18 +323,30 @@ class CurrentCostEvaluator(BaseEvaluator):
             p.reshape(1, -1), (self.n_starts, self.n_fix[key]),
         )
 
-        result = self.factories[key].solve_batch(x0_batch, p_batch)
+        def _leaf(_lb, _ub, _x0):
+            res = self.factories[key].solve_batch(x0_batch, p_batch)
+            f, c, x = pick_best(res, self.factories[key], self.feasibility_tol)
+            return SimpleNamespace(decision_variables=x, objective=float(f), success=bool(c))
 
-        best_f, best_c, best_x = pick_best(result, self.factories[key], self.feasibility_tol)
-        params    = jnp.asarray(best_x).reshape(1, -1)   # (1, n_d_k)
-        objective = jnp.asarray(best_f).reshape(1, 1)    # (1, 1)
-        converged = jnp.asarray(best_c).reshape(1, 1)    # (1, 1)
+        int_dims, int_values = resolve_integer_spec(
+            self.cfg.case_study.get('design_domain', None)
+        )
+        result = mixed_integer_solve(
+            _leaf, self.bounds[key], self.bounds[key][0],
+            int_dims=int_dims, int_values=int_values,
+            mode='best', slack=slack_from_cfg(self.cfg),
+        )
+
+        best_x = result.decision_variables
+        params    = jnp.asarray(best_x).reshape(1, -1)
+        objective = jnp.asarray(result.objective).reshape(1, 1)
+        converged = jnp.asarray(result.success).reshape(1, 1)
 
         import logging
         cls_pred = jnp.asarray(self.constraint_fn[key](best_x, p)).reshape(-1)[0]
         logging.info(
             f"CurrentCostEvaluator: classifier_pred={float(cls_pred):.4f}, "
-            f"viable={bool(jnp.asarray(best_c).reshape(-1)[0])}"
+            f"viable={bool(result.success)}"
         )
 
         return params, objective, converged

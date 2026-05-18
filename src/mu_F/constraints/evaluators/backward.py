@@ -53,6 +53,12 @@ from mu_F.solvers.septal import (
     construct_constrained_solver,
     solve_constrained,
 )
+from mu_F.solvers.mixed_integer import (
+    mixed_integer_solve,
+    resolve_integer_spec,
+    slack_from_cfg,
+)
+from types import SimpleNamespace
 
 
 __all__ = [
@@ -290,6 +296,10 @@ class BackwardEvaluator(BaseEvaluator):
         """
         def real():
             succ_inputs = get_successor_inputs(self.graph, self.node, outputs_s)
+            int_dims, int_values = resolve_integer_spec(
+                self.cfg.case_study.get('design_domain', None)
+            )
+            slack = slack_from_cfg(self.cfg)
 
             evals = []
             for succ in self._keys():
@@ -303,10 +313,18 @@ class BackwardEvaluator(BaseEvaluator):
                     y.reshape(1, -1), (self.n_starts, self.n_fix[succ]),
                 )
 
-                result = self.factories[succ].solve_batch(x0_batch, p_batch)
-                best_f, _, _ = pick_best(result, self.factories[succ], self.feasibility_tol)
+                def _leaf(_lb, _ub, _x0, succ=succ):
+                    res = self.factories[succ].solve_batch(x0_batch, p_batch)
+                    f, _, _ = pick_best(res, self.factories[succ], self.feasibility_tol)
+                    return SimpleNamespace(decision_variables=None, objective=f, success=True)
 
-                evals.append(best_f.reshape(-1, 1))
+                result = mixed_integer_solve(
+                    _leaf, self.bounds[succ], self.bounds[succ][0],
+                    int_dims=int_dims, int_values=int_values,
+                    mode='best', slack=slack,
+                )
+
+                evals.append(jnp.asarray(result.objective).reshape(-1, 1))
 
             return shaping_function(jnp.hstack(evals), self.cfg)
 

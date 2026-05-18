@@ -58,6 +58,11 @@ extendedDS_bounds: None
 design_space_dimensions:
 - 'log_D'
 
+design_domain:
+- 'real'
+# 'real' = continuous; replace with a list of allowed integer values to
+# declare an integer dim.  make_markov tiles this template across nodes.
+
 global_n_aux_args: 1
 
 aux_default: [0.5]

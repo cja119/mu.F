@@ -1165,19 +1165,14 @@ def _make_hydrogen_export_step(cfg: DictConfig):
     # Storage limits
     lower_storage_limit     = float(cfg.model.lower_storage_limit)
     upper_storage_limit     = float(cfg.model.upper_storage_limit)
-    # Reward
-    lambda_penalty          = float(cfg.model.lambda_penalty)
-
-    train_throughput_max = vector_calorific_value * train_throughput_cap
     storage_lo = lower_storage_limit * upper_storage_limit
     storage_hi = upper_storage_limit
 
-    SMOOTH_EPS = float(cfg.model.smooth_eps)
-    beta_tt      = 1.0 / (SMOOTH_EPS * train_throughput_max)
-    beta_storage = 1.0 / (SMOOTH_EPS * (storage_hi - storage_lo))
-    # h2_throughput / efficiency lives on the train_throughput_max scale to
-    # within a factor of `1/efficiency`; use that as the smoothing scale too.
-    beta_h2      = 1.0 / (SMOOTH_EPS * train_throughput_max)
+    # ramping limit
+    lower_ramp_limit        = float(cfg.model.lower_ramp_limit)
+    upper_ramp_limit        = float(cfg.model.upper_ramp_limit)
+
+    RENEWABLE_ENERGY = jnp.concatenate([jnp.zeros(24), jnp.ones(24)]) * 11.88 
 
     @jit
     def _step(x: jnp.ndarray, u: jnp.ndarray, z: jnp.ndarray, node):
@@ -1185,61 +1180,31 @@ def _make_hydrogen_export_step(cfg: DictConfig):
         u = jnp.ravel(u)
         z = jnp.ravel(z)
 
-        _hydrogen_storage  = x[0]
-        _train_throughput  = x[1]
-        ramp_t             = u[0]
-        hydrogen_throughput = u[1]
+        _storage, _throughput, _n_active, = x
+        n_active, throughput, fuel_cell_energy, electrolysis_energy = u
+        renewable_energy = jnp.take(RENEWABLE_ENERGY, node)
 
-        # Disturbance: z is the renewable-energy value
-        _renewable_energy = z[0]
-
-        # All three trains share the same state and ramp.  Smooth saturation
-        # at [0, train_throughput_max] so derivatives are well-defined at the
-        # active set.
-        tt_pre  = _train_throughput + ramp_t
-        train_throughput = _smooth_min(
-            _smooth_max(tt_pre, 0.0, beta_tt),
-            train_throughput_max, beta_tt,
+        vector_production_energy = (
+            fixed_energy_penalty * n_active * train_throughput_cap + 
+            (1 - fixed_energy_penalty) * throughput * (variable_energy_penalty / vector_calorific_value)
         )
 
-        # Vector energy per train (3 identical trains).
-        vector_energy_per_train = (
-            train_throughput * (variable_energy_penalty / vector_calorific_value)
-            * (1.0 - fixed_energy_penalty)
-            + fixed_energy_penalty * variable_energy_penalty * train_throughput_cap
-        )
-        vector_energy_total = 3.0 * vector_energy_per_train
-
-        # Electrolyser / fuel cell — smooth max(·, 0) so the kink at
-        # hydrogen_throughput = 0 disappears.
-        energy_electrolysis = _smooth_max(hydrogen_throughput / electrolyser_efficiency, 0.0, beta_h2)
-        energy_fuelcell     = _smooth_max(-hydrogen_throughput / fuelcell_efficiency, 0.0, beta_h2)
-
-        # Hydrogen consumption (3 trains).
-        hydrogen_consumption = 3.0 * train_throughput / vector_molar_efficiency
-
-        # Storage update (raw, before clipping for state propagation).
-        hydrogen_storage = _hydrogen_storage + hydrogen_throughput - hydrogen_consumption
-
-        # Constraints: positive = feasible margin (already in framework convention).
-        lower_h2 = (hydrogen_storage - storage_lo) / upper_storage_limit
-        upper_h2 = (upper_storage_limit - hydrogen_storage) / upper_storage_limit
-        energy_balance = (
-            n_turbines * _renewable_energy - energy_electrolysis - vector_energy_total + energy_fuelcell
-        ) / (11.88 * n_turbines)
-
-        # Smooth-clip storage for state passthrough.
-        hydrogen_storage = _smooth_min(
-            _smooth_max(hydrogen_storage, storage_lo, beta_storage),
-            storage_hi, beta_storage,
+        storage = (
+            _storage - fuel_cell_energy / fuelcell_efficiency + 
+            electrolysis_energy * electrolyser_efficiency - throughput / vector_molar_efficiency
         )
 
-        # Reward: cost convention (lower = better). 3 identical trains, 3 identical ramps.
-        penalty = 3.0 * jnp.square(ramp_t)
-        reward = -(3.0 * train_throughput + 0.001 * _hydrogen_storage - lambda_penalty * penalty)
+        # All cons >= 0 is feasible.
+        energy_balance = (renewable_energy * n_turbines + fuel_cell_energy - vector_production_energy - electrolysis_energy) / (11.88 * n_turbines)
+        lower_storage = (storage - storage_lo) / (storage_hi)
+        upper_storage = (storage_hi - storage)  / (storage_hi)  
+        ramp_lo = ((throughput - _throughput) / vector_calorific_value + _n_active * train_throughput_cap * lower_ramp_limit) / train_throughput_cap
+        ramp_hi = ((throughput - _throughput) / vector_calorific_value - _n_active * train_throughput_cap * upper_ramp_limit) / train_throughput_cap
 
-        outputs     = jnp.array([hydrogen_storage, train_throughput])      # F
-        constraints = jnp.array([lower_h2, upper_h2, energy_balance])       # G
+        reward = -(throughput)
+
+        outputs     = jnp.array([storage, throughput, n_active])      # F
+        constraints = jnp.array([energy_balance, lower_storage, upper_storage, ramp_lo, ramp_hi])       # G
         cost        = jnp.atleast_1d(reward)                                # R
 
         return jnp.concatenate([outputs, constraints, cost], axis=0)
