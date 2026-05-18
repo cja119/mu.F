@@ -1060,9 +1060,9 @@ def _make_waste_water_step(cfg: DictConfig):
         # CO2 in liquid 
         co2 = _softplus(C + S2 - Z, beta=10.0)
         phi = co2 + k_h * p_t + (k_6 / kl_a) * mu_2 * X2
-        p_c = (phi - jnp.sqrt(phi * phi - 4.0 * k_h * p_t * co2)) / (2.0 * k_h)
+        p_c = (phi - jnp.sqrt(_softplus(phi * phi - 4.0 * k_h * p_t * co2, beta=10.0))) / (2.0 * k_h)
         q_c = kl_a * (co2 - k_h * p_c)
-        pH = jnp.log10(Z - S2 + EPS_Z_S2) - jnp.log10(K_B * (C - Z + S2) + EPS_Z_S2)
+        pH = jnp.log10(_softplus(Z - S2, beta=20.0)) - jnp.log10(_softplus(C - Z + S2, beta=20.0)) - jnp.log10(K_B)
 
         # Mass balances (Eqs. 20-25)
         dX1 = (mu_1 - alpha * D) * X1
@@ -1079,7 +1079,7 @@ def _make_waste_water_step(cfg: DictConfig):
         g_ph_hi = (PH_MAX - pH) / PH_MAX
         g_ph_lo = (pH - PH_MIN) / PH_MIN
         g_zs2   = (Z - S2 - EPS_Z_S2) / (jnp.abs(Z)+ jnp.abs(S2))
-        dgdt = -jnp.maximum(jnp.array([g_cod, g_s2, g_ph_hi, g_ph_lo, g_zs2]), 0.0)
+        dgdt = -jnp.minimum(jnp.array([g_cod, g_s2, g_ph_hi, g_ph_lo, g_zs2]), 0.0)
 
         # Stage cost
         q_m = k_6 * mu_2 * X2

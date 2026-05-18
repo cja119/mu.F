@@ -30,7 +30,7 @@ k_h: 16.0         # mmol/L/atm
 K_a: 1.5e-5      # mol/L
 
 # Yields
-k_1: 1.35 
+k_1: 42.14
 k_2: 116.5
 k_3: 268.0
 k_4: 50.6
@@ -57,5 +57,5 @@ integration:
   t0: 0
   tf: 1.0
   dt0: Null
-  max_steps: 10000
+  max_steps: 100000
   vmap_chunk_size: 0

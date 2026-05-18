@@ -72,3 +72,11 @@ n_theta: 4
 fn_evals: 0
 
 bypass_visualisations: True
+
+edge_clip:
+  - [0.0, 10.0]      # X1   (acidogenic biomass, g/L)
+  - [0.0, 10.0]      # X2   (methanogenic biomass, g/L)
+  - [0.0, 200.0]     # Z    (alkalinity, mmol/L)
+  - [0.0, 20.0]      # S1   (COD, g/L)
+  - [1.0e-4, 100.0]  # S2   (VFA, mmol/L) — strict positive floor
+  - [0.0, 300.0]     # C    (TIC, mmol/L
