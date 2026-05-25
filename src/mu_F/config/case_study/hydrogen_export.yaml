@@ -69,9 +69,7 @@ design_domain:
 - 'real'         # throughput
 - 'real'         # fuel_cell_energy
 - 'real'         # electrolysis_energy
-# Per-design-arg domain (length = n_design_args). 'real' = continuous;
-# replace with a list of allowed integer values to declare an integer dim.
-# make_markov tiles this template across nodes.
+
 
 global_n_aux_args: 0
 

@@ -19,11 +19,6 @@ n_aux_args:
 
 global_n_aux_args: 1
 
-aux_default: [1.0]
-# Rollout-time default for the global aux slot (max_fr_per_node).
-# 1.0 = no per-node F_in cap (full F_max/tf budget allowed). Adjust if a
-# specific reference value is preferred.
-
 n_input_args: 7
 
 reject_time: 0.5
@@ -51,8 +46,7 @@ KS_bounds:
   - - - 0.0
       - 1.0
 
-# Single dummy scenario — biohydrogen has no exogenous disturbance, but the
-# parameter expansion machinery wants at least one entry.
+
 parameters_samples: [{'c': [0.0], 'w': 1.0}]
 
 parameters_best_estimate: [0.0]

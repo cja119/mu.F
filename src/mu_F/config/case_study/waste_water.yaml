@@ -35,23 +35,14 @@ KS_bounds:
   design_args:
   - - -4.60517    # log(0.01)
     - 0.693147    # log(2.0)
-  # u[0] = log(D); D = exp(u[0]) inside the step.  Log-uniform Sobol
-  # crowds the small-D (near-steady-state, more-feasible) region while
-  # still reaching the washout edge near D = 2.
 
   aux_args:
   - - - 0.5
       - 1.0
-  # Global aux: α (biomass-in-liquid fraction). 0.5 = published AM2 fixed-bed
-  # retention (Bernard 2001); 1.0 = perfect-mixing chemostat (no retention).
 
 parameters_samples: [{'c': [3.0, 30.0, 65.0, 95.0], 'w': 1.0}]
 
 parameters_best_estimate: [3.0, 30.0, 65.0, 95.0]
-# Disturbance order:  [S1_in, S2_in, Z_in, C_in].
-# C_in > Z_in + S2_in  (95 ≥ 65 + 30 = 95)  so the inflow doesn't carry
-# negative dissolved CO2 into the reactor.  Both Z_in and C_in are off the
-# initial-state values (50, 60) so dZ/dt and dC/dt are both D-dependent at t=0.
 
 extendedDS_bounds: None
 
@@ -60,16 +51,11 @@ design_space_dimensions:
 
 design_domain:
 - 'real'
-# 'real' = continuous; replace with a list of allowed integer values to
-# declare an integer dim.  make_markov tiles this template across nodes.
+
 
 global_n_aux_args: 1
 
 aux_default: [0.5]
-# Rollout-time default for the global aux slot. Here: α = 0.5 (published AM2
-# fixed-bed retention from Bernard 2001). Used by subproblem_model.rollout
-# when aux is not supplied externally; the DEUS sampling/optimization paths
-# instead draw aux from KS_bounds.aux_args.
 
 process_space_names: ['log_D']
 

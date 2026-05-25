@@ -6,6 +6,31 @@ import logging
 import jax.numpy as jnp
 from jax.random import PRNGKey, choice
 
+
+def _replacement_block(cfg: DictConfig):
+    """Build DEUS's `algorithms.replacement` sub-tree from `cfg.samplers.ns.rejector`.
+
+    'suob-ellipsoid' — single bounding ellipsoid over all live points (DEUS
+                       replacement scheme 0).
+    'sumb-xmeans'    — x-means partition of live points, one bounding
+                       ellipsoid per cluster, proposals drawn from their
+                       union (DEUS replacement scheme 1).
+    """
+    rejector = getattr(cfg.samplers.ns, 'rejector', 'suob-ellipsoid')
+    if rejector == 'suob-ellipsoid':
+        return {"sampling": {"algorithm": "suob-ellipsoid"}}
+    if rejector == 'sumb-xmeans':
+        return {
+            "clustering": {
+                "algorithm": "clustering-xmeans",
+                "settings": {"metric": "euclidean",
+                             "score_criterion": "bic_ellipsoid"},
+            },
+            "sampling": {"algorithm": "sumb-mix"},
+        }
+    raise ValueError(f"Unrecognised rejector: {rejector!r}")
+
+
 def design_list_constructor(bounds_for_design):
     """ Method to construct a list of bounds for the design space"""
 
@@ -181,11 +206,7 @@ def create_problem_description_deus(cfg: DictConfig, the_model: object, G:nx.DiG
                      "monitor_performance": False
                  },
                 "algorithms": {
-                    "replacement": {
-                        "sampling": {
-                            "algorithm": "suob-ellipsoid"
-                            }
-                        }
+                    "replacement": _replacement_block(cfg)
                     }
                 }
             }
@@ -328,11 +349,7 @@ def create_problem_description_deus_direct(cfg: DictConfig, G:nx.DiGraph):
                      "monitor_performance": False
                  },
                 "algorithms": {
-                    "replacement": {
-                        "sampling": {
-                            "algorithm": "suob-ellipsoid"
-                            }
-                        }
+                    "replacement": _replacement_block(cfg)
                     }
                 }
             }

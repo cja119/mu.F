@@ -3,6 +3,7 @@ from itertools import product
 from abc import ABC
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax import random
 from jax import jit, lax
 
@@ -65,6 +66,122 @@ def serialise_model(params, model, x_scalar, y_scalar, model_type, model_data):
     except AssertionError as e:
         print(f"Error: {e}")
     return model_data
+
+
+def train_multihead_regressor(cfg, X, Y_kvec, num_folds: int = 2,
+                              rng_key=jax.random.PRNGKey(0)):
+    """Train a shared-trunk ANN with K linear output heads on ±1 targets.
+
+    `X` is (N, ndim) input. `Y_kvec` is (N, K) with entries in {-1, +1}.
+    Convention: `Y_kvec[i, k] = -1` means "x_i is in cluster k", `+1` means
+    "not in cluster k" (a different cluster or outright infeasible).
+
+    Loss is per-head class-balanced MSE: each head's in-cluster (`-1`) mass
+    contributes the same total to the loss as its out-of-cluster (`+1`)
+    mass, regardless of the raw class counts.  Mathematically equivalent to
+    upsampling the minority class per head, but uses a single training set.
+
+    Returns a jit-compiled function `f(x) -> (K,)` taking an unstandardised
+    `x` and returning the K-vector of head scores.  `f(x)[k] <= 0` means
+    "predicted in cluster k", matching the existing classifier convention.
+
+    Contract (for future swap-in trainers, e.g. SVM):
+      - input:  cfg, X (N, ndim) float, Y_kvec (N, K) in {-1, +1}, num_folds, rng_key
+      - output: callable f(x); accepts (ndim,) or (n, ndim); returns (K,) or (n, K)
+      - JIT-traceable, smooth in `x`; convention as above.
+    """
+    X_arr = jnp.asarray(X, dtype=jnp.float32)
+    if X_arr.ndim > 2:
+        X_arr = X_arr.squeeze()
+    Y_arr = jnp.asarray(Y_kvec, dtype=jnp.float32)
+    if Y_arr.ndim == 1:
+        Y_arr = Y_arr.reshape(-1, 1)
+
+    n_heads = int(Y_arr.shape[1])
+    n_total = int(Y_arr.shape[0])
+
+    # Standardise X (no scaling for Y — ±1 targets are already on a sensible scale)
+    x_scalar = StandardScaler().fit(np.asarray(X_arr))
+    X_std = jnp.asarray(x_scalar.transform(np.asarray(X_arr)), dtype=jnp.float32)
+
+    # Per-head, per-class weights.  Each head's two classes contribute the
+    # same total mass; each (i, k) entry's weight = 0.5 / count of its class
+    # within head k.  Heads contribute equally because they all sum to 1.
+    n_minus = jnp.sum(Y_arr == -1, axis=0)          # (K,)
+    n_plus  = jnp.sum(Y_arr ==  1, axis=0)          # (K,)
+    w_minus = 0.5 / jnp.maximum(n_minus, 1).astype(jnp.float32)
+    w_plus  = 0.5 / jnp.maximum(n_plus,  1).astype(jnp.float32)
+    W = jnp.where(Y_arr == -1, w_minus[None, :], w_plus[None, :])  # (N, K)
+
+    def balanced_loss(params, model, x, y, w):
+        y_pred = model.apply(params, x)
+        return jnp.sum(w * jnp.square(y - y_pred))
+
+    ann_cfg = cfg.surrogate.classifier_args.ann
+    hidden_sizes = list(ann_cfg.hidden_size_options)
+    afs = list(ann_cfg.activation_functions)
+    num_epochs = int(ann_cfg.num_epochs)
+    lr = float(ann_cfg.learning_rate)
+    weight_decay = float(getattr(ann_cfg, 'weight_decay', 0.0))
+
+    def _fit_once(model, train_idx, val_idx):
+        X_tr, Y_tr, W_tr = X_std[train_idx], Y_arr[train_idx], W[train_idx]
+        X_va, Y_va, W_va = X_std[val_idx],   Y_arr[val_idx],   W[val_idx]
+        params = model.init(rng_key, X_tr[:1])
+        tx = optax.adamw(lr, weight_decay=weight_decay)
+        opt_state = tx.init(params)
+        grad_fn = jax.value_and_grad(balanced_loss)
+
+        @jit
+        def step(params, opt_state):
+            loss, grads = grad_fn(params, model, X_tr, Y_tr, W_tr)
+            updates, opt_state = tx.update(grads, opt_state, params)
+            params = optax.apply_updates(params, updates)
+            return params, opt_state, loss
+
+        for _ in range(num_epochs):
+            params, opt_state, _ = step(params, opt_state)
+        val_loss = float(balanced_loss(params, model, X_va, Y_va, W_va))
+        return params, val_loss
+
+    # CV-style hyperparameter search over (hidden_size, activation).
+    kf = KFold(n_splits=max(num_folds, 2), shuffle=True, random_state=0)
+    splits = list(kf.split(np.arange(n_total)))
+
+    best_avg_loss = float('inf')
+    best_hidden, best_af = hidden_sizes[0], afs[0]
+    best_model, best_params = None, None
+    for hidden_size, af in product(hidden_sizes, afs):
+        model = identify_neural_network(hidden_size, n_heads, af)
+        fold_results = [_fit_once(model, tr, va) for tr, va in splits]
+        avg = sum(loss for _, loss in fold_results) / len(fold_results)
+        if avg < best_avg_loss:
+            best_avg_loss = avg
+            best_hidden, best_af = hidden_size, af
+            # Keep params from the fold with the lowest val_loss for this config.
+            best_params, _ = min(fold_results, key=lambda r: r[1])
+            best_model = model
+
+    x_mean = jnp.array(x_scalar.mean_)
+    x_std  = jnp.array(x_scalar.scale_)
+    apply_fn = best_model.apply
+
+    @jit
+    def query_unstandardised(x):
+        if x.ndim < 2:
+            x = x.reshape(1, -1)
+        x_s = (x - x_mean) / x_std
+        out = apply_fn(best_params, x_s)
+        return out.reshape(-1)   # (K,)
+
+    logging.info(
+        f"multihead classifier: K={n_heads} hidden={best_hidden} "
+        f"af={best_af} best_val_loss={float(best_avg_loss):.4g} "
+        f"per-head counts: n_minus={list(map(int, n_minus))} "
+        f"n_plus={list(map(int, n_plus))}"
+    )
+    return query_unstandardised
+
 
 def check_dims(D):
 
