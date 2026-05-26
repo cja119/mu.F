@@ -7,6 +7,53 @@ import jax.numpy as jnp
 from jax.random import PRNGKey, choice
 
 
+def _phases_setup_block(cfg: DictConfig, n_live, n_replacements):
+    """Build DEUS's `phases_setup` from cfg.samplers.ns.phases toggles.
+
+    DEUS runs four phases — INITIAL → NMVP_SEARCH → DETERMINISTIC →
+    PROBABILISTIC.  INITIAL is unconditional (seeds `n_live` Sobol
+    points).  Each of the other three has a `skip` flag controlled by
+    the cfg dict below.
+
+    Cfg shape (defaults shown):
+
+        cfg.samplers.ns.phases:
+            nmvp_search:    false   # legacy mode-vector partition
+            deterministic:  true    # boundary migration via smooth-score gradient
+            probabilistic:  true    # strict per-constraint rejection
+
+    DETERMINISTIC migrates the live set onto the feasibility boundary
+    using the smooth score's gradient; without it, PROBABILISTIC's
+    strict per-constraint rejection stalls when raw feasibility is a
+    few percent (multi-ellipsoid envelope covers mostly infeasible
+    regions, so fresh Sobol proposals rarely land inside).
+
+    PROBABILISTIC is the load-bearing rejection phase — turning it off
+    bypasses the whole DEUS scheme and is only useful for debugging.
+    """
+    pcfg = cfg.samplers.ns.get('phases', None) or {}
+    nmvp   = bool(pcfg.get('nmvp_search', False))
+    determ = bool(pcfg.get('deterministic', True))
+    prob   = bool(pcfg.get('probabilistic', True))
+
+    schedule = [(0.00, n_live, n_replacements)]
+    block = {
+        "initial":       {"nlive": n_live, "nproposals": n_replacements},
+        "nmvp_search":   {"skip": not nmvp},
+        "deterministic": {"skip": not determ},
+        "probabilistic": {"skip": not prob},
+    }
+    if determ:
+        block["deterministic"]["nlive_change"] = {
+            "mode": "user_given", "schedule": schedule,
+        }
+    if prob:
+        block["probabilistic"]["nlive_change"] = {
+            "mode": "user_given", "schedule": schedule,
+        }
+    return block
+
+
 def _replacement_block(cfg: DictConfig):
     """Build DEUS's `algorithms.replacement` sub-tree from `cfg.samplers.ns.rejector`.
 
@@ -168,27 +215,9 @@ def create_problem_description_deus(cfg: DictConfig, the_model: object, G:nx.DiG
             #    "pool_size": -1,
             #    "store_constraints": False
             #},
-            "phases_setup": {
-                "initial": {
-                    "nlive": cfg.samplers.ns.n_live,
-                    "nproposals": cfg.samplers.ns.n_replacements
-                },
-                "deterministic": {
-                    "skip": True
-                },
-                "nmvp_search": {
-                    "skip": True
-                },
-                "probabilistic": {
-                    "skip": False,
-                    "nlive_change": {
-                        "mode": "user_given",
-                        "schedule": [
-                            (.00, cfg.samplers.ns.n_live, cfg.samplers.ns.n_replacements),
-                        ]
-                    }
-                }
-            }
+            "phases_setup": _phases_setup_block(
+                cfg, cfg.samplers.ns.n_live, cfg.samplers.ns.n_replacements,
+            )
         },
         "algorithms": {
             "sampling": {
@@ -311,27 +340,9 @@ def create_problem_description_deus_direct(cfg: DictConfig, G:nx.DiGraph):
             #    "pool_size": -1,
             #    "store_constraints": False
             #},
-            "phases_setup": {
-                "initial": {
-                    "nlive": cfg.samplers.ns.final_sample_live,
-                    "nproposals": cfg.samplers.ns.n_replacements
-                },
-                "deterministic": {
-                    "skip": True
-                },
-                "nmvp_search": {
-                    "skip": True
-                },
-                "probabilistic": {
-                    "skip": False,
-                    "nlive_change": {
-                        "mode": "user_given",
-                        "schedule": [
-                            (.00, cfg.samplers.ns.final_sample_live, cfg.samplers.ns.n_replacements),
-                        ]
-                    }
-                }
-            }
+            "phases_setup": _phases_setup_block(
+                cfg, cfg.samplers.ns.final_sample_live, cfg.samplers.ns.n_replacements,
+            )
         },
         "algorithms": {
             "sampling": {

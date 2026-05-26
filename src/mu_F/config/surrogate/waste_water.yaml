@@ -81,3 +81,9 @@ surrogate_ctg:
     patience: 50
     batch_size: 264
     weight_decay: 0.0
+
+# Training-data augmentation around the converged feasibles. Opt-in per
+# case study; legacy fallback to cfg.samplers.ns.n_anneal still applies
+# while enabled is false.
+augmentation:
+  enabled: false

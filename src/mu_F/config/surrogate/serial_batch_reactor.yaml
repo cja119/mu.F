@@ -100,3 +100,9 @@ probability_map_args:
   drop_uncertain_params: true
 
 forward_evaluation_surrogate: true
+
+# Training-data augmentation around the converged feasibles. Opt-in per
+# case study; legacy fallback to cfg.samplers.ns.n_anneal still applies
+# while enabled is false.
+augmentation:
+  enabled: false

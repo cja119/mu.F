@@ -1,6 +1,10 @@
 root_node_inputs:
   - [147717.5, 700, 2]    # [hydrogen_storage (50 % of capacity), throughput, n_active]
 
+# Step in renewable supply: 0 ≤ t < renewable_pickup_node → no power;
+# t ≥ renewable_pickup_node → 11.88 per turbine. Defaults to num_nodes//2.
+renewable_pickup_node: 12
+
 constraint:
   auxiliary: 'None'
 
@@ -26,6 +30,7 @@ variable_energy_penalty: 1.826
 vector_calorific_value: 18.8
 lower_ramp_limit: 0.25
 upper_ramp_limit: 0.1
+minimum_train_throughput: 0.4
 lower_storage_limit: 0.2
 upper_storage_limit: 295435
 switch_time: 84

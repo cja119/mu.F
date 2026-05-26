@@ -2,9 +2,9 @@ sobol_samples: 4096
 sampler: 'sobol'
 
 # Evolutionary refinement settings
-evolutionary_refinement: true     # Set to true to enable
-scoring_method: ['min_cost', 'l1_constraint']        # Options: 'min_cost' or 'l1_constraint'
+evolutionary_refinement: false    # Set to true to enable
+scoring_method: 'min_cost'        # Options: 'min_cost' or 'l1_constraint'
 n_best: 32                        # Number of best samples to select
-n_children_per_best: 4           # Children generated per best sample
-perturbation_scale: 0.25          # Fraction of bound range for perturbation std
-n_iterations: 8                  # Number of refinement iterations
+n_children_per_best: 16           # Children generated per best sample
+perturbation_scale: 0.15          # Fraction of bound range for perturbation std
+n_iterations: 16                  # Number of refinement iterations

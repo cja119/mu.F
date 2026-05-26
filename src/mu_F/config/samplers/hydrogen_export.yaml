@@ -8,15 +8,43 @@ notion_of_feasibility: 'positive'
 ku_approximation: 'box'
 vol_scale: 0.05
 
-pmap_batch: 100  # samples per pmap/vmap dispatch in evaluate_subproblem_batch
+pmap_batch: 50  # samples per pmap/vmap dispatch in evaluate_subproblem_batch
+
+# DEUS-only symmetric box expansion on continuous dims (fraction of each
+# dim's physical range). Helps the sampler find boundary-singularities.
+# Integer dims are not expanded. Surrogates / evaluators still use the
+# physical bounds — only DEUS sees the expanded box.
+boundary_expansion: 0.0
 
 ns:
-  n_live: 2500
-  final_sample_live: 2500
-  n_replacements: 100
+  n_live: 1000
+  final_sample_live: 1000
+  n_replacements: 50
   n_iter: 10000
   f0: 0.1
   alpha: 0.2
   prior: Uniform
-  rejector: suob-ellipsoid
+  rejector: sumb-xmeans   # multi-ellipsoid (x-means partition) — wires the K-head classifier
+                          # pathway. Set to 'suob-ellipsoid' to fall back to single-ellipsoid.
   log_evidence_estimation: True
+  score_type: sigmoid            # 'sigmoid' | 'indicator' | 'boundary_seeking'
+  boundary_seeking_c: 5.0        # sharpness of the boundary peak (used when score_type=boundary_seeking)
+
+  # DEUS phase toggles. INITIAL is always on (seeds n_live Sobol points).
+  # DETERMINISTIC migrates the live set onto the feasibility boundary
+  # via the smooth-score gradient — without it, PROBABILISTIC stalls
+  # when raw feasibility is a few percent. PROBABILISTIC is the
+  # load-bearing strict-rejection phase. NMVP_SEARCH is legacy.
+  phases:
+    nmvp_search:   false
+    deterministic: true
+    probabilistic: true
+
+  # Annealing: after DEUS finishes, K-means partitions the feasibles and
+  # we draw `n_anneal` extra samples per cluster from a Gaussian whose
+  # covariance is the cluster covariance scaled by `anneal_radius`²
+  # (standardised coords). These samples are pushed through the same
+  # subproblem evaluator DEUS uses, so they augment both the classifier
+  # training set and the CTG training set. Set `n_anneal: 0` to disable.
+  n_anneal: 500
+  anneal_radius: 3.0

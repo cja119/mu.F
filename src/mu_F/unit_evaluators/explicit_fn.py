@@ -1154,6 +1154,7 @@ def _make_hydrogen_export_step(cfg: DictConfig):
     """
     # Capacities / counts
     n_turbines              = float(cfg.model.n_turbines)
+    n_trains_conversion     = float(cfg.model.n_trains_conversion)
     train_throughput_cap    = float(cfg.model.train_throughput_capacity)
     # Efficiencies / penalties
     vector_molar_efficiency = float(cfg.model.vector_molar_efficiency)
@@ -1171,8 +1172,17 @@ def _make_hydrogen_export_step(cfg: DictConfig):
     # ramping limit
     lower_ramp_limit        = float(cfg.model.lower_ramp_limit)
     upper_ramp_limit        = float(cfg.model.upper_ramp_limit)
+    minimum_train_throughput = float(cfg.model.minimum_train_throughput)
 
-    RENEWABLE_ENERGY = jnp.concatenate([jnp.zeros(24), jnp.ones(24)]) * 11.88 
+    N = int(cfg.case_study.num_nodes)
+    t_on = int(cfg.model.get('renewable_pickup_node', N // 2))
+    t_on = max(0, min(N, t_on))
+    RENEWABLE_ENERGY = jnp.concatenate(
+        [jnp.zeros(t_on), jnp.ones(N - t_on)]
+    ) * 11.88
+
+    # Smoothness for the fuel-cell / electrolyser split (softplus β).
+    split_beta = float(cfg.model.get('smooth_beta_power_split', 20.0))
 
     @jit
     def _step(x: jnp.ndarray, u: jnp.ndarray, z: jnp.ndarray, node):
@@ -1181,30 +1191,42 @@ def _make_hydrogen_export_step(cfg: DictConfig):
         z = jnp.ravel(z)
 
         _storage, _throughput, _n_active, = x
-        n_active, throughput, fuel_cell_energy, electrolysis_energy = u
+        n_active, delta_throughput, power_action = u
         renewable_energy = jnp.take(RENEWABLE_ENERGY, node)
 
+        fuel_cell_energy    = _softplus(-power_action, beta=split_beta)
+        electrolysis_energy = _softplus( power_action, beta=split_beta)
+
+        # New absolute throughput = predecessor + delta. Same calorific units.
+        throughput = _throughput + delta_throughput
+
         vector_production_energy = (
-            fixed_energy_penalty * n_active * train_throughput_cap + 
+            fixed_energy_penalty * n_active * variable_energy_penalty * train_throughput_cap +
             (1 - fixed_energy_penalty) * throughput * (variable_energy_penalty / vector_calorific_value)
         )
 
         storage = (
-            _storage - fuel_cell_energy / fuelcell_efficiency + 
+            _storage - fuel_cell_energy / fuelcell_efficiency +
             electrolysis_energy * electrolyser_efficiency - throughput / vector_molar_efficiency
         )
 
-        # All cons >= 0 is feasible.
-        energy_balance = (renewable_energy * n_turbines + fuel_cell_energy - vector_production_energy - electrolysis_energy) / (11.88 * n_turbines)
+        # All cons >= 0 is feasible.  fc − el ≡ −power_action exactly via the
+        # softplus identity, so this is a single linear term in power_action.
+        energy_balance = (renewable_energy * n_turbines - power_action - vector_production_energy) / (11.88 * n_turbines)
         lower_storage = (storage - storage_lo) / (storage_hi)
-        upper_storage = (storage_hi - storage)  / (storage_hi)  
-        ramp_lo = ((throughput - _throughput) / vector_calorific_value + _n_active * train_throughput_cap * lower_ramp_limit) / train_throughput_cap
-        ramp_hi = ((throughput - _throughput) / vector_calorific_value - _n_active * train_throughput_cap * upper_ramp_limit) / train_throughput_cap
+        upper_storage = (storage_hi - storage)  / (storage_hi)
+        ramp_lo = (delta_throughput / vector_calorific_value + _n_active * train_throughput_cap * lower_ramp_limit) / train_throughput_cap
+        ramp_hi = ((n_trains_conversion + 1 - _n_active) * train_throughput_cap * upper_ramp_limit
+                   - delta_throughput / vector_calorific_value) / train_throughput_cap
+        throughput_upper = (n_active * train_throughput_cap - throughput / vector_calorific_value) / train_throughput_cap
+        throughput_lower = (throughput / vector_calorific_value - n_active * train_throughput_cap * minimum_train_throughput) / train_throughput_cap
 
         reward = -(throughput)
 
         outputs     = jnp.array([storage, throughput, n_active])      # F
-        constraints = jnp.array([energy_balance, lower_storage, upper_storage, ramp_lo, ramp_hi])       # G
+        constraints = jnp.array([energy_balance, lower_storage, upper_storage,
+                                 ramp_lo, ramp_hi,
+                                 throughput_upper, throughput_lower])       # G
         cost        = jnp.atleast_1d(reward)                                # R
 
         return jnp.concatenate([outputs, constraints, cost], axis=0)

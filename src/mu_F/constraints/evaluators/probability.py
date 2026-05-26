@@ -1,20 +1,24 @@
 """
 Probabilistic feasibility evaluator.
 
-`BackwardPmapEvaluator` queries each successor's `probability_map` surrogate,
-maximising the predicted probability over the successor's own design space
-subject to the upstream output as fixed `succ_input`.  The inner SQP is
-vmapped over the current node's uncertainty axis so the per-scenario,
-per-successor probability is returned (`(N_uncertainty, N_successors)`).
+For each successor of `node`, builds an `IntegerNLPSpec` that maximises
+the `probability_map` surrogate over the successor's reduced (continuous-
+only) design space, with the upstream output threaded as the parametric
+tail `y`.  At evaluate-time the theta axis is handled by an outer `vmap`
+over the per-scenario `ys` — composes with the (assignment × start)
+vmaps inside `solve_integer_nlp` into one fused XLA program.
 
-The CTG analogue lives in `cost_to_go.py` — `CTGEvaluator.evaluate` does
-the equivalent vmap over the scenario axis, so a single class serves both
-deterministic (n=1) and probabilistic (n>1) use without an extra subclass.
-Aggregation across scenarios (weighted sum, product over successors) lives
-at the call site in `integration.py`.
+The probability map is single-output regression (no multi-head wiring),
+so `n_heads = 0` and the aggregator is always `'scalar'`.  Integer
+design dims still route through the parametric tail via `IntegerProblem`.
+
+Inner `evaluate` returns `(N_uncertainty, N_successors)`; the top-level
+`backward_pmap` shards across the design-batch axis and returns
+`(N_batch, N_uncertainty, N_successors)`.
 """
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import devices
@@ -22,31 +26,28 @@ from jax import devices
 from mu_F.constraints.evaluators.base import (
     BaseEvaluator,
     build_factory,
+    build_penalty_screener,
     cached_parallel_thread,
-    parallel_thread,
     precompute_sobol_pool,
     shard_dispatch,
     skip_if_masked,
 )
 from mu_F.constraints.utils import (
-    mask_classifier,
     get_successor_inputs,
+    mask_surrogate,
     pad_to_multiple,
     batch_mask,
     poison_padded,
 )
-from mu_F.solvers.mixed_integer import (
-    mixed_integer_solve,
-    resolve_integer_spec,
-    slack_from_cfg,
+from mu_F.solvers.integer_nlp import (
+    IntegerNLPSpec,
+    IntegerProblem,
+    solve_integer_nlp,
 )
-from types import SimpleNamespace
+from mu_F.solvers.mixed_integer import resolve_integer_spec
 
 
-__all__ = [
-    "BackwardPmapEvaluator",
-    "backward_pmap",
-]
+__all__ = ["BackwardPmapEvaluator", "backward_pmap"]
 
 
 # =============================================================================
@@ -54,24 +55,24 @@ __all__ = [
 # =============================================================================
 
 class BackwardPmapEvaluator(BaseEvaluator):
-    """
-    Backward feasibility evaluator for probabilistic constraints.
+    """Per-successor probabilistic feasibility evaluator.
+
+    Holds an `IntegerNLPSpec` per successor.  The objective is the masked
+    `probability_map` surrogate negated (so minimisation drives P_feas
+    up); no general constraint — the surrogate IS the feasibility signal.
+
+    The per-call hot loop runs:
+
+        per_theta = vmap(solve_integer_nlp, in_axes=(None, 0))(spec, ys)
+
+    where `ys` is the per-theta upstream input for this successor.
     """
 
     def __init__(self, cfg, graph, node):
-        # Per-successor static state populated in `_build_for_key`.
-        self.n_fix: dict         = {}
-        self.n_d_k: dict         = {}
-        self.bounds: dict        = {}
-        self.input_indices: dict = {}
-        self.aux_indices: dict   = {}
-        self.fix_indices: dict   = {}
-        self.ndim: dict          = {}
-        self.objective_fn: dict  = {}
-
+        self.specs: dict          = {}
+        self.input_indices: dict  = {}
+        self.aux_indices: dict    = {}
         super().__init__(cfg, graph, node)
-
-        # Pin bound method for stable pmap identity across calls.
         self._thread = self.evaluate
 
     def _keys(self) -> list:
@@ -79,13 +80,9 @@ class BackwardPmapEvaluator(BaseEvaluator):
             return []
         return list(self.graph.successors(self.node))
 
-    # ------------------------------------------------------------------
-    # Build 
-    # ------------------------------------------------------------------
-
     def _build_for_key(self, succ: int) -> None:
-        """Per-successor reduced-space box NLP — `p` is the succ_input."""
-        n_d_succ = self.graph.nodes[succ]['n_design_args']
+        # ── Geometry: successor's full NLP shape + which slots are fix / aux / int ──
+        n_d_succ = int(self.graph.nodes[succ]['n_design_args'])
         input_indices = np.array(
             [n_d_succ + inp for inp in self.graph.edges[self.node, succ]['input_indices']],
             dtype=int,
@@ -96,118 +93,104 @@ class BackwardPmapEvaluator(BaseEvaluator):
         )
         fix_indices = np.hstack([input_indices, aux_indices]).astype(int)
         ndim = (
-            self.graph.nodes[succ]['n_design_args']
-            + self.graph.nodes[succ]['n_input_args']
-            + self.graph.graph['n_aux_args']
+            n_d_succ
+            + int(self.graph.nodes[succ]['n_input_args'])
+            + int(self.graph.graph['n_aux_args'])
         )
         n_fix = int(len(fix_indices))
-        n_d_k = ndim - n_fix
 
-        # Bounds in real-world units; classifier self-scales.
-        decision_bounds = self.graph.nodes[succ]["extendedDS_bounds"].copy()
-        lb = jnp.delete(
-            jnp.asarray(decision_bounds[0]), fix_indices, axis=1,
-        ).reshape(-1)
-        ub = jnp.delete(
-            jnp.asarray(decision_bounds[1]), fix_indices, axis=1,
-        ).reshape(-1)
+        int_dims, int_values = resolve_integer_spec(
+            self.cfg.case_study.get('design_domain', None)
+        )
+        int_indices = np.array(int_dims, dtype=int)
+        n_int = int(int_indices.size)
+
+        # ── Continuous-only bounds: drop fix/aux/int slots ──
+        decision_bounds = self.graph.nodes[succ]['extendedDS_bounds'].copy()
+        drop = np.concatenate([fix_indices, int_indices]).astype(int)
+        lb = jnp.delete(jnp.asarray(decision_bounds[0]), drop, axis=1).reshape(-1)
+        ub = jnp.delete(jnp.asarray(decision_bounds[1]), drop, axis=1).reshape(-1)
         bounds = [lb, ub]
+        n_d_cont = int(lb.size)
+        n_params = n_fix + n_int                                # no head one-hots
 
-        surrogate         = self.graph.nodes[succ]["probability_map"]
-        wrapped_surrogate = mask_classifier(surrogate, ndim, input_indices, aux_indices)
+        # ── Probability surrogate as objective: minimise `-p_feas` ──
+        probability_map = self.graph.nodes[succ]['probability_map']
+        masked = mask_surrogate(
+            probability_map,
+            ndim=ndim,
+            fix_ind=input_indices,
+            aux_ind=aux_indices,
+            int_ind=int_indices,
+            n_heads=0,
+            aggregator='scalar',
+        )
+        def objective(x_red, p_aug):
+            return -masked(x_red, p_aug)
 
-        def objective(x, p):
-            # We want to maximise the probability that we are feasible
-            return - wrapped_surrogate(x, p.reshape(1, -1)).squeeze()
-
-        self.factories[succ] = build_factory(
+        # ── Septal factory + screener + Sobol pool (no general constraint) ──
+        factory = build_factory(
             objective, None, bounds,
-            n_decision=n_d_k,
-            n_params=n_fix,
+            n_decision=n_d_cont,
+            n_params=n_params,
             n_constraints=0,
             feasibility_tol=self.feasibility_tol,
             optimality_tol=self.optimality_tol,
             max_iter=self.max_iter,
         )
-        self.sobol_pool[succ] = precompute_sobol_pool(
-            bounds, n_d_k, self.n_sobol_screen,
+        screener = build_penalty_screener(objective, None, self.screen_penalty)
+        sobol_pool = precompute_sobol_pool(bounds, n_d_cont, self.n_sobol_screen)
+
+        # ── Integer problem (no head selector — single-output regression) ──
+        integer_problem = IntegerProblem.from_cfg(
+            design_domain=self.cfg.case_study.get('design_domain', None),
+            n_heads=0,
         )
 
-        self.n_fix[succ]         = n_fix
-        self.n_d_k[succ]         = n_d_k
-        self.bounds[succ]        = bounds
+        self.specs[succ] = IntegerNLPSpec(
+            integer_problem    = integer_problem,
+            continuous_factory = factory,
+            screener           = screener,
+            sobol_pool         = sobol_pool,
+            n_starts           = self.n_starts,
+            feasibility_tol    = self.feasibility_tol,
+        )
         self.input_indices[succ] = input_indices
         self.aux_indices[succ]   = aux_indices
-        self.fix_indices[succ]   = fix_indices
-        self.ndim[succ]          = ndim
-        self.objective_fn[succ]  = objective
-
 
     # ------------------------------------------------------------------
-    # Thread entry points — pmap targets
+    # Shard entry point — pmap target
     # ------------------------------------------------------------------
 
     def evaluate(self, outputs_s, aux_s, mask_s):
-        """
-        Node-local thread body — per-scenario evaluation via septal's
-        parametric batch.
-
-        Instead of vmapping the inner SQP over scenarios externally, we
-        stack `(start, scenario)` pairs into a single flat batch and let
-        `solve_batch` vmap over both axes in one call.
+        """Shard body — per-scenario probability via outer-theta vmap.
 
         Parameters
         ----------
-        outputs_s : (N_uncertainty, N_output_dim) — current node's per-scenario outputs
+        outputs_s : (N_uncertainty, N_output_dim)
         aux_s     : (N_uncertainty, N_aux)
         mask_s    : scalar bool — True on real lanes, False on padded lanes
 
         Returns
         -------
-        probs : (N_uncertainty, N_successors)
-            For each (scenario, successor) the maximum achievable downstream
-            probability of feasibility, conditioned on this scenario's output.
+        probs : (N_uncertainty, N_successors) — max-achievable P_feas per
+                (scenario, successor).
         """
         def real():
             succ_inputs = get_successor_inputs(self.graph, self.node, outputs_s)
-            int_dims, int_values = resolve_integer_spec(
-                self.cfg.case_study.get('design_domain', None)
-            )
-            slack = slack_from_cfg(self.cfg)
-
             evals = []
             for succ in self._keys():
                 ys = succ_inputs[succ]
                 if aux_s is not None and aux_s.size > 0:
                     ys = jnp.concatenate([ys, aux_s], axis=-1)
-                n_unc = ys.shape[0]
-                n_starts = self.n_starts
-                sobol = self.sobol_pool[succ][:n_starts]
-
-                x0_stacked = jnp.tile(sobol, (n_unc, 1))
-                p_stacked  = jnp.repeat(ys, n_starts, axis=0)
-
-                def _leaf(_lb, _ub, _x0, succ=succ):
-                    res = self.factories[succ].solve_batch(x0_stacked, p_stacked)
-                    objectives = res.objective.reshape(n_unc, n_starts)
-                    success    = jnp.asarray(res.success).reshape(n_unc, n_starts)
-                    ranked     = jnp.where(success, objectives, objectives + 1e10)
-                    best_idx   = jnp.argmin(ranked, axis=1)
-                    best_obj   = jnp.take_along_axis(
-                        objectives, best_idx[:, None], axis=1,
-                    ).squeeze(-1)
-                    return SimpleNamespace(decision_variables=None, objective=best_obj, success=True)
-
-                result = mixed_integer_solve(
-                    _leaf, self.bounds[succ], self.bounds[succ][0],
-                    int_dims=int_dims, int_values=int_values,
-                    mode='best', slack=slack,
+                # ys : (n_theta, n_y) — outer-theta vmap composes with the
+                # inner (asn × start) vmaps inside solve_integer_nlp.
+                per_theta = jax.vmap(solve_integer_nlp, in_axes=(None, 0))(
+                    self.specs[succ], ys,
                 )
-
-                # objective = -P_feas → negate to recover the probability.
-                evals.append((-jnp.asarray(result.objective)).reshape(-1, 1))
-
-            return jnp.hstack(evals)  # (n_unc, N_succ)
+                # objective = -P_feas  →  negate to recover the probability.
+                evals.append((-per_theta.objective).reshape(-1, 1))
+            return jnp.hstack(evals)                            # (n_unc, N_succ)
 
         return skip_if_masked(mask_s, real)
 
@@ -229,21 +212,20 @@ def _get_pmap_evaluator(cfg, graph, node) -> BackwardPmapEvaluator:
 
 
 def _drive_pmap(evaluator, outputs, aux, cfg, succ_count_fallback: int = 1):
-    """
-    Generic driver: chunked-pmap of the per-scenario thread.
+    """Pmap-shard the per-scenario thread across CPU devices.
 
     Parameters
     ----------
     evaluator : has `_thread(outputs_s, aux_s, mask_s)` returning shape
-        `(N_uncertainty, N_succ)` per design.
+                `(N_uncertainty, N_succ)`.
     outputs   : (N_batch, N_uncertainty, N_output_dim)
     aux       : (N_batch, N_aux)
 
     Returns `(N_batch, N_uncertainty, N_succ)`.
     """
     if evaluator._keys() == []:
-        # No successors — return ones so the caller's product / sum collapses
-        # to a no-op contribution (probability=1, cost=0 picked at call site).
+        # No successors — return ones so the caller's product / sum
+        # collapses to a no-op contribution (P=1 picked at call site).
         return jnp.ones((outputs.shape[0], outputs.shape[1], succ_count_fallback))
 
     cpu_devs = list(devices('cpu'))
@@ -267,22 +249,21 @@ def _drive_pmap(evaluator, outputs, aux, cfg, succ_count_fallback: int = 1):
         devices=devs,
         use_vmap=bool(getattr(cfg.solvers, "use_vmap", False)),
     )
-    full_evals = shard_dispatch(pmap_fn, (padded_out, padded_aux, mask), W=W)  # (total, N_unc, N_succ)
+    full_evals = shard_dispatch(pmap_fn, (padded_out, padded_aux, mask), W=W)
     full_evals = poison_padded(full_evals, mask, fill=jnp.nan)
     return full_evals[:n_real]
 
 
 def backward_pmap(outputs, aux, cfg, graph, node):
-    """
-    Top-level per-scenario downstream-feasibility evaluator.
+    """Top-level per-scenario downstream-feasibility evaluator.
 
     Returns
     -------
     (evaluations, None)
-        evaluations : (N_batch, N_uncertainty, N_successors) — maximised
-        downstream P_feas per (design, scenario, successor).
+        evaluations : (N_batch, N_uncertainty, N_successors) — max P_feas
+        per (design, scenario, successor).
 
-    The trailing `None` keeps tuple parity with `backward_constraint_evaluator`.
+    Trailing `None` keeps tuple parity with `backward_constraint_evaluator`.
     """
     evaluator = _get_pmap_evaluator(cfg, graph, node)
     return _drive_pmap(evaluator, outputs, aux, cfg), None

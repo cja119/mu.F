@@ -4,27 +4,22 @@ Current-node surrogate evaluators.
 Two flavours, both operating on the current node's own live surrogates
 (not a successor's / predecessor's):
 
-  - `current_constraint_surrogate`  — box-only feasibility check: min
-    classifier(assemble(x, inputs)) over (design, aux).  No general
-    constraints.  Used for "rollout constraint" checks.
+  - `current_constraint_surrogate`  — box-only feasibility check: minimise
+    the (masked) classifier over the reduced decision space.  Used for
+    "rollout constraint" checks.
 
   - `current_cost_surrogate`  — constrained CTG: minimise the node's CTG
-    surrogate subject to the node's classifier being feasible (g(x) <= 0).
-    Single-problem (no successor fan-out) so batching happens entirely via
-    vmap inside septal — no pmap wrapper.
+    surrogate subject to the node's classifier being feasible.
 
-Both use the reduced decision space (inputs + aux indices masked away from
-the full NLP) since those positions are pinned by the supplied `inputs`.
+Both consume the integer-NLP abstraction in `mu_F.solvers.integer_nlp`:
+each evaluator builds an `IntegerNLPSpec` once per node in `_build_for_key`
+and runs `solve_integer_nlp(spec, y)` per call.  At rollout there is only
+one theta — the call returns a single solve result which is reshaped to
+`(1, …)` to keep the shape contract identical to the CTG / backward path.
 
-### BaseEvaluator port
-
-Each evaluator has a single sub-problem (`_keys() = [node]`).  The per-
-sample fixed inputs are threaded as the `p` parameter instead of baked
-into Python closures — one factory per node, reused across calls.
-
-`evaluate(inputs, aux)` returns `(decision_variables.T, objective, converged)`
-to match the legacy contract; the transpose is preserved so rollout
-agents keep indexing as `v.T[i]`.
+Multi-head classifiers (SOS1 active-head selector) are routed via
+`mask_surrogate` with the right aggregator; design integers are routed
+via the parametric tail of `p_aug` instead of being SQP decision vars.
 """
 from __future__ import annotations
 
@@ -35,19 +30,16 @@ from mu_F.constraints.evaluators.base import (
     BaseEvaluator,
     build_factory,
     build_penalty_screener,
-    pick_best,
-    pick_x0_batch,
     precompute_sobol_pool,
 )
-from mu_F.constraints.utils import (
-    mask_classifier,
+from mu_F.constraints.utils import mask_surrogate
+from mu_F.solvers.integer_nlp import (
+    IntegerNLPSpec,
+    IntegerProblem,
+    solve_integer_nlp,
+    splice_design_integers,
 )
-from mu_F.solvers.mixed_integer import (
-    mixed_integer_solve,
-    resolve_integer_spec,
-    slack_from_cfg,
-)
-from types import SimpleNamespace
+from mu_F.solvers.mixed_integer import resolve_integer_spec
 
 
 __all__ = [
@@ -59,49 +51,74 @@ __all__ = [
 
 
 # =============================================================================
-# Shared index / bounds helper — used by both evaluators
+# Shared geometry helper — used by both evaluators
 # =============================================================================
 
-def _current_reduced_space(graph, node, cfg):
-    """
-    Compute the reduced decision space for a current-node sub-problem.
+def _current_geometry(graph, node, cfg):
+    """Compute the geometry of a current-node sub-problem.
 
     Returns
     -------
-    ndim          : int                    — full NLP dimension
-    input_indices : np.ndarray[int]        — fixed input slots
-    aux_indices   : np.ndarray[int]        — fixed aux slots
-    fix_indices   : np.ndarray[int]        — concatenation of the above
-    decision_bounds : list[jnp.ndarray]    — [lb, ub] on the reduced space
+    ndim          : int   — full NLP dimension (design + input + aux)
+    n_design      : int   — pure design dim (= len(KS_bounds))
+    n_input       : int
+    n_aux         : int
+    input_indices : np.ndarray[int]  — positions of input slots in the full vector
+    aux_indices   : np.ndarray[int]  — positions of aux slots
+    int_indices   : np.ndarray[int]  — positions of design-integer slots
+                                       (same as cfg.case_study.design_domain integer positions)
+    int_values    : tuple[tuple[int, ...], ...]
+    ks_lb / ks_ub : jnp.ndarray      — bounds on the design portion (length n_design)
     """
-    n_design = graph.nodes[node]['n_design_args']
-    n_input  = graph.nodes[node]['n_input_args']
-    n_aux    = graph.graph['n_aux_args']
+    n_design = int(graph.nodes[node]['n_design_args'])
+    n_input  = int(graph.nodes[node]['n_input_args'])
+    n_aux    = int(graph.graph['n_aux_args'])
     ndim     = n_design + n_input + n_aux
 
     input_indices = np.arange(n_design, n_design + n_input).astype(int)
     aux_indices   = np.arange(ndim - n_aux, ndim).astype(int)
-    fix_indices   = np.hstack([input_indices, aux_indices]).astype(int)
 
+    int_dims, int_values = resolve_integer_spec(
+        cfg.case_study.get('design_domain', None)
+    )
+    int_indices = np.array(int_dims, dtype=int)
 
     ks_design = graph.nodes[node]['KS_bounds']
-    lb = jnp.asarray([b[0] for b in ks_design]).reshape(-1)
-    ub = jnp.asarray([b[1] for b in ks_design]).reshape(-1)
+    ks_lb = jnp.asarray([b[0] for b in ks_design]).reshape(-1)
+    ks_ub = jnp.asarray([b[1] for b in ks_design]).reshape(-1)
 
-    return ndim, input_indices, aux_indices, fix_indices, [lb, ub]
+    return (ndim, n_design, n_input, n_aux,
+            input_indices, aux_indices, int_indices, int_values,
+            ks_lb, ks_ub)
 
 
-def _prepare_inputs(inputs, graph, node, fix_indices, cfg):
-    """
-    Flatten `inputs` to a single fixed-slot vector (shape `(n_fix,)`).
+def _resolve_classifier(cfg, graph, key):
+    """Pick the single-head vs K-head classifier callable for this node."""
+    is_multihead = (
+        cfg.samplers.ns.get('rejector', '') == 'sumb-xmeans'
+        and graph.nodes[key].get('cluster_classifier_head') is not None
+    )
+    if is_multihead:
+        return (int(graph.nodes[key]['cluster_classifier_n_heads']),
+                graph.nodes[key]['cluster_classifier_head'])
+    return (0, graph.nodes[key]['classifier'])
 
-    Inputs are passed through verbatim: every callable on the graph is
-    self-scaling (takes real-world input, standardises internally), so
-    there's no external scaling step to apply here any more.
-    """
+
+def _design_bounds_continuous(ks_lb, ks_ub, int_indices):
+    """Drop integer-design slots from the design bounds — they live in p_aug."""
+    if int_indices.size == 0:
+        return [ks_lb, ks_ub]
+    lb = jnp.asarray(np.delete(np.asarray(ks_lb), int_indices))
+    ub = jnp.asarray(np.delete(np.asarray(ks_ub), int_indices))
+    return [lb, ub]
+
+
+def _prepare_inputs(inputs, n_y_expected):
+    """Flatten inputs to a single (n_y_expected,) vector, zero-padded if short."""
     if inputs is None:
-        return jnp.zeros((0,))
-    return inputs.reshape(-1)
+        return jnp.zeros((n_y_expected,))
+    p = inputs.reshape(-1)
+    return jnp.zeros(n_y_expected).at[:min(p.size, n_y_expected)].set(p[:n_y_expected])
 
 
 # =============================================================================
@@ -109,117 +126,102 @@ def _prepare_inputs(inputs, graph, node, fix_indices, cfg):
 # =============================================================================
 
 class CurrentConstraintEvaluator(BaseEvaluator):
-    """
-    Stateful current-node feasibility evaluator.
+    """Stateful current-node feasibility evaluator.
 
-    Box-only NLP: minimise classifier(assemble(x, p)) over the reduced
-    decision space, with fixed inputs `p` threaded as the parametric
-    problem's `p` argument.  No general constraints.
+    Box-only NLP: minimise the (masked) classifier over the reduced decision
+    space.  The classifier output IS the objective — no general constraint.
 
-    Single sub-problem (`_keys() = [node]`) — build once, reuse across
-    every `evaluate(inputs, aux)` call.
+    Single sub-problem (`_keys() = [node]`); built once, reused across every
+    `evaluate(inputs, aux)` call.
     """
 
     def __init__(self, cfg, graph, node):
-        self.bounds: dict        = {}
-        self.n_d: dict           = {}
-        self.n_fix: dict         = {}
-        self.fix_indices: dict   = {}
-        self.ndim: dict          = {}
-        self.objective_fn: dict  = {}
-
+        self.specs: dict          = {}
+        self.n_design_full: dict  = {}
+        self.n_y: dict            = {}
         super().__init__(cfg, graph, node)
-
         self._thread = self.evaluate
 
     def _keys(self) -> list:
         return [self.node]
 
     def _build_for_key(self, key) -> None:
-        ndim, input_indices, aux_indices, fix_indices, bounds = \
-            _current_reduced_space(self.graph, key, self.cfg)
-        lb, ub = bounds
-        n_d = int(lb.size)
-        n_fix = int(len(fix_indices))
+        (ndim, n_design, n_input, n_aux,
+         input_indices, aux_indices, int_indices, int_values,
+         ks_lb, ks_ub) = _current_geometry(self.graph, key, self.cfg)
+        n_heads, classifier = _resolve_classifier(self.cfg, self.graph, key)
+        n_int = int(int_indices.size)
+        n_y   = n_input + n_aux
 
-        classifier         = self.graph.nodes[key]['classifier']
-        wrapped_classifier = mask_classifier(
-            classifier, ndim, input_indices, aux_indices,
+        # Constraint callable here is the objective (no general constraint).
+        objective = mask_surrogate(
+            classifier,
+            ndim=ndim,
+            fix_ind=input_indices,
+            aux_ind=aux_indices,
+            int_ind=int_indices,
+            n_heads=n_heads,
+            # aggregator inferred: 'scalar' or 'onehot_sum'
         )
 
-        def objective(x, p):
-            return wrapped_classifier(x, p.reshape(1, -1)).squeeze()
+        bounds = _design_bounds_continuous(ks_lb, ks_ub, int_indices)
+        n_d_cont = int(bounds[0].size)
+        n_params = n_y + n_int + n_heads
 
-        self.factories[key] = build_factory(
+        factory = build_factory(
             objective, None, bounds,
-            n_decision=n_d,
-            n_params=n_fix,
+            n_decision=n_d_cont,
+            n_params=n_params,
             n_constraints=0,
             feasibility_tol=self.feasibility_tol,
             optimality_tol=self.optimality_tol,
             max_iter=self.max_iter,
         )
-        self.sobol_pool[key] = precompute_sobol_pool(
-            bounds, n_d, self.n_sobol_screen,
+        screener = build_penalty_screener(objective, None, self.screen_penalty)
+        sobol_pool = precompute_sobol_pool(bounds, n_d_cont, self.n_sobol_screen)
+
+        integer_problem = IntegerProblem.from_cfg(
+            design_domain=self.cfg.case_study.get('design_domain', None),
+            n_heads=n_heads,
         )
 
-        self.bounds[key]       = bounds
-        self.n_d[key]          = n_d
-        self.n_fix[key]        = n_fix
-        self.fix_indices[key]  = fix_indices
-        self.ndim[key]         = ndim
-        self.objective_fn[key] = objective
+        self.specs[key] = IntegerNLPSpec(
+            integer_problem    = integer_problem,
+            continuous_factory = factory,
+            screener           = screener,
+            sobol_pool         = sobol_pool,
+            n_starts           = self.n_starts,
+            feasibility_tol    = self.feasibility_tol,
+        )
+        self.n_design_full[key] = n_design
+        self.n_y[key]           = n_y
 
     def evaluate(self, inputs, aux):
-        """
-        Solve the box-only current-node NLP with `cfg.solvers.n_starts`
-        Sobol-seeded starts.
+        """Solve the box-only current-node NLP.
 
-        Returns
-        -------
-        (decision_variables, objective, converged)
-            decision_variables : (1, n_d)
-            objective          : (1, 1)
-            converged          : (1, 1), dtype bool
+        Returns `(decision_variables, objective, converged)` in the legacy shape.
+        At rollout `n_theta = 1`; the theta dim is preserved via outer `vmap`
+        for consistency with the CTG / backward path.
         """
         key = self.node
         if key is None:
             n = 0 if inputs is None else inputs.shape[0]
-            return (
-                jnp.zeros((n, 0)),
-                jnp.zeros((n, 1)),
-                jnp.zeros((n, 1), dtype=bool),
-            )
+            return (jnp.zeros((n, 0)),
+                    jnp.zeros((n, 1)),
+                    jnp.zeros((n, 1), dtype=bool))
 
-        p = _prepare_inputs(inputs, self.graph, key, self.fix_indices[key], self.cfg)
+        y = _prepare_inputs(inputs, self.n_y[key])             # (n_y,)
+        # Rollout is single-theta; call once. The (1, …) shape on the return
+        # value preserves the "theta dim is always present" contract for
+        # consistency with the CTG / backward path.
+        result = solve_integer_nlp(self.specs[key], y)
 
-        p = jnp.zeros(self.n_fix[key]).at[:min(p.size, self.n_fix[key])].set(
-            p[:self.n_fix[key]]
+        full_design = splice_design_integers(
+            result.x, self.specs[key], result.assignment_idx, self.n_design_full[key],
         )
-
-        x0_batch = _sobol_topn(self.sobol_pool[key], self.n_starts)
-        p_batch = jnp.broadcast_to(
-            p.reshape(1, -1), (self.n_starts, self.n_fix[key]),
-        )
-
-        def _leaf(_lb, _ub, _x0):
-            res = self.factories[key].solve_batch(x0_batch, p_batch)
-            f, c, x = pick_best(res, self.factories[key], self.feasibility_tol)
-            return SimpleNamespace(decision_variables=x, objective=float(f), success=bool(c))
-
-        int_dims, int_values = resolve_integer_spec(
-            self.cfg.case_study.get('design_domain', None)
-        )
-        result = mixed_integer_solve(
-            _leaf, self.bounds[key], self.bounds[key][0],
-            int_dims=int_dims, int_values=int_values,
-            mode='best', slack=slack_from_cfg(self.cfg),
-        )
-
-        params    = jnp.asarray(result.decision_variables).reshape(1, -1)
-        objective = jnp.asarray(result.objective).reshape(1, 1)
-        converged = jnp.asarray(result.success).reshape(1, 1)
-        return params, objective, converged
+        return (full_design.reshape(1, -1),
+                jnp.asarray(result.objective).reshape(1, 1),
+                jnp.asarray(result.success, dtype=bool).reshape(1, 1))
 
 
 # =============================================================================
@@ -227,134 +229,118 @@ class CurrentConstraintEvaluator(BaseEvaluator):
 # =============================================================================
 
 class CurrentCostEvaluator(BaseEvaluator):
-    """
-    Stateful constrained-CTG evaluator for the current node.
+    """Stateful constrained-CTG evaluator for the current node.
 
-    Minimises the node's CTG surrogate subject to its classifier staying
-    feasible.  `p` = flattened fixed inputs (same as
-    `CurrentConstraintEvaluator`).  Multi-start seeds use the L1-penalty
-    screen over the Sobol pool.
+    Minimises the node's CTG surrogate (via `mask_surrogate('scalar')`)
+    subject to the classifier being feasible (via `mask_surrogate('scalar' |
+    'onehot_sum')` depending on the rejector mode).  Multi-start seeds use
+    the L1-penalty screen over the Sobol pool.
+
+    Single sub-problem; one `IntegerNLPSpec` built per node in `_build_for_key`.
+    Theta is handled via outer `vmap` (trivially `n_theta = 1` at rollout).
     """
 
     def __init__(self, cfg, graph, node):
-        self.bounds: dict         = {}
-        self.n_d: dict            = {}
-        self.n_fix: dict          = {}
-        self.fix_indices: dict    = {}
-        self.ndim: dict           = {}
-        self.objective_fn: dict   = {}
-        self.constraint_fn: dict  = {}
-
+        self.specs: dict          = {}
+        self.n_design_full: dict  = {}
+        self.n_y: dict            = {}
         super().__init__(cfg, graph, node)
-
         self._thread = self.evaluate
 
     def _keys(self) -> list:
         return [self.node]
 
     def _build_for_key(self, key) -> None:
-        ndim, input_indices, aux_indices, fix_indices, bounds = \
-            _current_reduced_space(self.graph, key, self.cfg)
-        lb, ub = bounds
-        n_d = int(lb.size)
-        n_fix = int(len(fix_indices))
+        (ndim, n_design, n_input, n_aux,
+         input_indices, aux_indices, int_indices, int_values,
+         ks_lb, ks_ub) = _current_geometry(self.graph, key, self.cfg)
+        n_heads, classifier = _resolve_classifier(self.cfg, self.graph, key)
+        n_int = int(int_indices.size)
+        n_y   = n_input + n_aux
 
-        ctg_surrogate      = self.graph.nodes[key]['ctg_surrogate']
-        classifier         = self.graph.nodes[key]['classifier']
-        wrapped_ctg        = mask_classifier(ctg_surrogate, ndim, input_indices, aux_indices)
-        wrapped_classifier = mask_classifier(classifier,    ndim, input_indices, aux_indices)
+        # Objective: CTG surrogate, scalar (always single-output regression).
+        ctg_surrogate = self.graph.nodes[key]['ctg_surrogate']
+        objective = mask_surrogate(
+            ctg_surrogate,
+            ndim=ndim,
+            fix_ind=input_indices,
+            aux_ind=aux_indices,
+            int_ind=int_indices,
+            n_heads=0,                # CTG is always single-output
+            aggregator='scalar',
+        )
 
-        def objective(x, p):
-            return wrapped_ctg(x, p.reshape(1, -1)).reshape(-1).sum()
+        # Constraint: classifier ≤ 0 — single-head or K-head SOS1 depending on rejector.
+        masked_clf = mask_surrogate(
+            classifier,
+            ndim=ndim,
+            fix_ind=input_indices,
+            aux_ind=aux_indices,
+            int_ind=int_indices,
+            n_heads=n_heads,
+            # aggregator inferred: 'scalar' or 'onehot_sum'
+        )
+        # mask_surrogate's scalar/onehot_sum aggregators return () — wrap
+        # to (1,) so septal's lagrangian_grad's `jac_g.T @ lam` aligns
+        # with `n_constraints=1`.
+        def constraint(x_red, p_aug):
+            return jnp.atleast_1d(masked_clf(x_red, p_aug))
 
-        def constraint(x, p):
-            return wrapped_classifier(x, p.reshape(1, -1)).reshape(-1)
+        bounds = _design_bounds_continuous(ks_lb, ks_ub, int_indices)
+        n_d_cont = int(bounds[0].size)
+        n_params = n_y + n_int + n_heads
 
-        self.factories[key] = build_factory(
+        factory = build_factory(
             objective, constraint, bounds,
-            n_decision=n_d,
-            n_params=n_fix,
+            n_decision=n_d_cont,
+            n_params=n_params,
             n_constraints=1,
             feasibility_tol=self.feasibility_tol,
             optimality_tol=self.optimality_tol,
             max_iter=self.max_iter,
         )
-        self.screeners[key] = build_penalty_screener(
-            objective, constraint, self.screen_penalty,
-        )
-        self.sobol_pool[key] = precompute_sobol_pool(
-            bounds, n_d, self.n_sobol_screen,
+        screener = build_penalty_screener(objective, constraint, self.screen_penalty)
+        sobol_pool = precompute_sobol_pool(bounds, n_d_cont, self.n_sobol_screen)
+
+        integer_problem = IntegerProblem.from_cfg(
+            design_domain=self.cfg.case_study.get('design_domain', None),
+            n_heads=n_heads,
         )
 
-        self.bounds[key]        = bounds
-        self.n_d[key]           = n_d
-        self.n_fix[key]         = n_fix
-        self.fix_indices[key]   = fix_indices
-        self.ndim[key]          = ndim
-        self.objective_fn[key]  = objective
-        self.constraint_fn[key] = constraint
+        self.specs[key] = IntegerNLPSpec(
+            integer_problem    = integer_problem,
+            continuous_factory = factory,
+            screener           = screener,
+            sobol_pool         = sobol_pool,
+            n_starts           = self.n_starts,
+            feasibility_tol    = self.feasibility_tol,
+        )
+        self.n_design_full[key] = n_design
+        self.n_y[key]           = n_y
 
     def evaluate(self, inputs, aux):
-        """
-        Solve the constrained-CTG current-node NLP.
+        """Solve the constrained-CTG current-node NLP.
 
-        Returns `(decision_variables, objective, converged)` in the same
-        shape as `CurrentConstraintEvaluator.evaluate`.
+        Returns `(decision_variables, objective, converged)` matching the
+        rollout agent's contract.  Theta dim is trivially 1 at rollout —
+        we solve once and reshape to `(1, …)` to preserve the contract.
         """
         key = self.node
         if key is None:
             n = 0 if inputs is None else inputs.shape[0]
-            return (
-                jnp.zeros((n, 0)),
-                jnp.zeros((n, 1)),
-                jnp.zeros((n, 1), dtype=bool),
-            )
+            return (jnp.zeros((n, 0)),
+                    jnp.zeros((n, 1)),
+                    jnp.zeros((n, 1), dtype=bool))
 
-        p = _prepare_inputs(inputs, self.graph, key, self.fix_indices[key], self.cfg)
-        p = jnp.zeros(self.n_fix[key]).at[:min(p.size, self.n_fix[key])].set(
-            p[:self.n_fix[key]]
+        y = _prepare_inputs(inputs, self.n_y[key])             # (n_y,)
+        result = solve_integer_nlp(self.specs[key], y)
+
+        full_design = splice_design_integers(
+            result.x, self.specs[key], result.assignment_idx, self.n_design_full[key],
         )
-
-        x0_batch = pick_x0_batch(
-            self.sobol_pool[key], self.screeners[key], p, self.n_starts,
-            warmstart=None,
-        )
-        p_batch = jnp.broadcast_to(
-            p.reshape(1, -1), (self.n_starts, self.n_fix[key]),
-        )
-
-        def _leaf(_lb, _ub, _x0):
-            res = self.factories[key].solve_batch(x0_batch, p_batch)
-            f, c, x = pick_best(res, self.factories[key], self.feasibility_tol)
-            return SimpleNamespace(decision_variables=x, objective=float(f), success=bool(c))
-
-        int_dims, int_values = resolve_integer_spec(
-            self.cfg.case_study.get('design_domain', None)
-        )
-        result = mixed_integer_solve(
-            _leaf, self.bounds[key], self.bounds[key][0],
-            int_dims=int_dims, int_values=int_values,
-            mode='best', slack=slack_from_cfg(self.cfg),
-        )
-
-        best_x = result.decision_variables
-        params    = jnp.asarray(best_x).reshape(1, -1)
-        objective = jnp.asarray(result.objective).reshape(1, 1)
-        converged = jnp.asarray(result.success).reshape(1, 1)
-
-        import logging
-        cls_pred = jnp.asarray(self.constraint_fn[key](best_x, p)).reshape(-1)[0]
-        logging.info(
-            f"CurrentCostEvaluator: classifier_pred={float(cls_pred):.4f}, "
-            f"viable={bool(result.success)}"
-        )
-
-        return params, objective, converged
-
-
-def _sobol_topn(pool: jnp.ndarray, n_starts: int) -> jnp.ndarray:
-    """Return the first `n_starts` points from the Sobol pool — deterministic."""
-    return pool[:n_starts]
+        return (full_design.reshape(1, -1),
+                jnp.asarray(result.objective).reshape(1, 1),
+                jnp.asarray(result.success, dtype=bool).reshape(1, 1))
 
 
 # =============================================================================
@@ -384,35 +370,22 @@ def _get_cost_evaluator(cfg, graph, node) -> CurrentCostEvaluator:
 
 
 def current_constraint_surrogate(inputs, aux, cfg, graph, node):
-    """
-    Box-only feasibility check — classifier minimised over the reduced
+    """Box-only feasibility check — minimise classifier over the reduced
     decision space with fixed `inputs` threaded as `p`.
-
-    Returns `(decision_variables, objective, converged)` matching the
-    rollout agent's contract.
     """
     if node is None:
         n = 0 if inputs is None else inputs.shape[0]
-        return (
-            jnp.zeros((0, n)),
-            jnp.zeros((n, 1)),
-            jnp.zeros((n, 1), dtype=bool),
-        )
+        return (jnp.zeros((0, n)),
+                jnp.zeros((n, 1)),
+                jnp.zeros((n, 1), dtype=bool))
     return _get_constraint_evaluator(cfg, graph, node).evaluate(inputs, aux)
 
 
 def current_cost_surrogate(inputs, aux, cfg, graph, node):
-    """
-    Constrained-CTG on the current node — minimise CTG s.t. classifier <= 0
-    with fixed `inputs` threaded as `p`.
-
-    Returns `(decision_variables, objective, converged)`.
-    """
+    """Constrained-CTG on the current node — minimise CTG s.t. classifier <= 0."""
     if node is None:
         n = 0 if inputs is None else inputs.shape[0]
-        return (
-            jnp.zeros((0, n)),
-            jnp.zeros((n, 1)),
-            jnp.zeros((n, 1), dtype=bool),
-        )
+        return (jnp.zeros((0, n)),
+                jnp.zeros((n, 1)),
+                jnp.zeros((n, 1), dtype=bool))
     return _get_cost_evaluator(cfg, graph, node).evaluate(inputs, aux)

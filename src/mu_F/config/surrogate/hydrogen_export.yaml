@@ -1,6 +1,9 @@
 
 classifier: true
-classifier_selection: 'SVM'
+classifier_selection: 'SVM'  # 'SVM' | 'ANN' | 'ellipsoid' — 'ellipsoid'
+                              # uses the DEUS terminal cluster cover as
+                              # the feasibility predicate (no surrogate
+                              # training; quadratic form inside septal).
 regressor_selection: 'ANN'
 probability_map: false
 

@@ -113,26 +113,124 @@ def destandardise_model_decisions(decisions, graph, node, cfg):
     
 
 @lru_cache(maxsize=None)
-def _cached_masked_classifier(classifier, ndim, fix_ind_tuple, aux_ind_tuple):
-    fix_ind = np.array(fix_ind_tuple)
-    aux_ind = np.array(aux_ind_tuple)
-    def masked_classifier(x, y):
-        input_ = construct_input(x, y, fix_ind, aux_ind, ndim)
-        return classifier(input_.reshape(1,-1)).squeeze()
-    return jit(masked_classifier)
+def _cached_masked_surrogate(callable_, n_heads, ndim,
+                             fix_ind_tuple, aux_ind_tuple, int_ind_tuple,
+                             aggregator, n_y):
+    fix_ind = np.array(fix_ind_tuple, dtype=int)
+    aux_ind = np.array(aux_ind_tuple, dtype=int)
+    int_ind = np.array(int_ind_tuple, dtype=int)
+    n_fix_aux = int(fix_ind.size + aux_ind.size)
+    n_int     = int(int_ind.size)
+    # Size of the y slot in p_aug.
+    # Default: fix/aux count for scalar/onehot_sum aggregators (y fills
+    # construct_input). For vector_diff, callers pass an explicit n_y =
+    # surrogate output dim (y is the equality target).
+    n_y_eff = int(n_y) if n_y is not None else n_fix_aux
+
+    # Positions in the full ndim space that are NOT fix/aux — these are the
+    # "design slots" the SQP nominally optimises over.  We further split them
+    # into continuous slots (still optimised by septal) and integer slots
+    # (whose values come from the parametric tail of p_aug at solve time).
+    opt_ind_full = np.delete(
+        np.arange(ndim),
+        np.concatenate([fix_ind, aux_ind]).astype(int),
+    )
+    cont_ind = np.setdiff1d(opt_ind_full, int_ind)
+    pos_cont_in_opt = np.array(
+        [np.where(opt_ind_full == i)[0][0] for i in cont_ind], dtype=int,
+    )
+    pos_int_in_opt = np.array(
+        [np.where(opt_ind_full == i)[0][0] for i in int_ind], dtype=int,
+    )
+
+    @jit
+    def masked_surrogate(x_red, p_aug):
+        # Parametric tail layout:
+        #   p_aug[:, :n_y_eff]                          — y (input+aux for scalar/onehot;
+        #                                                  equality target for vector_diff)
+        #   p_aug[0, n_y_eff : n_y_eff + n_int]         — design-integer values
+        #   p_aug[0, n_y_eff + n_int :                  — structural binaries
+        #          n_y_eff + n_int + n_heads]              (one-hot under SOS1)
+        # Tolerate 1-D p_aug (as passed by the screener / one-call paths) by
+        # promoting to (1, n_p_total).
+        p_aug = jnp.asarray(p_aug)
+        if p_aug.ndim == 1:
+            p_aug = p_aug.reshape(1, -1)
+
+        y_upstream = p_aug[:, :n_y_eff]
+        x_orig = jnp.zeros(opt_ind_full.size)
+        x_orig = x_orig.at[pos_cont_in_opt].set(x_red.squeeze())
+        if n_int:
+            x_orig = x_orig.at[pos_int_in_opt].set(
+                p_aug[0, n_y_eff:n_y_eff + n_int]
+            )
+        input_ = construct_input(x_orig, y_upstream, fix_ind, aux_ind, ndim)
+
+        out = jnp.asarray(callable_(input_.reshape(1, -1))).reshape(-1)
+
+        # Aggregator dispatch.  Branches are picked at construction time (Python
+        # comparison on the string captured by closure); no traced control flow.
+        if aggregator == 'scalar':
+            return out.reshape(())
+        if aggregator == 'onehot_sum':
+            y_struct = p_aug[0, n_y_eff + n_int : n_y_eff + n_int + n_heads]
+            return jnp.sum(y_struct * out)                   # Σ_k y_k · head[k]
+        if aggregator == 'vector_diff':
+            target = p_aug[0, :n_y_eff]                      # y IS the target here
+            return out - target                              # equality residual
+        raise ValueError(f"Unknown aggregator: {aggregator!r}")
+
+    return masked_surrogate
 
 
-def mask_classifier(classifier: Callable, ndim, fix_ind, aux_ind):
+def mask_surrogate(callable_: Callable, ndim,
+                   fix_ind, aux_ind, int_ind=(),
+                   n_heads: int = 0,
+                   aggregator: str = None,
+                   n_y: int = None) -> Callable:
+    """Unified mask for any surrogate, septal's (x_red, p_aug) signature.
+
+    Aggregators
+    -----------
+    'scalar'      — single-head scalar classifier.  Returns out.reshape(()).
+                     Used by current / cost_to_go / backward / probability.
+
+    'onehot_sum'  — K-head with SOS1 one-hot in p_aug.
+                     Returns Σ_k y_struct[k] · out[k].
+                     Used when n_heads > 0.
+
+    'vector_diff' — vector-output surrogate as equality constraint.
+                     Returns surrogate(x_full) − y_target.
+                     Used by forward.py.  Caller sets
+                     constraint_lhs = constraint_rhs = 0 on the factory.
+
+    Parametric tail layout (read from `p_aug`):
+
+        [ y (n_y) | integer values (n_int) | structural binaries (n_heads) ]
+
+    `n_y` is the size of the leading y slot:
+      • default (None) infers `len(fix_ind) + len(aux_ind)` — correct for
+        scalar / onehot_sum where y feeds construct_input's fix/aux fill.
+      • pass explicitly for 'vector_diff' (y is the equality target sized to
+        the surrogate's output dim, not to fix/aux).
+
+    `aggregator` default: `'scalar'` when n_heads == 0, `'onehot_sum'` when
+    n_heads > 0.  These match the legacy behaviour of this helper before the
+    aggregator arg was added — existing callers don't need updating.
+
+    Returns a `jit`-compiled callable `f(x_red, p_aug) → scalar | vector`.
     """
-    Masks the classifier
-    - y corresponds to those indices that are fixed
-    - x corresponds to those indices that are optimised
-    """
-    return _cached_masked_classifier(
-        classifier,
-        ndim,
+    if aggregator is None:
+        aggregator = 'scalar' if int(n_heads) == 0 else 'onehot_sum'
+    return _cached_masked_surrogate(
+        callable_,
+        int(n_heads),
+        int(ndim),
         tuple(int(i) for i in fix_ind),
-        tuple(int(i) for i in aux_ind)
+        tuple(int(i) for i in aux_ind),
+        tuple(int(i) for i in int_ind),
+        str(aggregator),
+        None if n_y is None else int(n_y),
     )
 
 

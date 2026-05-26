@@ -17,6 +17,30 @@ from mu_F.samplers.appproximators import calculate_box_outer_approximation
 from mu_F.visualisation.visualiser import visualiser
 from mu_F.utils import *
 
+def _extended_bounds_are_set(cfg) -> bool:
+    """True iff `cfg.case_study.extendedDS_bounds` declares usable bounds.
+
+    The consumers (`samplers/utils.py:get_unit_bounds` and
+    `direct/utils.py:get_bounds_ms`) honour pre-set `extendedDS_bounds`
+    directly and never consult the per-edge `input_data_bounds` that
+    `initialisation.run()` writes to the graph.  When the cfg declares
+    bounds, the whole init phase (Sobol pass + optional evolutionary
+    refinement) is doing wasted work.  This helper lets the caller skip
+    it.
+
+    Returns False when the cfg value is `None`, the string `"None"`, or a
+    list/tuple of all-None entries — i.e. the same forms that
+    `cs_assembly._process_bounds` treats as "no bounds declared".
+    """
+    raw = cfg.case_study.get('extendedDS_bounds', None)
+    if raw is None or raw == "None":
+        return False
+    try:
+        return any(b is not None and b != "None" for b in raw)
+    except TypeError:
+        return True
+
+
 class decomposition:
     def __init__(self, cfg, G, precedence_order, mode='forward', max_devices=1):
         self.cfg = cfg
@@ -50,8 +74,15 @@ class decomposition:
         elif m == 'backward' or m == 'forward-backward':
             operations, visualisations = {}, {}
             if iteration == 0:
-                operations[0] = partial(initialisation, network_simulator=network_simulator, constraint_evaluator=constraint_evaluator, sampler=self.sampler, approximator=self.approximator)
-                visualisations[0] = partial(visualiser, mode=m, string='initialisation', path=f'initialisation_{m}_iterate_{iteration}')
+                if _extended_bounds_are_set(self.cfg):
+                    logging.info(
+                        "Skipping initialisation: cfg.case_study.extendedDS_bounds "
+                        "is pre-set; the bounds consumers use it directly and would "
+                        "ignore init's per-edge input_data_bounds."
+                    )
+                else:
+                    operations[0] = partial(initialisation, network_simulator=network_simulator, constraint_evaluator=constraint_evaluator, sampler=self.sampler, approximator=self.approximator)
+                    visualisations[0] = partial(visualiser, mode=m, string='initialisation', path=f'initialisation_{m}_iterate_{iteration}')
             k = len(operations)
             operations[k] = partial(apply_decomposition, precedence_order=self.precedence_order, mode=m, max_devices=self.max_devices)
             visualisations[k] = partial(visualiser, mode=m, string='decomposition', path=f'decomposition_{m}_iterate_{iteration}')

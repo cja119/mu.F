@@ -4,6 +4,30 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mu_F.utils import check_requires
 
+
+def _normalise_aux_spec(spec):
+    """Coerce an aux spec to a (count, ids_tuple) pair.
+
+    Accepts either:
+      • int K            — back-compat: "carry the first K aux", expands to aux IDs (0,…,K-1).
+      • list/tuple ints  — explicit list of aux IDs to carry, in canonical order.
+
+    The list form lets different edges into the same successor route different
+    aux IDs to different slots — e.g. edge (a,c)=[0] and edge (b,c)=[1] write
+    to slots 0 and 1 respectively, with no overlap.
+
+    Returns
+    -------
+    count : int                 — len(ids); number of aux slots this spec uses.
+    ids   : tuple[int, ...]     — canonical aux IDs.
+    """
+    if isinstance(spec, (list, tuple)):
+        ids = tuple(int(x) for x in spec)
+        return len(ids), ids
+    count = int(spec)
+    return count, tuple(range(count))
+
+
 class graph_constructor_base(ABC):
     def __init__(self, cfg, adjacency_matrix):
         self.cfg = cfg
@@ -53,38 +77,63 @@ class graph_constructor(graph_constructor_base):
         return
     
     def add_n_aux_args(self, n_aux_args):
+        """Set per-edge and per-node aux counts + aux_ids on the graph.
 
+        Each entry in `n_aux_args` may be:
+          • an int K       — interpreted as "carry the first K aux", i.e. IDs (0, …, K-1).
+          • a list of ints — explicit aux IDs to carry on this edge / register at this node.
+
+        Both forms produce two attributes on the affected edge/node:
+          'n_auxiliary_args' — integer count (length of the ID tuple)
+          'aux_ids'          — tuple of integer aux IDs in canonical order
+        """
         for (i, j) in self.G.edges:
-            self.G.edges[i,j]["n_auxiliary_args"] = n_aux_args[f'({i},{j})']
+            count, ids = _normalise_aux_spec(n_aux_args[f'({i},{j})'])
+            self.G.edges[i, j]["n_auxiliary_args"] = count
+            self.G.edges[i, j]["aux_ids"]          = ids
 
         for node in self.G.nodes:
-            self.G.nodes[node]["n_auxiliary_args"] = n_aux_args[f'node_{node}']
+            count, ids = _normalise_aux_spec(n_aux_args[f'node_{node}'])
+            self.G.nodes[node]["n_auxiliary_args"] = count
+            self.G.nodes[node]["aux_ids"]          = ids
 
         return
-   
+
     def add_input_aux_indices(self):
-        """
-        function determines the indices of the input arguments of each edge to a given \textbf{node} in the graph
-        - helpful for the construction of the coupling NLP.
+        """Compute per-edge aux slot positions in each successor's decision vector.
+
+        In 'global' mode each edge's aux_ids list directly indexes the K global
+        aux slots at the successor (slot positions `n_d + aux_id`).  This lets
+        different edges into the same successor write to different slots:
+        edge with aux_ids=[0] writes slot 0; edge with aux_ids=[1] writes slot 1.
+
+        Back-compat: when `aux_ids = (0, 1, …, K-1)` (the int-form default), the
+        produced slot positions are `(n_d, n_d+1, …, n_d+K-1)` — identical to
+        the legacy `[n_d + i for i in range(count)]` formulation.
         """
         for node in self.G.nodes:
             n_d = 0
             for predec in self.G.predecessors(node):
-                self.G.edges[predec, node]["input_indices"] = [n_d + i for i in range(self.G.edges[predec, node]["n_input_args"])]
+                self.G.edges[predec, node]["input_indices"] = [
+                    n_d + i for i in range(self.G.edges[predec, node]["n_input_args"])
+                ]
                 n_d += self.G.edges[predec, node]["n_input_args"]
 
-            if self.cfg.model.constraint.auxiliary == 'global':
+            mode = self.cfg.model.constraint.auxiliary
+            if mode == 'global':
                 for pred in self.G.predecessors(node):
-                    self.G.edges[pred, node]["auxiliary_indices"] = [n_d + i for i in range(self.G.edges[pred, node]["n_auxiliary_args"])]
-            elif self.cfg.model.constraint.auxiliary == 'local':
+                    aux_ids = self.G.edges[pred, node]["aux_ids"]
+                    self.G.edges[pred, node]["auxiliary_indices"] = [n_d + a for a in aux_ids]
+            elif mode == 'local':
                 for pred in self.G.predecessors(node):
-                    self.G.edges[pred, node]["auxiliary_indices"] = [n_d + i for i in range(self.G.edges[pred, node]["n_auxiliary_args"])]
-                    n_d += self.G.edges[predec, node]["n_auxiliary_args"]
-            elif self.cfg.model.constraint.auxiliary == 'None':
+                    aux_ids = self.G.edges[pred, node]["aux_ids"]
+                    self.G.edges[pred, node]["auxiliary_indices"] = [n_d + a for a in aux_ids]
+                    n_d += self.G.edges[pred, node]["n_auxiliary_args"]
+            elif mode == 'None':
                 for pred in self.G.predecessors(node):
                     self.G.edges[pred, node]["auxiliary_indices"] = []
             else:
-                raise ValueError('Invalid auxiliary variable structure')
+                raise ValueError(f"Invalid auxiliary variable structure: {mode!r}")
         return
     
     def add_arg_to_edges(self, arg_name, arg_value):
@@ -109,17 +158,28 @@ class markov_graph_constructor(graph_constructor):
         return
     
     def add_n_aux_args(self, n_aux_args):
+        """Markov variant — every node and every edge has the same aux spec.
+
+        Pulls the spec from `n_aux_args['(0,1)']` (edge) and `n_aux_args['node_0']`
+        (node), broadcasts it across every edge / node in the chain. Each spec
+        may be int K (back-compat: aux_ids=(0,…,K-1)) or a list of aux IDs.
+        """
         if hasattr(n_aux_args, 'keys'):
-            edge_count = int(n_aux_args.get('(0,1)', 0))
-            node_count = int(n_aux_args.get('node_0', 0))
+            edge_spec = n_aux_args.get('(0,1)', 0)
+            node_spec = n_aux_args.get('node_0', 0)
         else:
-            edge_count = int(n_aux_args)
-            node_count = int(n_aux_args)
+            edge_spec = n_aux_args
+            node_spec = n_aux_args
+
+        edge_count, edge_ids = _normalise_aux_spec(edge_spec)
+        node_count, node_ids = _normalise_aux_spec(node_spec)
 
         for (i, j) in self.G.edges:
-            self.G.edges[i,j]["n_auxiliary_args"] = edge_count
+            self.G.edges[i, j]["n_auxiliary_args"] = edge_count
+            self.G.edges[i, j]["aux_ids"]          = edge_ids
         for node in self.G.nodes:
             self.G.nodes[node]["n_auxiliary_args"] = node_count
+            self.G.nodes[node]["aux_ids"]          = node_ids
         return
 
 

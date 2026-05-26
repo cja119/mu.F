@@ -26,8 +26,9 @@ Module-level helpers:
   - `build_factory`               ParametricSQPFactory assembly
   - `build_penalty_screener`      L1-augmented multi-start screener
   - `precompute_sobol_pool`       fixed Sobol draws for the screener
-  - `pick_x0_batch`               warmstart-or-screen x0 selection
-  - `pick_best`                   argmin-where-converged over SQPResult
+  - `pick_best`                   argmin-where-viable over a flat SQPResult
+                                  (used by diagnostic scripts; evaluators
+                                  pick best inside `solve_integer_nlp`)
 """
 from __future__ import annotations
 
@@ -49,11 +50,8 @@ __all__ = [
     "build_factory",
     "build_penalty_screener",
     "precompute_sobol_pool",
-    "pick_x0_batch",
     "pick_best",
-    "pick_best_per_scenario",
     "skip_if_masked",
-    "parallel_thread",
     "cached_parallel_thread",
     "shard_dispatch",
 ]
@@ -145,7 +143,9 @@ def build_penalty_screener(
     penalty = float(penalty)
 
     def _score(x, p):
-        obj  = jnp.asarray(objective(x, p)).reshape(())
+        obj = jnp.asarray(objective(x, p)).reshape(())
+        if constraint is None:
+            return obj                                    # box-only problem
         g    = jnp.asarray(constraint(x, p)).reshape(-1)
         viol = jnp.maximum(0.0, penalty * g).sum()
         return obj + viol
@@ -169,31 +169,6 @@ def precompute_sobol_pool(bounds, n_d: int, n_sobol: int, seed: int = 42) -> jnp
     to the jit'd screener so the cache keys only on abstract shape.
     """
     return generate_initial_guess(n_sobol, n_d, bounds, seed=seed)
-
-
-def pick_x0_batch(
-    sobol_pool: jnp.ndarray,
-    screener: Callable,
-    p: jnp.ndarray,
-    n_starts: int,
-    warmstart: Optional[jnp.ndarray] = None,
-) -> jnp.ndarray:
-    """
-    Choose the `n_starts` initial guesses to hand to the solver.
-
-    - If `warmstart` is given (a single `(n_d,)` point), broadcast it across
-      the multi-start axis — the previous iterate's solution is usually far
-      better than anything a fresh screen would find.
-    - Otherwise, score the whole `sobol_pool` with the L1-penalty screener
-      and take the `n_starts` lowest-score points.
-    """
-    if warmstart is not None:
-        n_d = sobol_pool.shape[1]
-        return jnp.broadcast_to(warmstart.reshape(1, -1), (n_starts, n_d))
-
-    scores  = screener(sobol_pool, p)
-    top_idx = jnp.argsort(scores)[:n_starts]
-    return sobol_pool[top_idx]
 
 
 def parallel_thread(thread_fn, *, in_axes, devices, use_vmap: bool):
@@ -313,11 +288,11 @@ def skip_if_masked(mask, real_fn):
 def _viable_mask(result: SQPResult, factory, feasibility_tol: float):
     """Per-start viability mask: KKT-feasibility within tol AND iterate in bounds.
 
-    Used by the multi-start pickers below.  Drops the convergence-based filter
-    so non-KKT-converged-but-feasible iterates remain candidates — septal's
-    line search guarantees the iterate is at worst as good in merit as `x0`,
-    so a feasible final iterate is still usable even when `max_iter` truncated
-    the solve.
+    Used by `pick_best` below.  Drops the convergence-based filter so
+    non-KKT-converged-but-feasible iterates remain candidates — septal's
+    line search guarantees the iterate is at worst as good in merit as
+    `x0`, so a feasible final iterate is still usable even when `max_iter`
+    truncated the solve.
     """
     x = result.decision_variables                              # (..., n_d)
     lb = factory.problem.lb
@@ -341,26 +316,6 @@ def pick_best(result: SQPResult, factory, feasibility_tol: float):
         viable[best_i],
         result.decision_variables[best_i],
     )
-
-
-def pick_best_per_scenario(
-    result: SQPResult, factory, feasibility_tol: float,
-    n_unc: int, n_starts: int,
-):
-    """Argmin-where-viable per uncertainty scenario over a `(n_unc × n_starts)` solve.
-
-    Used by CTG which screens starts per-scenario and stacks them into one
-    `solve_batch` call.  Returns `(best_obj, best_viable)` each of shape
-    `(n_unc,)`.
-    """
-    viable_flat = _viable_mask(result, factory, feasibility_tol)
-    viable      = viable_flat.reshape(n_unc, n_starts)
-    objectives  = result.objective.reshape(n_unc, n_starts)
-    rank        = jnp.where(viable, objectives, objectives + 1e10)
-    best_idx    = jnp.argmin(rank, axis=1)
-    best_obj    = jnp.take_along_axis(objectives, best_idx[:, None], axis=1).squeeze(-1)
-    best_viable = jnp.take_along_axis(viable,     best_idx[:, None], axis=1).squeeze(-1)
-    return best_obj, best_viable
 
 
 # =============================================================================

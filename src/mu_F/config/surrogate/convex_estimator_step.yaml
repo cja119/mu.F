@@ -75,3 +75,9 @@ post_process_upper:
   model_class: classification
   model_selection: ANN
   type: post_process_forward
+
+# Training-data augmentation around the converged feasibles. Opt-in per
+# case study; legacy fallback to cfg.samplers.ns.n_anneal still applies
+# while enabled is false.
+augmentation:
+  enabled: false

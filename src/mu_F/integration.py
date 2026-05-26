@@ -12,10 +12,37 @@ from jax import clear_caches
 import time
 import gc
 import os
+import contextlib
+import io
+
+
+class _StdoutToLog(io.TextIOBase):
+    """Pipe writes into a logger so DEUS prints land in main.log.
+
+    DEUS calls bare `print(...)` from inside its solver loop (one line per
+    iteration plus per-phase headers).  Redirecting stdout into this
+    TextIOBase lets the iteration trace land in the hydra-managed log
+    instead of polluting the terminal.
+    """
+    def __init__(self, logger):
+        self.logger, self._buf = logger, ""
+    def write(self, s):
+        self._buf += s
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            if line.strip():
+                self.logger.info(line.rstrip())
+        return len(s)
+    def flush(self):
+        if self._buf.strip():
+            self.logger.info(self._buf.rstrip())
+        self._buf = ""
+
 
 from mu_F.constraints.constructor import constraint_evaluator
 from mu_F.unit_evaluators.constructor import subproblem_unit_wrapper
 from mu_F.surrogate.surrogate import surrogate
+from mu_F.surrogate.augmentation import augment_training_data
 from mu_F.samplers.constructor import construct_deus_problem
 from mu_F.samplers.appproximators import calculate_box_outer_approximation
 from mu_F.samplers.utils import create_problem_description_deus
@@ -106,7 +133,8 @@ class apply_decomposition:
                 problem_sheet = create_problem_description_deus(cfg, model, graph, node, mode) 
                 # solve extended DS using NS
                 solver =  construct_deus_problem(DEUS, problem_sheet, model)
-                solver.solve()
+                with contextlib.redirect_stdout(_StdoutToLog(logging.getLogger())):
+                    solver.solve()
                 if cfg.method == 'decomposition_constraint_tuner': graph.nodes[node]['log_evidence'] = solver.get_log_evidence()
                 feasible, infeasible = solver.get_solution()
                 feasible_set, feasible_set_prob = feasible[0], feasible[1]
@@ -116,6 +144,12 @@ class apply_decomposition:
                     return graph
                 # update the graph with the number of function evaluations
                 graph.nodes[node]["fn_evals"] += model.function_evaluations
+                # Augment training data around the converged feasibles BEFORE
+                # process_data_forward so the augmented samples land in both
+                # classifier_training and ctg_values via the same model.s()
+                # pipeline DEUS used. No-op when augmentation.enabled is False.
+                if mode != 'backward-forward':
+                    augment_training_data(cfg, graph, node, model)
                 # estimate box for bounds for DS downstream
                 process_data_forward(cfg, graph, node, model, feasible_set, mode)
                 # train constraints for DS downstream using data now stored in the graph
@@ -127,7 +161,13 @@ class apply_decomposition:
                     graph = get_ctg_training_data(graph, node, model, cfg)
 
                 # classifier construction for current unit
-                if (cfg.surrogate.classifier and mode != 'backward-forward'): classifier_construction(cfg, graph, node, iterate) # NOTE this is a study specific condition
+                if (cfg.surrogate.classifier and mode != 'backward-forward'):
+                    # Multi-head (K-cluster) classifier when rejector=sumb-xmeans;
+                    # standard single-output classifier otherwise.
+                    if cfg.samplers.ns.get('rejector', '') == 'sumb-xmeans':
+                        cluster_classifier_construction(cfg, graph, node, iterate)
+                    else:
+                        classifier_construction(cfg, graph, node, iterate)
                 if (cfg.surrogate.probability_map and mode != 'backward-forward'): probability_map_construction(cfg, graph, node, iterate) #  NOTE this is a study specific condition
                 if (cfg.case_study.eval_cost and mode != 'backward-forward'): ctg_surrogate_construction(cfg, graph, node, iterate)
 
@@ -371,6 +411,93 @@ def classifier_construction(cfg, graph, node, iterate):
     del ls_surrogate
 
     return
+
+
+def cluster_classifier_construction(cfg, graph, node, iterate):
+    """Build a K-head ANN classifier from this node's training data.
+
+    Single shared-trunk network with K linear output heads. Each head k is
+    regressed to a ±1 target: −1 if the point is "in cluster k" (a feasible
+    point assigned to cluster k by x-means), +1 otherwise. MSE loss across
+    the K heads with per-(point, head) class-balanced weights.
+
+    Clustering is x-means with the BIC-ellipsoid criterion — the same
+    primitive DEUS uses during sumb-xmeans sampling, so the partition K
+    reflects the sampler's view of feasibility geometry rather than a
+    fixed K guess.
+
+    Stored on the graph:
+        graph.nodes[node]['cluster_classifier_head']      — callable f(x) → (K,)
+        graph.nodes[node]['cluster_classifier_n_heads']   — K
+    Convention: f(x)[k] ≤ 0 ⇔ "x is in cluster k".
+    """
+    from mu_F.surrogate.nn_utils import train_multihead_regressor
+
+    # If the pre-augmentation x-means already found K=1, the natural
+    # feasibility region is connected — multi-head would only be
+    # modelling integer-corner augmentation artefacts.  Fall back to the
+    # single-head binary classifier; `_resolve_classifier` in each
+    # evaluator then routes through the standard `classifier` path.
+    pre_aug_K = graph.nodes[node].get('pre_augmentation_n_clusters', None)
+    if pre_aug_K is not None and pre_aug_K <= 1:
+        logging.info(
+            f"Cluster classifier: pre-augmentation x-means K={pre_aug_K} at "
+            f"node {node} — feasibility is connected; using single-head classifier."
+        )
+        classifier_construction(cfg, graph, node, iterate)
+        return
+
+    ds = graph.nodes[node].get('classifier_training', None)
+    if ds is None:
+        logging.warning(f"Cluster classifier: no classifier_training data on node {node}")
+        return
+
+    X = np.asarray(ds.X)
+    if X.ndim > 2:
+        X = X.squeeze()
+    y = np.asarray(ds.y).reshape(-1)
+    # Positive-notion feasibility: min(g) >= 0 ⇔ all constraints satisfied.
+    feas_mask = (y >= 0)
+    X_feas = X[feas_mask]
+
+    if X_feas.shape[0] < 2:
+        logging.warning(f"Cluster classifier: too few feasible points at node {node}")
+        return
+
+    from mu_F.surrogate.augmentation import xmeans_cluster_indices
+    cluster_indices = xmeans_cluster_indices(X_feas)
+    n_clusters = len(cluster_indices)
+
+    # Defence-in-depth: also short-circuit if the on-training-data x-means
+    # finds K=1 (covers the augmentation-disabled path where pre_aug_K
+    # isn't cached).
+    if n_clusters <= 1:
+        logging.info(
+            f"Cluster classifier: x-means K={n_clusters} on classifier_training "
+            f"at node {node} — using single-head classifier."
+        )
+        classifier_construction(cfg, graph, node, iterate)
+        return
+    cluster_labels = np.empty(X_feas.shape[0], dtype=int)
+    for k, ids in enumerate(cluster_indices):
+        cluster_labels[ids] = k
+
+    # Per-row K-vector target. Feasible point in cluster k: -1 at slot k,
+    # +1 elsewhere. Infeasible point: +1 everywhere ("not in any cluster").
+    N = X.shape[0]
+    Y = np.ones((N, n_clusters), dtype=np.float32)
+    feas_idx = np.where(feas_mask)[0]
+    for j, k in zip(feas_idx, cluster_labels):
+        Y[j, k] = -1.0
+
+    head_callable = train_multihead_regressor(
+        cfg, X, Y, num_folds=int(cfg.surrogate.num_folds),
+    )
+    graph.nodes[node]['cluster_classifier_head']    = head_callable
+    graph.nodes[node]['cluster_classifier_n_heads'] = n_clusters
+    logging.info(f"Cluster classifier: trained {n_clusters}-head ANN at node {node}")
+
+
 
 
 class subproblem_model(ABC):

@@ -1,34 +1,21 @@
 """
 Cost-to-go (CTG) evaluator.
 
-For each successor of `node`, solves
+For each successor of `node`, builds an `IntegerNLPSpec` that wraps:
 
-    min   ctg_surrogate(x, succ_input)                (regression)
-    s.t.  classifier(x, succ_input) <= 0              (live-set feasibility)
-          lb <= x <= ub                               (reduced box)
+  • objective : the successor's CTG surrogate, wrapped by `mask_surrogate`
+    with `aggregator='scalar'` (CTG is always single-output).
+  • constraint: the successor's classifier, wrapped by `mask_surrogate` with
+    `aggregator='scalar'` (single-head) or `'onehot_sum'` (K-head SOS1).
+  • integer problem: from `cfg.case_study.design_domain` plus K-head SOS1.
+  • Sobol pool, screener: standard per-successor warm-start machinery.
 
-where `x` is the successor's reduced decision vector (design + non-current-
-edge inputs + aux) and `succ_input` is the current node's output slice
-feeding that edge, held fixed.
-
-### p-lifting
-
-The per-sample `succ_input` is threaded through as the `p` parameter of
-septal's `ParametricNLPProblem`, not baked into a Python closure.  One
-`ParametricSQPFactory` per successor is built in `_build_for_key`; every
-subsequent call feeds new `(x_batch, p_batch)` to the same compiled scan
-body.  This is what makes the JIT cache hit across calls.
-
-### Multi-start
-
-Initial guesses for the SQP are chosen by an L1-penalty screen over a
-pre-generated Sobol pool (see `base.build_penalty_screener`) — matching
-the behaviour of the old `l1_sample_initial_guess` path.
-
-Warmstart plumbing (accepting a per-successor `(N_batch, n_d_k)` dict from
-the backward pass) was removed in the port: the call site in
-`integration.py` built the dict but never forwarded it into
-`cost_to_go_evaluator`, so the whole path was dead code.
+At evaluate-time the theta axis is handled by an outer `vmap` over the
+per-scenario upstream input `ys`. JAX collapses this with the inner
+(assignment × start) vmaps inside `solve_integer_nlp` — which itself
+calls septal's JAX-pure single-instance core directly — into one fused
+XLA program. First call per node compiles once; subsequent calls hit
+the cache.
 """
 from __future__ import annotations
 
@@ -42,26 +29,23 @@ from mu_F.constraints.evaluators.base import (
     build_factory,
     build_penalty_screener,
     cached_parallel_thread,
-    parallel_thread,
-    pick_best_per_scenario,
-    pick_x0_batch,
     precompute_sobol_pool,
     shard_dispatch,
     skip_if_masked,
 )
 from mu_F.constraints.utils import (
     get_successor_inputs,
-    mask_classifier,
+    mask_surrogate,
     pad_to_multiple,
     batch_mask,
     poison_padded,
 )
-from mu_F.solvers.mixed_integer import (
-    mixed_integer_solve,
-    resolve_integer_spec,
-    slack_from_cfg,
+from mu_F.solvers.integer_nlp import (
+    IntegerNLPSpec,
+    IntegerProblem,
+    solve_integer_nlp,
 )
-from types import SimpleNamespace
+from mu_F.solvers.mixed_integer import resolve_integer_spec
 
 
 __all__ = ["CTGEvaluator", "cost_to_go_evaluator"]
@@ -72,140 +56,127 @@ __all__ = ["CTGEvaluator", "cost_to_go_evaluator"]
 # =============================================================================
 
 class CTGEvaluator(BaseEvaluator):
-    """
-    Stateful CTG evaluator.
+    """Stateful CTG evaluator.
 
-    Owns the factory + screener + sobol pool for every successor.  The
-    thread entry point `evaluate(outputs_s, aux_s)` is pinned to a stable
-    bound-method attribute in `__init__` so pmap's compile cache keys on
-    the same callable identity across every call.
+    Holds an `IntegerNLPSpec` per successor. The per-call hot loop runs:
+
+        per_theta = vmap(solve_integer_nlp, in_axes=(None, 0))(spec, ys)
+
+    where `ys` is the per-theta upstream input vector for this successor.
+    JAX collapses the outer theta vmap with the (assignment × start)
+    vmaps inside `solve_integer_nlp` into one trace.
     """
 
     def __init__(self, cfg, graph, node):
-        # Per-successor static state populated in `_build_for_key`.
-        self.n_fix: dict         = {}
-        self.n_d_k: dict         = {}
-        self.bounds: dict        = {}
-        self.input_indices: dict = {}
-        self.aux_indices: dict   = {}
-        self.fix_indices: dict   = {}
-        self.ndim: dict          = {}
-        # Kept for inspection / testing — the actual solve goes through
-        # `self.factories[succ]` which wraps these in an NLP problem.
-        self.objective_fn: dict  = {}
-        self.constraint_fn: dict = {}
-
+        self.specs: dict          = {}
+        self.input_indices: dict  = {}
+        self.aux_indices: dict    = {}
         super().__init__(cfg, graph, node)
-
-        # Pin bound methods for stable id() across calls.  Without pinning,
-        # `instance.evaluate` creates a fresh bound-method object on every
-        # access, breaking pmap's compile cache.
         self._thread = self.evaluate
-
-    # ------------------------------------------------------------------
-    # BaseEvaluator contract
-    # ------------------------------------------------------------------
 
     def _keys(self) -> list:
         return list(self.graph.successors(self.node))
 
     def _build_for_key(self, succ: int) -> None:
-        """
-        Compute stable state for one successor.  Called once per successor
-        from `BaseEvaluator.__init__`.
-
-        Everything stored on `self` here is part of the compile cache's
-        identity — no per-call closures, no rebuilt factories.
-        """
-        # --- indices, ndim, reduced decision dim --------------------------
-        n_d = self.graph.nodes[succ]['n_design_args']
+        # ── Geometry: successor's full NLP shape + which slots are fix / aux / int ──
+        n_d_succ = int(self.graph.nodes[succ]['n_design_args'])
         input_indices = np.array(
-            [n_d + inp for inp in self.graph.edges[self.node, succ]['input_indices']],
+            [n_d_succ + inp for inp in self.graph.edges[self.node, succ]['input_indices']],
             dtype=int,
         )
         aux_indices = np.array(
-            [n_d + idx for idx in self.graph.edges[self.node, succ]['auxiliary_indices']],
+            [n_d_succ + idx for idx in self.graph.edges[self.node, succ]['auxiliary_indices']],
             dtype=int,
         )
         fix_indices = np.hstack([input_indices, aux_indices]).astype(int)
         ndim = (
-            self.graph.nodes[succ]['n_design_args']
-            + self.graph.nodes[succ]['n_input_args']
-            + self.graph.graph['n_aux_args']
+            n_d_succ
+            + int(self.graph.nodes[succ]['n_input_args'])
+            + int(self.graph.graph['n_aux_args'])
         )
-        n_fix = len(fix_indices)
-        n_d_k = ndim - n_fix
+        n_fix = int(len(fix_indices))
 
-        # --- reduced-space bounds ----------------------------------------
-        # Bounds stay in real-world units; the classifier + CTG surrogates
-        # self-scale internally.
+        int_dims, int_values = resolve_integer_spec(
+            self.cfg.case_study.get('design_domain', None)
+        )
+        int_indices = np.array(int_dims, dtype=int)
+        n_int = int(int_indices.size)
+
+        # ── Multi-head resolution ──
+        n_heads, classifier = _resolve_classifier(self.cfg, self.graph, succ)
+
+        # ── Continuous-only bounds: drop fix/aux/int slots ──
         decision_bounds = self.graph.nodes[succ]['extendedDS_bounds'].copy()
-        lb = jnp.delete(
-            jnp.asarray(decision_bounds[0]), fix_indices, axis=1,
-        ).reshape(-1)
-        ub = jnp.delete(
-            jnp.asarray(decision_bounds[1]), fix_indices, axis=1,
-        ).reshape(-1)
+        drop = np.concatenate([fix_indices, int_indices]).astype(int)
+        lb = jnp.delete(jnp.asarray(decision_bounds[0]), drop, axis=1).reshape(-1)
+        ub = jnp.delete(jnp.asarray(decision_bounds[1]), drop, axis=1).reshape(-1)
         bounds = [lb, ub]
+        n_d_cont = int(lb.size)
+        n_params = n_fix + n_int + n_heads
 
-        # --- live-callable wrappers --------------------------------------
-        # `mask_classifier` returns a cached jit'd callable keyed on (fn,
-        # ndim, fix_ind, aux_ind) — stable identity per (graph, node, succ).
+        # ── Surrogates wrapped via mask_surrogate ──
         ctg_surrogate = self.graph.nodes[succ]['ctg_surrogate']
-        classifier    = self.graph.nodes[succ]['classifier']
-        wrapped_ctg   = mask_classifier(ctg_surrogate, ndim, input_indices, aux_indices)
-        wrapped_clf   = mask_classifier(classifier,    ndim, input_indices, aux_indices)
+        objective = mask_surrogate(
+            ctg_surrogate,
+            ndim=ndim,
+            fix_ind=input_indices,
+            aux_ind=aux_indices,
+            int_ind=int_indices,
+            n_heads=0,                              # CTG always scalar regression
+            aggregator='scalar',
+        )
+        masked_clf = mask_surrogate(
+            classifier,
+            ndim=ndim,
+            fix_ind=input_indices,
+            aux_ind=aux_indices,
+            int_ind=int_indices,
+            n_heads=n_heads,
+            # aggregator inferred from n_heads
+        )
+        # mask_surrogate's 'scalar' / 'onehot_sum' aggregators return a
+        # true scalar `()`; septal's lagrangian_grad expects the constraint
+        # function to return shape `(n_constraints,) = (1,)` so the
+        # jacobian comes out (1, n_d) and `jac_g.T @ lam` aligns.
+        def constraint(x_red, p_aug):
+            return jnp.atleast_1d(masked_clf(x_red, p_aug))
 
-        # --- (x, p) parametric objective + constraint -------------------
-        # The CTG surrogate may return a per-uncertainty-sample vector —
-        # collapse to scalar via sum (matches the casadi path's
-        # `_ensure_scalar_objective`).
-        def objective(x, p):
-            return wrapped_ctg(x, p.reshape(1, -1)).reshape(-1).sum()
-
-        def constraint(x, p):
-            return wrapped_clf(x, p.reshape(1, -1)).reshape(-1)
-
-        # --- factory + screener + sobol pool -----------------------------
-        self.factories[succ] = build_factory(
+        # ── Septal factory + screener + Sobol pool ──
+        factory = build_factory(
             objective, constraint, bounds,
-            n_decision=n_d_k,
-            n_params=n_fix,
-            n_constraints=1,          # single classifier feasibility scalar
+            n_decision=n_d_cont,
+            n_params=n_params,
+            n_constraints=1,
             feasibility_tol=self.feasibility_tol,
             optimality_tol=self.optimality_tol,
             max_iter=self.max_iter,
         )
-        self.screeners[succ] = build_penalty_screener(
-            objective, constraint, self.screen_penalty,
-        )
-        self.sobol_pool[succ] = precompute_sobol_pool(
-            bounds, n_d_k, self.n_sobol_screen,
+        screener = build_penalty_screener(objective, constraint, self.screen_penalty)
+        sobol_pool = precompute_sobol_pool(bounds, n_d_cont, self.n_sobol_screen)
+
+        # ── Integer problem (SOS1 head selector when n_heads > 0) ──
+        integer_problem = IntegerProblem.from_cfg(
+            design_domain=self.cfg.case_study.get('design_domain', None),
+            n_heads=n_heads,
         )
 
-        # --- metadata used at thread-evaluate time ------------------------
-        self.n_fix[succ]         = n_fix
-        self.n_d_k[succ]         = n_d_k
-        self.bounds[succ]        = bounds
+        self.specs[succ] = IntegerNLPSpec(
+            integer_problem    = integer_problem,
+            continuous_factory = factory,
+            screener           = screener,
+            sobol_pool         = sobol_pool,
+            n_starts           = self.n_starts,
+            feasibility_tol    = self.feasibility_tol,
+        )
         self.input_indices[succ] = input_indices
         self.aux_indices[succ]   = aux_indices
-        self.fix_indices[succ]   = fix_indices
-        self.ndim[succ]          = ndim
-        self.objective_fn[succ]  = objective
-        self.constraint_fn[succ] = constraint
 
     # ------------------------------------------------------------------
     # Shard entry point — pmap target
     # ------------------------------------------------------------------
 
     def evaluate(self, outputs_s, aux_s, mask_s):
-        """
-        Shard body — per-scenario CTG via septal's parametric batch.
-
-        Stacks `(start, scenario)` pairs into a single flat batch for one
-        `solve_batch` call.  Per-scenario start selection (the L1-penalty
-        screen) is `vmap`-ed over the uncertainty axis since each scenario
-        gets its own succ_input.
+        """Shard body — per-scenario CTG via outer-theta vmap + integer-NLP solve.
 
         Parameters
         ----------
@@ -216,58 +187,38 @@ class CTGEvaluator(BaseEvaluator):
         Returns
         -------
         (evals, flags) : each shape (N_uncertainty, N_successors)
-            `evals[t, k]` is the minimised CTG for scenario t at successor k.
-            `flags[t, k]` is the convergence flag for the chosen start.
-
-        Deterministic case studies pass `N_uncertainty == 1`, in which case
-        the per-scenario axis is a singleton and the call is equivalent to
-        a single design × successor solve.
         """
         def real():
             succ_inputs = get_successor_inputs(self.graph, self.node, outputs_s)
-
-            int_dims, int_values = resolve_integer_spec(
-                self.cfg.case_study.get('design_domain', None)
-            )
-            slack = slack_from_cfg(self.cfg)
-
             evals, flags = [], []
             for succ in self._keys():
                 ys = succ_inputs[succ]
                 if aux_s is not None and aux_s.size > 0:
                     ys = jnp.concatenate([ys, aux_s], axis=-1)
-                n_unc = ys.shape[0]
-                n_starts = self.n_starts
-                sobol = self.sobol_pool[succ]
-                screener = self.screeners[succ]
-
-                # Per-scenario screen → (N_unc, n_starts, n_d).
-                def _screen_one(y):
-                    return pick_x0_batch(sobol, screener, y, n_starts)
-                x0_per_scenario = jax.vmap(_screen_one)(ys)
-                x0_stacked = x0_per_scenario.reshape(n_unc * n_starts, -1)
-                p_stacked  = jnp.repeat(ys, n_starts, axis=0)
-
-                def _leaf(_lb, _ub, _x0, succ=succ):
-                    res = self.factories[succ].solve_batch(x0_stacked, p_stacked)
-                    obj, viable = pick_best_per_scenario(
-                        res, self.factories[succ], self.feasibility_tol,
-                        n_unc, n_starts,
-                    )
-                    return SimpleNamespace(decision_variables=None, objective=obj, success=viable)
-
-                result = mixed_integer_solve(
-                    _leaf, self.bounds[succ], self.bounds[succ][0],
-                    int_dims=int_dims, int_values=int_values,
-                    mode='best', slack=slack,
+                # ys : (n_theta, n_y) — outer-theta vmap composes with the
+                # inner (asn × start) vmaps inside solve_integer_nlp into
+                # one fused trace.
+                per_theta = jax.vmap(solve_integer_nlp, in_axes=(None, 0))(
+                    self.specs[succ], ys,
                 )
-
-                evals.append(jnp.asarray(result.objective).reshape(-1, 1))
-                flags.append(jnp.asarray(result.success).reshape(-1, 1))
-
+                evals.append(per_theta.objective.reshape(-1, 1))
+                flags.append(per_theta.success.reshape(-1, 1))
             return jnp.hstack(evals), jnp.hstack(flags)
 
         return skip_if_masked(mask_s, real)
+
+
+# Local copy of the resolver — see current.py for the canonical version.
+# Duplicated to avoid an import cycle between current.py and cost_to_go.py.
+def _resolve_classifier(cfg, graph, key):
+    is_multihead = (
+        cfg.samplers.ns.get('rejector', '') == 'sumb-xmeans'
+        and graph.nodes[key].get('cluster_classifier_head') is not None
+    )
+    if is_multihead:
+        return (int(graph.nodes[key]['cluster_classifier_n_heads']),
+                graph.nodes[key]['cluster_classifier_head'])
+    return (0, graph.nodes[key]['classifier'])
 
 
 # =============================================================================
@@ -278,14 +229,6 @@ _CTG_EVALUATOR_CACHE: dict = {}
 
 
 def _get_evaluator(cfg, graph, node) -> CTGEvaluator:
-    """
-    Look up or build the `CTGEvaluator` for this `(graph, node)` pair.
-
-    Keyed on `id(graph)` so the cache tracks the graph object's lifetime —
-    a new iterate with a fresh graph object gets a fresh evaluator.
-    Within one iterate the graph is stable, so DEUS calls reuse the cached
-    factories + screeners.
-    """
     key = (id(graph), node)
     evaluator = _CTG_EVALUATOR_CACHE.get(key)
     if evaluator is None:
@@ -299,29 +242,9 @@ def _get_evaluator(cfg, graph, node) -> CTGEvaluator:
 # =============================================================================
 
 def cost_to_go_evaluator(outputs, aux, cfg, graph, node):
-    """
-    Top-level CTG evaluator.  Shards samples across CPU devices via pmap
-    at a **fixed width** (`cfg.max_devices`), padding smaller batches up
-    with row-0 replicas and masking the padded lanes inside the thread.
-
-    Fixed pmap width means the pmap compile cache keys only on static
-    shape, not on batch size — so calls with different real-batch sizes
-    reuse the same compiled kernel after the first.
-
-    Parameters
-    ----------
-    outputs : (N_batch, N_uncertainty, N_output_dim)
-    aux     : (N_batch, N_aux)
-
-    Returns
-    -------
-    evaluations   : (N_batch, N_uncertainty, N_successors) — NaN on any row
-                    where the padded-lane mask applied (defensive poison).
-    success_flags : (N_batch, N_uncertainty, N_successors)
-    """
+    """Top-level CTG evaluator with fixed-width pmap sharding."""
     evaluator = _get_evaluator(cfg, graph, node)
 
-    # Fixed pmap width clamped to real CPU device count.
     cpu_devs = list(devices('cpu'))
     W = min(int(cfg.max_devices), len(cpu_devs))
     n_real = outputs.shape[0]
@@ -346,11 +269,6 @@ def cost_to_go_evaluator(outputs, aux, cfg, graph, node):
     full_evals, full_flags = shard_dispatch(
         pmap_fn, (padded_out, padded_aux, mask), W=W,
     )
-    # Defensive poison: NaN on padded rows, False on the converged flag.
-    # `poison_padded` reshapes the mask to match the array's rank so 3D
-    # `(total, N_unc, N_succ)` broadcasts correctly (naive `mask[:, None]`
-    # trips the 1-dimensioned axes against each other and blows up to
-    # `(total, total, N_succ)`).
     full_evals = poison_padded(full_evals, mask, fill=jnp.nan)
     full_flags = poison_padded(full_flags, mask, fill=False)
     return full_evals[:n_real], full_flags[:n_real]
