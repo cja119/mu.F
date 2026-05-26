@@ -36,7 +36,7 @@ from mu_F.constraints.utils import mask_surrogate
 from mu_F.solvers.integer_nlp import (
     IntegerNLPSpec,
     IntegerProblem,
-    solve_integer_nlp,
+    solve_integer_nlp_batched,
     splice_design_integers,
 )
 from mu_F.solvers.mixed_integer import resolve_integer_spec
@@ -199,9 +199,9 @@ class CurrentConstraintEvaluator(BaseEvaluator):
     def evaluate(self, inputs, aux):
         """Solve the box-only current-node NLP.
 
-        Returns `(decision_variables, objective, converged)` in the legacy shape.
-        At rollout `n_theta = 1`; the theta dim is preserved via outer `vmap`
-        for consistency with the CTG / backward path.
+        Returns `(decision_variables, objective, converged)`.  Theta dim
+        is real on every field — trivially 1 at rollout, but the same
+        batched path handles multi-theta without code changes.
         """
         key = self.node
         if key is None:
@@ -210,18 +210,17 @@ class CurrentConstraintEvaluator(BaseEvaluator):
                     jnp.zeros((n, 1)),
                     jnp.zeros((n, 1), dtype=bool))
 
-        y = _prepare_inputs(inputs, self.n_y[key])             # (n_y,)
-        # Rollout is single-theta; call once. The (1, …) shape on the return
-        # value preserves the "theta dim is always present" contract for
-        # consistency with the CTG / backward path.
-        result = solve_integer_nlp(self.specs[key], y)
+        y  = _prepare_inputs(inputs, self.n_y[key])             # (n_y,)
+        ys = y.reshape(1, -1)                                   # (n_theta=1, n_y)
 
+        per_theta = solve_integer_nlp_batched(self.specs[key], ys)
         full_design = splice_design_integers(
-            result.x, self.specs[key], result.assignment_idx, self.n_design_full[key],
+            per_theta.x[0], self.specs[key],
+            per_theta.assignment_idx[0], self.n_design_full[key],
         )
         return (full_design.reshape(1, -1),
-                jnp.asarray(result.objective).reshape(1, 1),
-                jnp.asarray(result.success, dtype=bool).reshape(1, 1))
+                per_theta.objective.reshape(1, 1),
+                per_theta.success.reshape(1, 1).astype(bool))
 
 
 # =============================================================================
@@ -322,8 +321,8 @@ class CurrentCostEvaluator(BaseEvaluator):
         """Solve the constrained-CTG current-node NLP.
 
         Returns `(decision_variables, objective, converged)` matching the
-        rollout agent's contract.  Theta dim is trivially 1 at rollout —
-        we solve once and reshape to `(1, …)` to preserve the contract.
+        rollout agent's contract.  Theta dim is real (trivially 1 at
+        rollout, multi-theta works without code changes).
         """
         key = self.node
         if key is None:
@@ -332,15 +331,17 @@ class CurrentCostEvaluator(BaseEvaluator):
                     jnp.zeros((n, 1)),
                     jnp.zeros((n, 1), dtype=bool))
 
-        y = _prepare_inputs(inputs, self.n_y[key])             # (n_y,)
-        result = solve_integer_nlp(self.specs[key], y)
+        y  = _prepare_inputs(inputs, self.n_y[key])             # (n_y,)
+        ys = y.reshape(1, -1)                                   # (n_theta=1, n_y)
 
+        per_theta = solve_integer_nlp_batched(self.specs[key], ys)
         full_design = splice_design_integers(
-            result.x, self.specs[key], result.assignment_idx, self.n_design_full[key],
+            per_theta.x[0], self.specs[key],
+            per_theta.assignment_idx[0], self.n_design_full[key],
         )
         return (full_design.reshape(1, -1),
-                jnp.asarray(result.objective).reshape(1, 1),
-                jnp.asarray(result.success, dtype=bool).reshape(1, 1))
+                per_theta.objective.reshape(1, 1),
+                per_theta.success.reshape(1, 1).astype(bool))
 
 
 # =============================================================================

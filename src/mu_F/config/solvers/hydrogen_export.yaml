@@ -1,52 +1,23 @@
 # Septal SQP solver settings.
-
-standardised: false  # DEPRECATED: no effect — every surrogate self-scales
+#
+# `cfg.method` selects the active sub-block (see main.py `_select_solver_block`):
+#   method ∈ {decomposition, decomposition_constraint_tuner} → `decomposition`
+#   method ∈ {direct, single_shooting, multiple_shooting}   → `monolithic`
 
 decomposition:
   n_starts: 1
-  n_sobol_screen: 16384       # was 2048 — 8× denser L1-penalty screen
-  feasibility_tol: 1.0e-3     # was 1e-6 — surrogate ANNs can't realistically
-  optimality_tol:  1.0e-3     # hit 1e-6 KKT in finite SQP iters
-  max_iter: 50                # septal's scan-loop allocates trace buffer per iter
-                              # — keep modest to bound memory per JIT compile
-  screen_penalty: 1.0e5       # was default 1000 — large enough to dominate
-                              # CTG range (~1e4) in the L1 screener score
-  use_exact_hessian: true
+  n_sobol_screen: 4096        # L1-penalty screen pool size per (head, combo)
+  feasibility_tol: 1.0e-3     # surrogate ANNs can't realistically hit 1e-6 KKT
+  optimality_tol:  1.0e-3     # in finite SQP iters
+  max_iter: 10                # septal's scan-loop allocates trace buffer per
+                              # iter — keep modest to bound memory per compile
+  screen_penalty: 1.0e5       # large enough to dominate CTG range (~1e4)
+                              # in the L1 screener score
   use_vmap: false
 
-  # Backward classifier-constraint search strategy:
-  #   'sobol' — pure forward-pass screen: evaluate the surrogate at every
-  #             point in the per-successor Sobol pool (× heads × int combos)
-  #             and take the min. No SQP, no convergence question.
-  #   'sqp'   — hybrid: per-(head, combo) Sobol screen over the first
-  #             `backward_screen_n` pool points → pick top `n_starts`
-  #             warm-starts for that pair → SQP polish from each. Bespoke
-  #             warm-starting means the SQP never wastes iterations
-  #             chasing the wrong basin.
-  backward_constraint: sqp
-  # Number of Sobol points evaluated per (head, combo) to select SQP
-  # warm-starts when `backward_constraint: sqp`. Cheap forward passes —
-  # only the top `n_starts` of these are handed to the SQP polish step.
-  backward_screen_n: 512
-
-  # Rollout-time budget for CurrentCost/ConstraintEvaluator.  Rollout
-  # makes a single committed decision per step, so it can afford a much
-  # larger NLP than the per-iter backward evaluator.
-  rollout:
-    n_starts: 4
-    n_sobol_screen: 16384
-    max_iter: 100
-
 monolithic:
-  n_starts: 4
-  n_sobol_screen: 16384
   feasibility_tol: 1.0e-3
   optimality_tol:  1.0e-3
   max_iter: 500
   use_exact_hessian: true
-  use_vmap: true
-
-  scale_variables: true   # rescale decision vector + defect residuals to [0, 1] coords
-
-mixed_integer:
-  slack: 0.0   # pruning tolerance for 'best' mode; < 0 disables pruning
+  scale_variables: true       # rescale decision vec + defect residuals to [0, 1]

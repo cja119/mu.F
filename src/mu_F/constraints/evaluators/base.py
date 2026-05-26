@@ -32,12 +32,14 @@ Module-level helpers:
 """
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import replace
 from typing import Callable, Optional
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax import lax
 from septal.jax.sqp import ParametricNLPProblem, ParametricSQPFactory, SQPResult
 
@@ -390,10 +392,46 @@ class BaseEvaluator(ABC):
         self.screeners: dict  = {}
         self.sobol_pool: dict = {}
 
+        # SQP non-convergence counters.  Plain Python ints, accumulated by
+        # entry functions via `_record_sqp_outcome(...)` — not JAX-traced,
+        # so they don't affect the pjit cache.
+        self.n_sqp_calls:   int = 0
+        self.n_sqp_failed:  int = 0
+        self._last_warn_at: int = 0
+
         # Drive the build loop.  After this completes, the instance holds all
         # compile-relevant state and its __call__ / evaluate can safely pmap.
         for key in self._keys():
             self._build_for_key(key)
+
+    def _record_sqp_outcome(
+        self,
+        success_flags,
+        *,
+        node_label: str = None,
+        warn_every: int = 500,
+        warn_threshold: float = 0.5,
+    ) -> None:
+        """Accumulate SQP non-convergence stats; emit a throttled warning.
+
+        Caller filters real lanes (pass `flags[:n_real]`).  Warning fires
+        each time `n_sqp_calls` crosses a `warn_every` boundary, only when
+        the cumulative rate is at or above `warn_threshold`.
+        """
+        flags = np.asarray(success_flags).reshape(-1)
+        self.n_sqp_calls  += int(flags.size)
+        self.n_sqp_failed += int((~flags).sum())
+
+        if self.n_sqp_calls >= self._last_warn_at + warn_every:
+            rate = self.n_sqp_failed / max(self.n_sqp_calls, 1)
+            if rate >= warn_threshold:
+                label = node_label or f"node={self.node}"
+                logging.warning(
+                    f"SQP non-conv {label} ({type(self).__name__}): "
+                    f"{self.n_sqp_failed}/{self.n_sqp_calls} ({rate*100:.1f}%) "
+                    f"— consider bumping cfg.solvers.max_iter / n_starts."
+                )
+            self._last_warn_at = self.n_sqp_calls
 
     # --- contract --------------------------------------------------------
 

@@ -42,7 +42,7 @@ from mu_F.constraints.utils import (
 from mu_F.solvers.integer_nlp import (
     IntegerNLPSpec,
     IntegerProblem,
-    solve_integer_nlp,
+    solve_integer_nlp_batched,
 )
 from mu_F.solvers.mixed_integer import resolve_integer_spec
 
@@ -173,24 +173,25 @@ class BackwardPmapEvaluator(BaseEvaluator):
 
         Returns
         -------
-        probs : (N_uncertainty, N_successors) — max-achievable P_feas per
-                (scenario, successor).
+        (probs, flags) : each shape (N_uncertainty, N_successors).
+                         `probs` = max-achievable P_feas; `flags` carries
+                         per-(theta, successor) SQP success for the base-
+                         class counter at the entry function.
         """
         def real():
             succ_inputs = get_successor_inputs(self.graph, self.node, outputs_s)
-            evals = []
+            evals, flags = [], []
             for succ in self._keys():
                 ys = succ_inputs[succ]
                 if aux_s is not None and aux_s.size > 0:
                     ys = jnp.concatenate([ys, aux_s], axis=-1)
-                # ys : (n_theta, n_y) — outer-theta vmap composes with the
-                # inner (asn × start) vmaps inside solve_integer_nlp.
-                per_theta = jax.vmap(solve_integer_nlp, in_axes=(None, 0))(
-                    self.specs[succ], ys,
-                )
+                # ys : (n_theta, n_y) — module-level batched solver, one
+                # cached compiled program per spec.
+                per_theta = solve_integer_nlp_batched(self.specs[succ], ys)
                 # objective = -P_feas  →  negate to recover the probability.
                 evals.append((-per_theta.objective).reshape(-1, 1))
-            return jnp.hstack(evals)                            # (n_unc, N_succ)
+                flags.append(per_theta.success.reshape(-1, 1))
+            return jnp.hstack(evals), jnp.hstack(flags)         # (n_unc, N_succ)
 
         return skip_if_masked(mask_s, real)
 
@@ -249,8 +250,12 @@ def _drive_pmap(evaluator, outputs, aux, cfg, succ_count_fallback: int = 1):
         devices=devs,
         use_vmap=bool(getattr(cfg.solvers, "use_vmap", False)),
     )
-    full_evals = shard_dispatch(pmap_fn, (padded_out, padded_aux, mask), W=W)
+    full_evals, full_succ = shard_dispatch(pmap_fn, (padded_out, padded_aux, mask), W=W)
     full_evals = poison_padded(full_evals, mask, fill=jnp.nan)
+    full_succ  = poison_padded(full_succ,  mask, fill=False)
+    evaluator._record_sqp_outcome(
+        full_succ[:n_real], node_label=f"probability node={evaluator.node}",
+    )
     return full_evals[:n_real]
 
 

@@ -38,8 +38,10 @@ JIT / XLA contract:
 
   • feasible_assignments runs Python-side at construction and returns a
     static-shape jnp array captured by closure.
-  • IntegerNLPSpec is frozen + hashable; captured by closure in the
-    evaluator, never passed as a JIT argument.
+  • IntegerNLPSpec is frozen with identity-based hash
+    (`@dataclass(frozen=True, eq=False)`); each evaluator builds one
+    per node and reuses the same instance, so the pjit cache fires
+    exactly one compile per node.
   • All internal helpers (_augment_p, _screen_warmstarts, _pick_best) are
     pure jnp ops on static-shape arrays.
   • We use septal's JAX-pure single-instance core (`factory._solve_jit`)
@@ -91,6 +93,7 @@ __all__ = [
     "IntegerBackend",
     "EnumerationBackend",
     "solve_integer_nlp",
+    "solve_integer_nlp_batched",
     "splice_design_integers",
 ]
 
@@ -230,13 +233,30 @@ class IntegerProblem:
 # Spec + result + backend
 # =============================================================================
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class IntegerNLPSpec:
     """Static state for an integer-aware parametric SQP sub-problem.
 
-    Frozen + hashable so JAX caches keyed on this object stay valid;
-    constructed once in an evaluator's `_build_for_key` and reused across
-    every solve call.
+    `frozen=True` for immutability; `eq=False` uses object-identity for
+    `__eq__` / `__hash__` so the pjit cache keys on `id(spec)`.  (The
+    auto-generated `__hash__` would otherwise raise on the
+    `sobol_pool: jnp.ndarray` field.)
+
+    Built once per node in `_build_for_key` and reused across every
+    solve call — one pjit cache entry per node.
+
+    `__post_init__` attaches two cached `jax.vmap` wrappers via
+    `object.__setattr__`:
+
+      • `_solve_batched`  — nested (assignment × start) vmap of
+        septal's `_solve_jit`; used by `EnumerationBackend.solve`.
+      • `_screen_batched` — per-assignment vmap of the screener
+        post-processing (argsort + gather); used by
+        `_screen_warmstarts` when a screener is configured.
+
+    Both are declared `field(init=False, repr=False, compare=False)`
+    so they sit outside the constructor signature and don't enter
+    any auto-generated dunder.
     """
     integer_problem: IntegerProblem
     continuous_factory: object                  # septal.jax.sqp.ParametricSQPFactory
@@ -244,6 +264,30 @@ class IntegerNLPSpec:
     sobol_pool: jnp.ndarray
     n_starts: int
     feasibility_tol: float
+
+    _solve_batched:  Optional[Callable] = field(
+        default=None, init=False, repr=False, compare=False,
+    )
+    _screen_batched: Optional[Callable] = field(
+        default=None, init=False, repr=False, compare=False,
+    )
+
+    def __post_init__(self):
+        # Nested vmap: outer over assignment rows, inner over warm-starts
+        # (with `p` shared across the n_starts axis).
+        solve_one = self.continuous_factory._solve_jit
+        object.__setattr__(self, "_solve_batched", jax.vmap(
+            jax.vmap(solve_one, in_axes=(0, None)),
+            in_axes=(0, 0),
+        ))
+
+        if self.screener is not None:
+            pool, n_starts, screener = self.sobol_pool, self.n_starts, self.screener
+            def _screen_one(p_for_screen):
+                scores  = screener(pool, p_for_screen)         # (n_pool,)
+                top_idx = jnp.argsort(scores)[:n_starts]
+                return pool[top_idx]                           # (n_starts, n_d)
+            object.__setattr__(self, "_screen_batched", jax.vmap(_screen_one))
 
 
 class SolveResult(NamedTuple):
@@ -282,12 +326,8 @@ class EnumerationBackend:
         x0_per_asn = _screen_warmstarts(spec, y)            # (n_asn, n_starts, n_d)
         p_per_asn  = _augment_p(spec, y)                    # (n_asn, n_p_total)
 
-        # Inner vmap over starts (p shared); outer vmap over assignments.
-        solve_one = spec.continuous_factory._solve_jit
-        state = jax.vmap(
-            jax.vmap(solve_one, in_axes=(0, None)),
-            in_axes=(0, 0),
-        )(x0_per_asn, p_per_asn)
+        # Cached nested vmap from spec.__post_init__ — just dispatch.
+        state = spec._solve_batched(x0_per_asn, p_per_asn)
         # state.x:           (n_asn, n_starts, n_d)
         # state.f_val:       (n_asn, n_starts)
         # state.feasibility: (n_asn, n_starts)
@@ -309,10 +349,45 @@ def solve_integer_nlp(spec: IntegerNLPSpec, y,
                       backend: IntegerBackend = _DEFAULT_BACKEND) -> SolveResult:
     """Solve one integer-aware parametric NLP for upstream input `y`.
 
-    Theta-blind. To handle a theta axis on `y`, the caller wraps this
-    function in `jax.vmap(solve_integer_nlp, in_axes=(None, 0))(spec, ys)`.
+    Theta-blind.  For batched-theta input use `solve_integer_nlp_batched`
+    instead — that path caches the vmap wrapper at module import.
     """
     return backend.solve(spec, y)
+
+
+def _solve_one(spec: IntegerNLPSpec, y) -> SolveResult:
+    """Top-level trampoline so the vmap below has a stable function id."""
+    return solve_integer_nlp(spec, y)
+
+
+# Wrap the batched vmap in `jax.jit(static_argnums=(0,))` so the whole
+# batched program compiles into one XLA executable per spec.  Without
+# the jit, sub-routines (notably the screener's `lax.scan`) re-trace
+# on every call — one "Compiling scan ..." event per DEUS iter.
+# `static_argnums=(0,)` keys the cache on `id(spec)`.
+_solve_one_batched = jax.jit(
+    jax.vmap(_solve_one, in_axes=(None, 0)),
+    static_argnums=(0,),
+)
+
+
+def solve_integer_nlp_batched(spec: IntegerNLPSpec, ys) -> SolveResult:
+    """Batched solve over the theta axis of `ys`.
+
+    Parameters
+    ----------
+    spec : IntegerNLPSpec
+        Static across rows; hashed via `id(spec)` for the pjit cache.
+    ys : jnp.ndarray, shape (n_theta, n_y)
+
+    Returns
+    -------
+    SolveResult with shape (n_theta, …) on every field.
+
+    First call per spec triggers one compile; subsequent calls hit the
+    cached compiled program.
+    """
+    return _solve_one_batched(spec, ys)
 
 
 # =============================================================================
@@ -375,17 +450,11 @@ def _screen_warmstarts(spec: IntegerNLPSpec, y):
         axis=-1,
     )                                                        # (n_asn, n_p_total)
 
-    def _screen_one(p_for_screen):
-        # spec.screener is the WHOLE-POOL screener built by
-        # build_penalty_screener — it lax.scan's over the pool internally
-        # and returns `(n_pool,)`-shape scores.  Calling it directly here;
-        # vmap'ing it would double-iterate the pool axis and inject a
-        # spurious trailing dim into the indices.
-        scores = spec.screener(pool, p_for_screen)           # (n_pool,)
-        top_idx = jnp.argsort(scores)[:n_starts]
-        return pool[top_idx]                                 # (n_starts, n_d_continuous)
-
-    return jax.vmap(_screen_one)(p_per_asn)                  # (n_asn, n_starts, n_d_continuous)
+    # spec._screen_batched is the cached `jax.vmap(_screen_one)` from
+    # spec.__post_init__.  spec.screener itself uses `lax.scan` over the
+    # pool, so the inner _screen_one calls it directly — wrapping the
+    # screener in another vmap would double-iterate the pool axis.
+    return spec._screen_batched(p_per_asn)                   # (n_asn, n_starts, n_d_continuous)
 
 
 def _pick_best(spec: IntegerNLPSpec, obj, viable, x):

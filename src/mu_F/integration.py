@@ -54,6 +54,43 @@ from mu_F.utils import apply_feasibility
 from mu_F.utils import save_graph
 
 
+def _sqp_evaluators_for_node(graph, node):
+    """`[(label, instance), ...]` for every SQP-running evaluator cached
+    against `(graph, node)`.  Each evaluator carries the base-class
+    `n_sqp_calls` / `n_sqp_failed` counters."""
+    from mu_F.constraints.evaluators.backward              import _BACKWARD_EVALUATOR_CACHE
+    from mu_F.constraints.evaluators.cost_to_go            import _CTG_EVALUATOR_CACHE
+    from mu_F.constraints.evaluators.probability           import _BACKWARDPMAP_EVALUATOR_CACHE
+    from mu_F.constraints.evaluators.forward               import _FORWARD_EVALUATOR_CACHE
+    from mu_F.constraints.evaluators.forward_decentralised import _FWDDEC_EVALUATOR_CACHE
+
+    g = id(graph)
+    return [(label, ev) for label, ev in (
+        ('bwd-cls', _BACKWARD_EVALUATOR_CACHE.get((g, node, False))),
+        ('bwd-CTG', _CTG_EVALUATOR_CACHE.get((g, node))),
+        ('prob',    _BACKWARDPMAP_EVALUATOR_CACHE.get((g, node))),
+        ('fwd',     _FORWARD_EVALUATOR_CACHE.get((g, node))),
+        ('fwd-dec', _FWDDEC_EVALUATOR_CACHE.get((g, node))),
+    ) if ev is not None]
+
+
+def _log_sqp_convergence(graph, node):
+    """One-shot per-node summary of cumulative SQP non-convergence across
+    every evaluator that participated in this node's DEUS sweep."""
+    for label, ev in _sqp_evaluators_for_node(graph, node):
+        n_calls, n_failed = int(ev.n_sqp_calls), int(ev.n_sqp_failed)
+        if n_calls == 0:
+            continue
+        rate = n_failed / n_calls
+        msg = (f"Node {node}: {label} — {n_failed}/{n_calls} SQPs did not "
+               f"converge ({rate*100:.1f}%)")
+        if rate >= 0.05:
+            logging.warning(msg + " — consider bumping cfg.solvers.max_iter "
+                                  "or cfg.solvers.n_starts.")
+        else:
+            logging.info(msg)
+
+
 def _get_rollout_action_columns(cfg, node, n_actions):
     process_names = cfg.case_study.process_space_names
     node_dims = process_names[node] if isinstance(process_names, (list, tuple)) else process_names
@@ -150,6 +187,9 @@ class apply_decomposition:
                 # pipeline DEUS used. No-op when augmentation.enabled is False.
                 if mode != 'backward-forward':
                     augment_training_data(cfg, graph, node, model)
+                # Per-node SQP convergence summary across every evaluator
+                # that fired during this node's DEUS sweep (incl. augmentation).
+                _log_sqp_convergence(graph, node)
                 # estimate box for bounds for DS downstream
                 process_data_forward(cfg, graph, node, model, feasible_set, mode)
                 # train constraints for DS downstream using data now stored in the graph
@@ -708,12 +748,27 @@ class subproblem_model(ABC):
         return cons_g
     
     def s(self, d, p):
+        # Snapshot SQP counters before this batch so the per-s() delta
+        # can be reported without spamming per-iter.
+        snapshot = [
+            (label, ev, ev.n_sqp_calls, ev.n_sqp_failed)
+            for label, ev in _sqp_evaluators_for_node(self.G, self.unit_index)
+        ]
 
         g = self.evaluate_subproblem_batch(d, self.cfg.samplers.pmap_batch, p)
 
         n_theta, n_g = g.shape[-2], g.shape[-1]
         # adding function evaluations
         self.function_evaluations += g.shape[0]*g.shape[1]
+
+        diag = []
+        for label, ev, prev_calls, prev_failed in snapshot:
+            d_calls  = ev.n_sqp_calls  - prev_calls
+            d_failed = ev.n_sqp_failed - prev_failed
+            if d_calls > 0:
+                diag.append(f"{label} {d_failed}/{d_calls} ({d_failed/d_calls*100:.0f}%)")
+        if diag:
+            logging.info("[s] SQP non-conv: " + ", ".join(diag))
 
         # return information for DEUS
         return [g[i,:,:].reshape(n_theta,n_g) for i in range(g.shape[0])]

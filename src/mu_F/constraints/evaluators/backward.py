@@ -58,7 +58,7 @@ from mu_F.constraints.utils import (
 from mu_F.solvers.integer_nlp import (
     IntegerNLPSpec,
     IntegerProblem,
-    solve_integer_nlp,
+    solve_integer_nlp_batched,
 )
 from mu_F.solvers.mixed_integer import resolve_integer_spec
 
@@ -282,24 +282,24 @@ class BackwardEvaluator(BaseEvaluator):
 
         Returns
         -------
-        evals : (N_uncertainty, N_successors) after `shaping_function` sign
-                flip.  In deterministic settings `N_uncertainty = 1` but the
-                axis is preserved (no hidden drop).
+        (evals, flags) : each shape (N_uncertainty, N_successors).
+                         `evals` is post-`shaping_function`; `flags` carries
+                         per-(theta, successor) SQP success — feeds the
+                         base-class non-convergence counter at the entry.
         """
         def real():
             succ_inputs = get_successor_inputs(self.graph, self.node, outputs_s)
-            evals = []
+            evals, flags = [], []
             for succ in self._keys():
                 ys = succ_inputs[succ]
                 if aux_s is not None and aux_s.size > 0:
                     ys = jnp.concatenate([ys, aux_s], axis=-1)
-                # ys : (n_theta, n_y) — outer-theta vmap composes with the
-                # (asn × start) vmaps inside solve_integer_nlp.
-                per_theta = jax.vmap(solve_integer_nlp, in_axes=(None, 0))(
-                    self.specs[succ], ys,
-                )
+                # ys : (n_theta, n_y) — module-level batched solver, one
+                # cached compiled program per spec.
+                per_theta = solve_integer_nlp_batched(self.specs[succ], ys)
                 evals.append(per_theta.objective.reshape(-1, 1))
-            return shaping_function(jnp.hstack(evals), self.cfg)
+                flags.append(per_theta.success.reshape(-1, 1))
+            return shaping_function(jnp.hstack(evals), self.cfg), jnp.hstack(flags)
 
         return skip_if_masked(mask_s, real)
 
@@ -389,6 +389,10 @@ def backward_constraint_evaluator(outputs, aux, cfg, graph, node):
         devices=devs,
         use_vmap=bool(getattr(cfg.solvers, "use_vmap", False)),
     )
-    full_evals = shard_dispatch(pmap_fn, (padded_out, padded_aux, mask), W=W)
+    full_evals, full_succ = shard_dispatch(pmap_fn, (padded_out, padded_aux, mask), W=W)
     full_evals = poison_padded(full_evals, mask, fill=jnp.nan)
+    full_succ  = poison_padded(full_succ,  mask, fill=False)
+    evaluator._record_sqp_outcome(
+        full_succ[:n_real], node_label=f"backward node={node}",
+    )
     return full_evals[:n_real], None

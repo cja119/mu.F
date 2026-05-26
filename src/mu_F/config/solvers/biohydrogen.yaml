@@ -3,27 +3,17 @@
 #   decomposition / decomposition_constraint_tuner  →  cfg.solvers.decomposition
 #   single_shooting / multiple_shooting             →  cfg.solvers.monolithic
 
-standardised: false  # DEPRECATED: no effect — every surrogate self-scales
-
 decomposition:
   n_starts: 4
   n_sobol_screen: 4096
   feasibility_tol: 1.0e-4
   optimality_tol:  1.0e-4
   max_iter: 30
-  use_exact_hessian: true
   use_vmap: false
 
 monolithic:
-  n_starts: 4
-  n_sobol_screen: 4096
   feasibility_tol: 1.0e-4
   optimality_tol:  1.0e-4
   max_iter: 30
   use_exact_hessian: false   # skips 2nd-order AD through chained diffrax solves
-  use_vmap: false
-
   scale_variables: true   # rescale decision vector + defect residuals to [0, 1] coords
-
-mixed_integer:
-  slack: 0.0   # pruning tolerance for 'best' mode; < 0 disables pruning

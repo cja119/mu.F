@@ -81,7 +81,7 @@ from mu_F.solvers.integer_nlp import (
     IntegerNLPSpec,
     IntegerProblem,
     LinearEq,
-    solve_integer_nlp,
+    solve_integer_nlp_batched,
 )
 from mu_F.solvers.mixed_integer import resolve_integer_spec
 
@@ -364,14 +364,15 @@ class ForwardDecentralisedEvaluator(BaseEvaluator):
     def evaluate(self, inputs, aux):
         """Solve the joint decentralised NLP for every sample.
 
-        Returns `(evaluations, success_flags)` each shape `(N_samples, 1)`.
-        Evaluations are `classifier_node(x*) + node_backoff` (positive =
-        feasible — sign flipped at the return, matching legacy).
+        Returns `evaluations` of shape `(N_samples, 1)` — `classifier_node(x*)
+        + node_backoff` (positive = feasible — sign flipped at the return,
+        matching legacy).  SQP convergence flags are not returned; they're
+        recorded internally via `BaseEvaluator._record_sqp_outcome`.
         """
         key = self.node
         if self._keys() == []:
             n = inputs.shape[0]
-            return jnp.zeros((n, 1)), jnp.zeros((n, 1), dtype=bool)
+            return jnp.zeros((n, 1))
 
         # Per-sample `v`, padded/truncated to n_y.
         inputs2d = jnp.asarray(inputs).reshape(jnp.asarray(inputs).shape[0], -1)
@@ -382,15 +383,16 @@ class ForwardDecentralisedEvaluator(BaseEvaluator):
         else:
             ys = jnp.zeros((inputs2d.shape[0], n_y)).at[:, :n_raw].set(inputs2d)
 
-        per_sample = jax.vmap(solve_integer_nlp, in_axes=(None, 0))(
-            self.specs[key], ys,
+        # Module-level batched solver, one cached compiled program per
+        # spec.  Per-sample (not per-theta) here but the vmap structure
+        # is identical — outer batch axis on ys, spec held static.
+        per_sample = solve_integer_nlp_batched(self.specs[key], ys)
+        self._record_sqp_outcome(
+            per_sample.success, node_label=f"forward_dec node={self.node}",
         )
         # objective stored as `-classifier - backoff` (minimised);
         # negate at return so positive = feasible (legacy convention).
-        return (
-            (-per_sample.objective).reshape(-1, 1),
-            per_sample.success.reshape(-1, 1),
-        )
+        return (-per_sample.objective).reshape(-1, 1)
 
 
 # =============================================================================

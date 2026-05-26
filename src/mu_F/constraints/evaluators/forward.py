@@ -56,7 +56,7 @@ from mu_F.constraints.utils import (
 from mu_F.solvers.integer_nlp import (
     IntegerNLPSpec,
     IntegerProblem,
-    solve_integer_nlp,
+    solve_integer_nlp_batched,
 )
 from mu_F.solvers.mixed_integer import resolve_integer_spec
 
@@ -237,11 +237,9 @@ class ForwardEvaluator(BaseEvaluator):
                 else:
                     ys = jnp.zeros((target_raw.shape[0], n_y)).at[:, :n_raw].set(target_raw)
 
-                # ys : (n_theta, n_y) — outer-theta vmap composes with the
-                # (asn × start) vmaps inside solve_integer_nlp.
-                per_theta = jax.vmap(solve_integer_nlp, in_axes=(None, 0))(
-                    self.specs[pred], ys,
-                )
+                # ys : (n_theta, n_y) — module-level batched solver, one
+                # cached compiled program per spec.
+                per_theta = solve_integer_nlp_batched(self.specs[pred], ys)
                 evals.append(per_theta.objective.reshape(-1, 1))
                 flags.append(per_theta.success.reshape(-1, 1))
             return jnp.hstack(evals), jnp.hstack(flags)
@@ -275,12 +273,13 @@ def forward_constraint_evaluator(inputs, aux, cfg, graph, node):
 
     Returns
     -------
-    evaluations   : (N_batch, N_uncertainty, N_predecessors) — NaN on padded rows.
-    success_flags : (N_batch, N_uncertainty, N_predecessors)
+    evaluations : (N_batch, N_uncertainty, N_predecessors) — NaN on padded rows.
+                  SQP convergence flags are not returned; they're recorded
+                  internally via `BaseEvaluator._record_sqp_outcome`.
     """
     evaluator = _get_evaluator(cfg, graph, node)
     if evaluator._keys() == []:
-        return jnp.zeros((inputs.shape[0], 1)), None
+        return jnp.zeros((inputs.shape[0], 1))
 
     cpu_devs = list(devices('cpu'))
     W = min(int(cfg.max_devices), len(cpu_devs))
@@ -308,4 +307,7 @@ def forward_constraint_evaluator(inputs, aux, cfg, graph, node):
     )
     full_evals = poison_padded(full_evals, mask, fill=jnp.nan)
     full_flags = poison_padded(full_flags, mask, fill=False)
-    return full_evals[:n_real], full_flags[:n_real]
+    evaluator._record_sqp_outcome(
+        full_flags[:n_real], node_label=f"forward node={node}",
+    )
+    return full_evals[:n_real]

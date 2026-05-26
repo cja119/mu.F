@@ -43,7 +43,7 @@ from mu_F.constraints.utils import (
 from mu_F.solvers.integer_nlp import (
     IntegerNLPSpec,
     IntegerProblem,
-    solve_integer_nlp,
+    solve_integer_nlp_batched,
 )
 from mu_F.solvers.mixed_integer import resolve_integer_spec
 
@@ -195,12 +195,9 @@ class CTGEvaluator(BaseEvaluator):
                 ys = succ_inputs[succ]
                 if aux_s is not None and aux_s.size > 0:
                     ys = jnp.concatenate([ys, aux_s], axis=-1)
-                # ys : (n_theta, n_y) — outer-theta vmap composes with the
-                # inner (asn × start) vmaps inside solve_integer_nlp into
-                # one fused trace.
-                per_theta = jax.vmap(solve_integer_nlp, in_axes=(None, 0))(
-                    self.specs[succ], ys,
-                )
+                # ys : (n_theta, n_y) — module-level batched solver, one
+                # cached compiled program per spec.
+                per_theta = solve_integer_nlp_batched(self.specs[succ], ys)
                 evals.append(per_theta.objective.reshape(-1, 1))
                 flags.append(per_theta.success.reshape(-1, 1))
             return jnp.hstack(evals), jnp.hstack(flags)
@@ -271,4 +268,7 @@ def cost_to_go_evaluator(outputs, aux, cfg, graph, node):
     )
     full_evals = poison_padded(full_evals, mask, fill=jnp.nan)
     full_flags = poison_padded(full_flags, mask, fill=False)
+    evaluator._record_sqp_outcome(
+        full_flags[:n_real], node_label=f"CTG node={node}",
+    )
     return full_evals[:n_real], full_flags[:n_real]
