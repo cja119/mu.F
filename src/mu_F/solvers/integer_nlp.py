@@ -291,9 +291,17 @@ class IntegerNLPSpec:
 
 
 class SolveResult(NamedTuple):
-    """One solve's output. All fields are scalars or 1-D for one (sample, theta)."""
+    """One solve's output. All fields are scalars or 1-D for one (sample, theta).
+
+    `success` is the **viability** flag (feasibility-violation within tol AND
+    iterate-in-bounds) of the best-of-multistart pick.  `kkt_converged` is
+    septal's `state.converged` — True when both KKT residuals are within
+    their respective tolerances.  Reporting tracks both: viability for the
+    CTG Bellman mask, KKT-convergence for the solver-tuning diagnostic.
+    """
     objective: jnp.ndarray
     success: jnp.ndarray
+    kkt_converged: jnp.ndarray
     x: jnp.ndarray                              # (n_d_continuous,)
     assignment_idx: jnp.ndarray                 # scalar, row of feasible_assignments
 
@@ -338,8 +346,12 @@ class EnumerationBackend:
         ub = spec.continuous_factory.problem.ub
         in_bounds = jnp.all((state.x >= lb) & (state.x <= ub), axis=-1)
         viable    = (jnp.asarray(state.feasibility) <= spec.feasibility_tol) & in_bounds
+        # Septal's per-iter `converged` flag — True when both KKT tolerances
+        # are satisfied at the final iterate.  Carried alongside `viable` so
+        # the diagnostic counter sees actual KKT convergence.
+        converged = jnp.asarray(state.converged)
 
-        return _pick_best(spec, state.f_val, viable, state.x)
+        return _pick_best(spec, state.f_val, viable, converged, state.x)
 
 
 _DEFAULT_BACKEND = EnumerationBackend()
@@ -457,23 +469,27 @@ def _screen_warmstarts(spec: IntegerNLPSpec, y):
     return spec._screen_batched(p_per_asn)                   # (n_asn, n_starts, n_d_continuous)
 
 
-def _pick_best(spec: IntegerNLPSpec, obj, viable, x):
+def _pick_best(spec: IntegerNLPSpec, obj, viable, converged, x):
     """Argmin-chain: best start per assignment, then best feasible assignment.
 
-    obj, viable : (n_asn, n_starts)
-    x           : (n_asn, n_starts, n_d_continuous)
+    obj, viable, converged : (n_asn, n_starts)
+    x                       : (n_asn, n_starts, n_d_continuous)
 
     Inner argmin selects the best warm-start per assignment (feasibility
     priority via the +big penalty). Outer argmin selects the best feasible
     assignment across the integer enumeration — that's the union-
     feasibility semantics encoded by SOS1 + the per-assignment NLP.
+
+    `converged` rides along the same argmin path so the SolveResult reports
+    the chosen iterate's KKT-convergence flag without altering the pick.
     """
     big = jnp.asarray(1.0e10, dtype=obj.dtype)
     ranked = jnp.where(viable, obj, obj + big)
     best_start = jnp.argmin(ranked, axis=-1)                 # (n_asn,)
-    asn_obj    = jnp.take_along_axis(obj,    best_start[:, None],       axis=-1).squeeze(-1)
-    asn_viable = jnp.take_along_axis(viable, best_start[:, None],       axis=-1).squeeze(-1)
-    asn_x      = jnp.take_along_axis(x,      best_start[:, None, None], axis=-2).squeeze(-2)
+    asn_obj       = jnp.take_along_axis(obj,       best_start[:, None],       axis=-1).squeeze(-1)
+    asn_viable    = jnp.take_along_axis(viable,    best_start[:, None],       axis=-1).squeeze(-1)
+    asn_converged = jnp.take_along_axis(converged, best_start[:, None],       axis=-1).squeeze(-1)
+    asn_x         = jnp.take_along_axis(x,         best_start[:, None, None], axis=-2).squeeze(-2)
 
     ranked_asn = jnp.where(asn_viable, asn_obj, asn_obj + big)
     best_asn = jnp.argmin(ranked_asn)                        # scalar
@@ -481,6 +497,7 @@ def _pick_best(spec: IntegerNLPSpec, obj, viable, x):
     return SolveResult(
         objective=asn_obj[best_asn],
         success=asn_viable[best_asn],
+        kkt_converged=asn_converged[best_asn],
         x=asn_x[best_asn],
         assignment_idx=best_asn,
     )

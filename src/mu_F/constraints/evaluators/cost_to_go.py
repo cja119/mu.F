@@ -186,11 +186,15 @@ class CTGEvaluator(BaseEvaluator):
 
         Returns
         -------
-        (evals, flags) : each shape (N_uncertainty, N_successors)
+        (evals, viable, converged) : each shape (N_uncertainty, N_successors).
+                                     `viable` is returned to the caller for
+                                     the CTG Bellman NaN-mask; `converged`
+                                     feeds the base-class diagnostic counter
+                                     at the entry function only.
         """
         def real():
             succ_inputs = get_successor_inputs(self.graph, self.node, outputs_s)
-            evals, flags = [], []
+            evals, viable, converged = [], [], []
             for succ in self._keys():
                 ys = succ_inputs[succ]
                 if aux_s is not None and aux_s.size > 0:
@@ -199,8 +203,9 @@ class CTGEvaluator(BaseEvaluator):
                 # cached compiled program per spec.
                 per_theta = solve_integer_nlp_batched(self.specs[succ], ys)
                 evals.append(per_theta.objective.reshape(-1, 1))
-                flags.append(per_theta.success.reshape(-1, 1))
-            return jnp.hstack(evals), jnp.hstack(flags)
+                viable.append(per_theta.success.reshape(-1, 1))
+                converged.append(per_theta.kkt_converged.reshape(-1, 1))
+            return jnp.hstack(evals), jnp.hstack(viable), jnp.hstack(converged)
 
         return skip_if_masked(mask_s, real)
 
@@ -263,12 +268,18 @@ def cost_to_go_evaluator(outputs, aux, cfg, graph, node):
         devices=devs,
         use_vmap=bool(getattr(cfg.solvers, "use_vmap", False)),
     )
-    full_evals, full_flags = shard_dispatch(
+    full_evals, full_viable, full_conv = shard_dispatch(
         pmap_fn, (padded_out, padded_aux, mask), W=W,
     )
-    full_evals = poison_padded(full_evals, mask, fill=jnp.nan)
-    full_flags = poison_padded(full_flags, mask, fill=False)
+    full_evals  = poison_padded(full_evals,  mask, fill=jnp.nan)
+    full_viable = poison_padded(full_viable, mask, fill=False)
+    full_conv   = poison_padded(full_conv,   mask, fill=False)
     evaluator._record_sqp_outcome(
-        full_flags[:n_real], node_label=f"CTG node={node}",
+        viable_flags=full_viable[:n_real],
+        converged_flags=full_conv[:n_real],
+        node_label=f"CTG node={node}",
     )
-    return full_evals[:n_real], full_flags[:n_real]
+    # Caller (integration.py) uses the viable flag to NaN-mask the Bellman
+    # input.  KKT-convergence is recorded for the diagnostic but not
+    # surfaced — an unconverged-but-feasible CTG value is still usable.
+    return full_evals[:n_real], full_viable[:n_real]

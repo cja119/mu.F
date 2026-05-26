@@ -392,12 +392,13 @@ class BaseEvaluator(ABC):
         self.screeners: dict  = {}
         self.sobol_pool: dict = {}
 
-        # SQP non-convergence counters.  Plain Python ints, accumulated by
-        # entry functions via `_record_sqp_outcome(...)` — not JAX-traced,
-        # so they don't affect the pjit cache.
-        self.n_sqp_calls:   int = 0
-        self.n_sqp_failed:  int = 0
-        self._last_warn_at: int = 0
+        # SQP outcome counters.  Plain Python ints, accumulated by entry
+        # functions via `_record_sqp_outcome(...)` — not JAX-traced, so
+        # they don't affect the pjit cache. 
+        self.n_sqp_calls:     int = 0
+        self.n_sqp_viable:    int = 0
+        self.n_sqp_converged: int = 0
+        self._last_warn_at:   int = 0
 
         # Drive the build loop.  After this completes, the instance holds all
         # compile-relevant state and its __call__ / evaluate can safely pmap.
@@ -406,30 +407,50 @@ class BaseEvaluator(ABC):
 
     def _record_sqp_outcome(
         self,
-        success_flags,
         *,
+        viable_flags,
+        converged_flags,
         node_label: str = None,
         warn_every: int = 500,
-        warn_threshold: float = 0.5,
+        viable_warn_threshold: float = 0.5,
+        converged_warn_threshold: float = 0.5,
     ) -> None:
-        """Accumulate SQP non-convergence stats; emit a throttled warning.
+        """Accumulate SQP feasibility + KKT-convergence stats; emit a
+        throttled warning if either rate drops below its threshold.
 
         Caller filters real lanes (pass `flags[:n_real]`).  Warning fires
-        each time `n_sqp_calls` crosses a `warn_every` boundary, only when
-        the cumulative rate is at or above `warn_threshold`.
+        each time `n_sqp_calls` crosses a `warn_every` boundary, only
+        when a metric's success rate is at or below its threshold.
+
+        Counters track SUCCESSES (viable / converged), so a healthy run
+        reads `N/N (100%)` for both metrics.  The gap between viability
+        and convergence is the SQP-tuning signal.
         """
-        flags = np.asarray(success_flags).reshape(-1)
-        self.n_sqp_calls  += int(flags.size)
-        self.n_sqp_failed += int((~flags).sum())
+        vf = np.asarray(viable_flags).reshape(-1)
+        cf = np.asarray(converged_flags).reshape(-1)
+        assert vf.size == cf.size, "viable / converged flag arrays must align"
+
+        self.n_sqp_calls     += int(vf.size)
+        self.n_sqp_viable    += int(vf.sum())
+        self.n_sqp_converged += int(cf.sum())
 
         if self.n_sqp_calls >= self._last_warn_at + warn_every:
-            rate = self.n_sqp_failed / max(self.n_sqp_calls, 1)
-            if rate >= warn_threshold:
-                label = node_label or f"node={self.node}"
+            v_rate = self.n_sqp_viable    / max(self.n_sqp_calls, 1)
+            c_rate = self.n_sqp_converged / max(self.n_sqp_calls, 1)
+            label = node_label or f"node={self.node}"
+            if v_rate <= viable_warn_threshold:
                 logging.warning(
-                    f"SQP non-conv {label} ({type(self).__name__}): "
-                    f"{self.n_sqp_failed}/{self.n_sqp_calls} ({rate*100:.1f}%) "
-                    f"— consider bumping cfg.solvers.max_iter / n_starts."
+                    f"SQP feasible {label} ({type(self).__name__}): "
+                    f"{self.n_sqp_viable}/{self.n_sqp_calls} "
+                    f"({v_rate*100:.1f}%) — feasibility region may be "
+                    f"empty / warm-start pool too coarse."
+                )
+            if c_rate <= converged_warn_threshold:
+                logging.warning(
+                    f"SQP converged {label} ({type(self).__name__}): "
+                    f"{self.n_sqp_converged}/{self.n_sqp_calls} "
+                    f"({c_rate*100:.1f}%) — consider bumping "
+                    f"cfg.solvers.max_iter / n_starts."
                 )
             self._last_warn_at = self.n_sqp_calls
 

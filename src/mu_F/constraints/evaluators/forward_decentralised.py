@@ -388,7 +388,9 @@ class ForwardDecentralisedEvaluator(BaseEvaluator):
         # is identical — outer batch axis on ys, spec held static.
         per_sample = solve_integer_nlp_batched(self.specs[key], ys)
         self._record_sqp_outcome(
-            per_sample.success, node_label=f"forward_dec node={self.node}",
+            viable_flags=per_sample.success,
+            converged_flags=per_sample.kkt_converged,
+            node_label=f"forward_dec node={self.node}",
         )
         # objective stored as `-classifier - backoff` (minimised);
         # negate at return so positive = feasible (legacy convention).

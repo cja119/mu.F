@@ -75,16 +75,23 @@ def _sqp_evaluators_for_node(graph, node):
 
 
 def _log_sqp_convergence(graph, node):
-    """One-shot per-node summary of cumulative SQP non-convergence across
-    every evaluator that participated in this node's DEUS sweep."""
+    """One-shot per-node summary of cumulative SQP feasibility + KKT-
+    convergence across every evaluator that participated in this node's
+    DEUS sweep.  One log line per evaluator showing both metrics — low
+    feasibility points at a warm-start/region issue, low convergence
+    points at a max_iter/n_starts issue."""
     for label, ev in _sqp_evaluators_for_node(graph, node):
-        n_calls, n_failed = int(ev.n_sqp_calls), int(ev.n_sqp_failed)
+        n_calls = int(ev.n_sqp_calls)
         if n_calls == 0:
             continue
-        rate = n_failed / n_calls
-        msg = (f"Node {node}: {label} — {n_failed}/{n_calls} SQPs did not "
-               f"converge ({rate*100:.1f}%)")
-        if rate >= 0.05:
+        n_viable = int(ev.n_sqp_viable)
+        n_conv   = int(ev.n_sqp_converged)
+        v_rate = n_viable / n_calls
+        c_rate = n_conv   / n_calls
+        msg = (f"Node {node}: {label} — "
+               f"feasible {n_viable}/{n_calls} ({v_rate*100:.1f}%), "
+               f"converged {n_conv}/{n_calls} ({c_rate*100:.1f}%)")
+        if v_rate < 0.95 or c_rate < 0.5:
             logging.warning(msg + " — consider bumping cfg.solvers.max_iter "
                                   "or cfg.solvers.n_starts.")
         else:
@@ -749,9 +756,12 @@ class subproblem_model(ABC):
     
     def s(self, d, p):
         # Snapshot SQP counters before this batch so the per-s() delta
-        # can be reported without spamming per-iter.
+        # can be reported as success-counts without spamming per-iter.
         snapshot = [
-            (label, ev, ev.n_sqp_calls, ev.n_sqp_failed)
+            (label, ev,
+             ev.n_sqp_calls,
+             ev.n_sqp_viable,
+             ev.n_sqp_converged)
             for label, ev in _sqp_evaluators_for_node(self.G, self.unit_index)
         ]
 
@@ -761,14 +771,17 @@ class subproblem_model(ABC):
         # adding function evaluations
         self.function_evaluations += g.shape[0]*g.shape[1]
 
-        diag = []
-        for label, ev, prev_calls, prev_failed in snapshot:
-            d_calls  = ev.n_sqp_calls  - prev_calls
-            d_failed = ev.n_sqp_failed - prev_failed
+        feas_diag, conv_diag = [], []
+        for label, ev, prev_calls, prev_viable, prev_conv in snapshot:
+            d_calls  = ev.n_sqp_calls     - prev_calls
+            d_viable = ev.n_sqp_viable    - prev_viable
+            d_conv   = ev.n_sqp_converged - prev_conv
             if d_calls > 0:
-                diag.append(f"{label} {d_failed}/{d_calls} ({d_failed/d_calls*100:.0f}%)")
-        if diag:
-            logging.info("[s] SQP non-conv: " + ", ".join(diag))
+                feas_diag.append(f"{label} {d_viable}/{d_calls} ({d_viable/d_calls*100:.0f}%)")
+                conv_diag.append(f"{label} {d_conv}/{d_calls} ({d_conv/d_calls*100:.0f}%)")
+        if feas_diag:
+            logging.info("[s] SQP feasible:  " + ", ".join(feas_diag))
+            logging.info("[s] SQP converged: " + ", ".join(conv_diag))
 
         # return information for DEUS
         return [g[i,:,:].reshape(n_theta,n_g) for i in range(g.shape[0])]

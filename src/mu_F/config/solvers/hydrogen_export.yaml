@@ -6,7 +6,7 @@
 
 decomposition:
   n_starts: 1
-  n_sobol_screen: 4096        # L1-penalty screen pool size per (head, combo)
+  n_sobol_screen: 1024        # L1-penalty screen pool size per (head, combo)
   feasibility_tol: 1.0e-3     # surrogate ANNs can't realistically hit 1e-6 KKT
   optimality_tol:  1.0e-3     # in finite SQP iters
   max_iter: 10                # septal's scan-loop allocates trace buffer per
