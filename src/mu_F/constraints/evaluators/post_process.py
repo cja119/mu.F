@@ -109,6 +109,7 @@ class PostProcessUpperLevelEvaluator(BaseEvaluator):
     Single graph-wide sub-problem; one `IntegerNLPSpec` built in
     `_build_for_key` and reused across calls.
     """
+    _eval_name = 'post_process'
 
     def __init__(self, cfg, graph, node=None):
         # `node` accepted for signature parity with other evaluators but unused.
@@ -153,8 +154,7 @@ class PostProcessUpperLevelEvaluator(BaseEvaluator):
         sobol_pool = precompute_sobol_pool(bounds, n_d, self.n_sobol_screen)
 
         # Empty integer problem — purely continuous graph-level NLP.
-        # feasible_assignments() returns (1, 0) and the solve becomes a
-        # standard multi-start SQP from screened Sobol seeds.
+
         integer_problem = IntegerProblem()
 
         self.specs[key] = IntegerNLPSpec(

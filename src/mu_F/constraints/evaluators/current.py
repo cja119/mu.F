@@ -134,6 +134,7 @@ class CurrentConstraintEvaluator(BaseEvaluator):
     Single sub-problem (`_keys() = [node]`); built once, reused across every
     `evaluate(inputs, aux)` call.
     """
+    _eval_name = 'current_constraint'
 
     def __init__(self, cfg, graph, node):
         self.specs: dict          = {}
@@ -238,6 +239,7 @@ class CurrentCostEvaluator(BaseEvaluator):
     Single sub-problem; one `IntegerNLPSpec` built per node in `_build_for_key`.
     Theta is handled via outer `vmap` (trivially `n_theta = 1` at rollout).
     """
+    _eval_name = 'current_cost'
 
     def __init__(self, cfg, graph, node):
         self.specs: dict          = {}

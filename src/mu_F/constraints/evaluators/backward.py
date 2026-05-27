@@ -91,6 +91,7 @@ class BackwardEvaluator(BaseEvaluator):
     mode) `IntegerNLPSpec` built once in `_build_for_key`.  Per call, the
     spec is reused across every theta and the JIT cache stays warm.
     """
+    _eval_name = 'backward'
 
     def __init__(self, cfg, graph, node):
         self._graph_wide = bool(graph.graph.get('solve_post_processing_problem', False))

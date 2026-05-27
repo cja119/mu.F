@@ -66,6 +66,7 @@ class CTGEvaluator(BaseEvaluator):
     JAX collapses the outer theta vmap with the (assignment × start)
     vmaps inside `solve_integer_nlp` into one trace.
     """
+    _eval_name = 'cost_to_go'
 
     def __init__(self, cfg, graph, node):
         self.specs: dict          = {}
@@ -134,10 +135,7 @@ class CTGEvaluator(BaseEvaluator):
             n_heads=n_heads,
             # aggregator inferred from n_heads
         )
-        # mask_surrogate's 'scalar' / 'onehot_sum' aggregators return a
-        # true scalar `()`; septal's lagrangian_grad expects the constraint
-        # function to return shape `(n_constraints,) = (1,)` so the
-        # jacobian comes out (1, n_d) and `jac_g.T @ lam` aligns.
+
         def constraint(x_red, p_aug):
             return jnp.atleast_1d(masked_clf(x_red, p_aug))
 

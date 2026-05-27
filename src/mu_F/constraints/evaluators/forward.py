@@ -88,6 +88,7 @@ class ForwardEvaluator(BaseEvaluator):
     One `IntegerNLPSpec` per predecessor, built once in `_build_for_key`.
     Per call, the spec is reused across every theta; JIT cache stays warm.
     """
+    _eval_name = 'forward'
 
     def __init__(self, cfg, graph, node):
         self.specs: dict          = {}
@@ -137,8 +138,7 @@ class ForwardEvaluator(BaseEvaluator):
         n_params = n_g + n_int + n_heads
 
         # ── Build masks — both callables share `p_aug`, both pass n_y=n_g ──
-        # Empty fix/aux — the input slots stay in the decision vector and
-        # are pinned by the equality constraint, not by splicing from p.
+
         empty_ind = np.empty((0,), dtype=int)
         backoff = jnp.sum(jnp.asarray(self.graph.nodes[pred]['constraint_backoff']))
 

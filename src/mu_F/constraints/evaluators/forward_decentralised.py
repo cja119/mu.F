@@ -178,6 +178,7 @@ class ForwardDecentralisedEvaluator(BaseEvaluator):
     `n_y_node` slots; integer values and head one-hots fill the rest of
     `p_aug`.
     """
+    _eval_name = 'forward_decentralised'
 
     def __init__(self, cfg, graph, node):
         self.specs: dict = {}

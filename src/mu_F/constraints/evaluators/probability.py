@@ -67,6 +67,7 @@ class BackwardPmapEvaluator(BaseEvaluator):
 
     where `ys` is the per-theta upstream input for this successor.
     """
+    _eval_name = 'probability'
 
     def __init__(self, cfg, graph, node):
         self.specs: dict          = {}

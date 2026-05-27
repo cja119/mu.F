@@ -152,13 +152,11 @@ def build_penalty_screener(
         viol = jnp.maximum(0.0, penalty * g).sum()
         return obj + viol
 
+
+    _score_pool = jax.vmap(_score, in_axes=(0, None))
+
     def screener(sobol_pool, p):
-        # carry = () — per-row scores are independent, no state needed.
-        # lax.scan stacks the per-step scalar outputs into a (N_pool,) array.
-        def _step(_carry, x):
-            return _carry, _score(x, p)
-        _, scores = lax.scan(_step, (), sobol_pool)
-        return scores
+        return _score_pool(sobol_pool, p)
 
     return screener
 
@@ -359,22 +357,73 @@ class BaseEvaluator(ABC):
     the graph is self-scaling, and evaluators always operate in real-world
     units.  Setting the flag to `True` still works (the value is read to
     warn) but has no effect.
+
+    Per-evaluator knob overrides
+    ----------------------------
+    Each subclass sets a `_eval_name` class attribute (e.g.
+    ``_eval_name = 'backward'``).  Knobs are resolved via
+    ``self._resolve_knob(cfg, knob_name, default=...)`` which walks:
+
+        cfg.solvers.<_eval_name>.<knob>     # per-evaluator override
+        cfg.solvers.<knob>                  # flat fallback (shared default)
+        default                             # if supplied to _resolve_knob
+        raises AttributeError               # otherwise
+
+    Lets the yaml stay compact for the common case (one flat block) while
+    allowing knob-by-knob overrides where they matter.  Example:
+
+        decomposition:
+          n_starts: 1
+          max_iter: 10
+          cost_to_go:
+            max_iter: 50        # CTG-only override
     """
+
+    # Subclasses set this to enable per-evaluator yaml overrides.  When
+    # None, `_resolve_knob` skips the per-evaluator step and falls back to
+    # the flat `cfg.solvers.<knob>` immediately.
+    _eval_name: Optional[str] = None
+
+    # Sentinel for "no default supplied" — distinct from `None` so callers
+    # can legitimately default to None.
+    _MISSING = object()
+
+    def _resolve_knob(self, cfg, knob_name: str, *, default=_MISSING):
+        """Resolve a solver knob with per-evaluator override fallback.
+
+        Lookup order:
+          1. ``cfg.solvers.<_eval_name>.<knob_name>``  — per-evaluator override.
+          2. ``cfg.solvers.<knob_name>``               — flat fallback.
+          3. ``default`` (if supplied).
+          4. raises ``AttributeError``.
+        """
+        if self._eval_name is not None:
+            sub = getattr(cfg.solvers, self._eval_name, None)
+            if sub is not None and hasattr(sub, knob_name):
+                return getattr(sub, knob_name)
+        if hasattr(cfg.solvers, knob_name):
+            return getattr(cfg.solvers, knob_name)
+        if default is not self._MISSING:
+            return default
+        raise AttributeError(
+            f"cfg.solvers.{knob_name} not set and no per-evaluator override "
+            f"under cfg.solvers.{self._eval_name!r}.{knob_name}"
+        )
 
     def __init__(self, cfg, graph, node):
         self.cfg   = cfg
         self.graph = graph
         self.node  = node
 
-        # Cached scalar knobs — pulled out of OmegaConf once.  Reading
-        # `cfg.solvers.*` inside a tight loop in `evaluate` would add
-        # measurable Python overhead on every call.
-        self.n_starts        = int(cfg.solvers.n_starts)
-        self.feasibility_tol = float(cfg.solvers.feasibility_tol)
-        self.optimality_tol  = float(cfg.solvers.optimality_tol)
-        self.max_iter        = int(cfg.solvers.max_iter)
-        self.n_sobol_screen  = int(cfg.solvers.n_sobol_screen)
-        self.screen_penalty  = float(getattr(cfg.solvers, "screen_penalty", 1000.0))
+        # Cached scalar knobs — pulled out of OmegaConf once via the per-
+        # evaluator resolver.  Reading `cfg.solvers.*` inside a tight loop
+        # in `evaluate` would add measurable Python overhead on every call.
+        self.n_starts        = int(  self._resolve_knob(cfg, 'n_starts'))
+        self.feasibility_tol = float(self._resolve_knob(cfg, 'feasibility_tol'))
+        self.optimality_tol  = float(self._resolve_knob(cfg, 'optimality_tol'))
+        self.max_iter        = int(  self._resolve_knob(cfg, 'max_iter'))
+        self.n_sobol_screen  = int(  self._resolve_knob(cfg, 'n_sobol_screen'))
+        self.screen_penalty  = float(self._resolve_knob(cfg, 'screen_penalty', default=1000.0))
 
         # Deprecation warning for legacy configs that set the flag.  Fires
         # once per evaluator construction; harmless otherwise.  Remove the
