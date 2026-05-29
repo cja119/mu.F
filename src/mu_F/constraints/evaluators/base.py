@@ -171,34 +171,53 @@ def precompute_sobol_pool(bounds, n_d: int, n_sobol: int, seed: int = 42) -> jnp
     return generate_initial_guess(n_sobol, n_d, bounds, seed=seed)
 
 
-def parallel_thread(thread_fn, *, in_axes, devices, use_vmap: bool):
+def parallel_thread(thread_fn, *, in_axes, devices, dispatch: str):
     """
-    Pick between `pmap(thread_fn, devices=devices)` and `jit(vmap(thread_fn))`
-    based on a single runtime flag.
-
-    Both paths expose the same `(*args) -> pytree` signature with axis-0
-    mapping semantics, so the caller's padding / masking / chunk-loop logic
-    doesn't care which is returned.
-
-    `pmap` genuinely distributes across `devices` (real multi-device
-    parallelism, at the cost of a device-to-host gather at the end).
-
-    `jit(vmap(...))` stays on a single device — XLA can still parallelise
-    internally when the compute graph supports it, but there's no thread-
-    args/gather round-trip.  On a single-host CPU with our small scalar-
-    output threads, this is often strictly faster.
-
-    Shape compile-cache behaviour is unchanged: vmap still keys on abstract
-    argument shape, so callers that pad to a fixed batch width keep the
-    cache warm in exactly the same way as the pmap path.
+    Dispatch the per-shard parallelism via `pmap`, `jit(vmap(…))`, or a
+    Python serial for-loop over a jit'd body.  All three preserve the
+    same `(*args) -> pytree` contract with axis-0 mapping semantics.
     """
-    # Inner vmap fuses the per-shard sample loop into the compiled program,
+    # Inner vmap fuses the per-shard sample loop into the compiled program
     # so `shard_dispatch` can do one dispatch instead of a Python chunk loop.
     inner = jax.vmap(thread_fn, in_axes=in_axes, out_axes=0)
-    if use_vmap:
+
+    if dispatch == "pmap":
+        return jax.pmap(inner, in_axes=in_axes, out_axes=0, devices=devices)
+
+    if dispatch == "vmap":
         return jax.jit(jax.vmap(inner, in_axes=in_axes, out_axes=0))
-    from jax import pmap
-    return pmap(inner, in_axes=in_axes, out_axes=0, devices=devices)
+
+    if dispatch == "serial":
+        return _serial_dispatch(inner, in_axes=in_axes)
+
+    raise ValueError(
+        f"Unknown dispatch={dispatch!r}; expected 'pmap', 'vmap', or 'serial'"
+    )
+
+
+def _serial_dispatch(inner, *, in_axes):
+    """Sequential Python for-loop over the leading axis.
+
+    Slices each in_axes!=None arg along its mapped axis, calls a jit'd
+    single-shard `inner` per iter, stacks the results.  Prints land
+    per-iter and exceptions carry the iteration index for debugging.
+    """
+    axes_tuple = in_axes if isinstance(in_axes, tuple) else (in_axes,)
+    inner_jit  = jax.jit(inner)
+
+    def _run(*args):
+        # Width comes from any batched arg.
+        W = next(a.shape[ax] for a, ax in zip(args, axes_tuple) if ax is not None)
+        outs = [
+            inner_jit(*(a[i] if ax is not None else a
+                        for a, ax in zip(args, axes_tuple)))
+            for i in range(W)
+        ]
+        return jax.tree_util.tree_map(
+            lambda *xs: jnp.stack(xs, axis=0), *outs
+        )
+
+    return _run
 
 
 def shard_dispatch(pmap_fn, padded_inputs, *, W):
@@ -233,28 +252,24 @@ def shard_dispatch(pmap_fn, padded_inputs, *, W):
     return _unshard(out)
 
 
-def cached_parallel_thread(owner, attr, thread_fn, *, in_axes, devices, use_vmap: bool):
+def cached_parallel_thread(owner, attr, thread_fn, *, in_axes, devices, dispatch: str):
     """
     Memoised wrapper around `parallel_thread`.
 
-    `jax.pmap(...)` allocates per-call dispatch state (incl. Mach-port-name-
-    space slots on macOS) that is NOT reclaimed when the wrapper is GC'd.
-    Rebuilding the wrapper every DEUS iteration leaks ~80–130 slots/call,
-    which crosses the per-process limit (~262k) after ~90 minutes and the
-    kernel kills the process with EXC_RESOURCE.
-
-    Build the wrapper once per `(owner, n_devices, use_vmap)` triple and
-    reuse it.  `owner` must be the cached evaluator instance so the cache
-    lives as long as the evaluator does (one entry per `(graph, node)`).
+    `jax.pmap(...)` allocates per-call dispatch state on macOS (Mach-port
+    slots) that isn't reclaimed when the wrapper is GC'd — rebuilding per
+    DEUS iter leaks ~80–130 slots/call and the kernel kills the process
+    after ~90 min.  Build once per `(owner, n_devices, dispatch, in_axes)`
+    and reuse.
     """
     cache = getattr(owner, attr, None)
     if cache is None:
         cache = {}
         setattr(owner, attr, cache)
-    key = (len(devices), use_vmap, in_axes)
+    key = (len(devices), dispatch, in_axes)
     fn = cache.get(key)
     if fn is None:
-        fn = parallel_thread(thread_fn, in_axes=in_axes, devices=devices, use_vmap=use_vmap)
+        fn = parallel_thread(thread_fn, in_axes=in_axes, devices=devices, dispatch=dispatch)
         cache[key] = fn
     return fn
 
@@ -443,16 +458,38 @@ class BaseEvaluator(ABC):
 
         # SQP outcome counters.  Plain Python ints, accumulated by entry
         # functions via `_record_sqp_outcome(...)` — not JAX-traced, so
-        # they don't affect the pjit cache. 
+        # they don't affect the pjit cache.
         self.n_sqp_calls:     int = 0
         self.n_sqp_viable:    int = 0
         self.n_sqp_converged: int = 0
         self._last_warn_at:   int = 0
 
+        # Dispatch state cached once — cfg.max_devices and cfg.dispatch
+        # don't change at runtime, devices('cpu') is stable.  Per-call
+        # `_build_dispatch_fn` becomes a pure dict lookup.
+        from jax import devices
+        cpu_devs = list(devices('cpu'))
+        self._dispatch_W       = min(int(cfg.max_devices), len(cpu_devs))
+        self._dispatch_devices = cpu_devs[:self._dispatch_W]
+        self._dispatch_mode    = str(cfg.dispatch)
+
         # Drive the build loop.  After this completes, the instance holds all
         # compile-relevant state and its __call__ / evaluate can safely pmap.
         for key in self._keys():
             self._build_for_key(key)
+
+    def _build_dispatch_fn(self, thread_fn, *, in_axes):
+        """Build a cached `(*sharded_args) → pytree` wrapper around
+        `thread_fn`.  Returns `(W, fn)` — caller pads inputs to a multiple
+        of `W` and dispatches via `shard_dispatch`.  After the first call
+        per (thread_fn, in_axes) this is a dict lookup.
+        """
+        fn = cached_parallel_thread(
+            self, '_dispatch_cache', thread_fn,
+            in_axes=in_axes, devices=self._dispatch_devices,
+            dispatch=self._dispatch_mode,
+        )
+        return self._dispatch_W, fn
 
     def _record_sqp_outcome(
         self,

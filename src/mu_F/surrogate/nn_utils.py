@@ -531,10 +531,12 @@ def _architecture_key(model):
 _TRAIN_PMAP_CACHE: Dict = {}
 
 
-def _build_fused_train_pmap(model, model_type, num_devices, num_epochs):
+def _build_fused_train_pmap(model, model_type, num_devices, num_epochs, dispatch):
     """
-    Construct a `jax.pmap(scan_over_epochs)` for one `(architecture, model_type,
-    num_devices, num_epochs)` signature.  Cached in `_TRAIN_PMAP_CACHE`.
+    Construct a `(pmap | jit(vmap) | serial)(scan_over_epochs)` wrapper for
+    one `(architecture, model_type, num_devices, num_epochs, dispatch)`
+    signature.  Cached in `_TRAIN_PMAP_CACHE`.  Dispatch mode comes from
+    the top-level `cfg.dispatch` knob.
     """
     if model_type == 'regressor':
         grad_fn = _grad_fn_regressor
@@ -559,13 +561,6 @@ def _build_fused_train_pmap(model, model_type, num_devices, num_epochs):
 
     devices = [d for i, d in enumerate(jax.devices('cpu')) if i < num_devices]
 
-    @partial(
-        jax.pmap,
-        axis_name="device",
-        in_axes=(None, 0, None, None, None),
-        out_axes=0,
-        devices=devices,
-    )
     def fused_train(state, minibatch, valid_X, valid_y, init_es):
         """
         Full training loop fused into one pmap dispatch.
@@ -625,20 +620,56 @@ def _build_fused_train_pmap(model, model_type, num_devices, num_epochs):
         )
         return state_f, losses, val_losses, es_f, converged_at
 
-    return fused_train
+    in_axes  = (None, 0, None, None, None)
+    out_axes = 0
+
+    if dispatch == "pmap":
+        return jax.pmap(
+            fused_train, axis_name="device",
+            in_axes=in_axes, out_axes=out_axes, devices=devices,
+        )
+    if dispatch == "vmap":
+        return jax.jit(jax.vmap(
+            fused_train, axis_name="device",
+            in_axes=in_axes, out_axes=out_axes,
+        ))
+    if dispatch == "serial":
+        # Length-1 vmap per iter keeps `lax.pmean(..., "device")` valid;
+        # the for-loop runs Python-side so prints / pdb work per shard.
+        inner = jax.jit(jax.vmap(
+            fused_train, axis_name="device",
+            in_axes=in_axes, out_axes=out_axes,
+        ))
+        def _serial(state, minibatch, valid_X, valid_y, init_es):
+            W = jax.tree_util.tree_leaves(minibatch)[0].shape[0]
+            results = [
+                inner(state,
+                      jax.tree_util.tree_map(
+                          lambda x: jnp.expand_dims(x[i], 0), minibatch),
+                      valid_X, valid_y, init_es)
+                for i in range(W)
+            ]
+            return jax.tree_util.tree_map(
+                lambda *xs: jnp.concatenate(xs, axis=0), *results
+            )
+        return _serial
+    raise ValueError(
+        f"Unknown dispatch={dispatch!r}; expected 'pmap', 'vmap', or 'serial'"
+    )
 
 
-def _get_or_build_train_pmap(model, model_type, num_devices, num_epochs):
-    """Memoised factory — one compile per arch × model_type × devices × epochs."""
+def _get_or_build_train_pmap(model, model_type, num_devices, num_epochs, dispatch):
+    """Memoised factory — one compile per arch × model_type × devices × epochs × dispatch."""
     key = (
         _architecture_key(model),
         str(model_type),
         int(num_devices),
         int(num_epochs),
+        str(dispatch),
     )
     fn = _TRAIN_PMAP_CACHE.get(key)
     if fn is None:
-        fn = _build_fused_train_pmap(model, model_type, num_devices, num_epochs)
+        fn = _build_fused_train_pmap(model, model_type, num_devices, num_epochs, dispatch)
         _TRAIN_PMAP_CACHE[key] = fn
     return fn
 
@@ -685,9 +716,13 @@ def train(cfg, model, data, valid_data, model_type):
         dtype=jnp.asarray(0.0).dtype,
     )
 
-    # Cached pmap — compiles once per (arch, model_type, device_count, num_epochs).
+    # Cached training-dispatch — compiles once per
+    # (arch, model_type, device_count, num_epochs, dispatch).
+    # Defaults to 'pmap' for back-compat with existing training sub-configs;
+    # callers that propagate the top-level `cfg.dispatch` can pass it here.
     fused_train = _get_or_build_train_pmap(
         model, model_type, actual_num_devices, int(cfg.num_epochs),
+        str(getattr(cfg, "dispatch", "pmap")),
     )
 
     # One dispatch for the whole training run.

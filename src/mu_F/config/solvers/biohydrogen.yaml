@@ -9,7 +9,6 @@ decomposition:
   feasibility_tol: 1.0e-4
   optimality_tol:  1.0e-4
   max_iter: 30
-  use_vmap: false
 
 monolithic:
   feasibility_tol: 1.0e-4

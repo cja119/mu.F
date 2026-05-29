@@ -13,7 +13,6 @@ decomposition:
                               # iter — keep modest to bound memory per compile
   screen_penalty: 1.0e5       # large enough to dominate CTG range (~1e4)
                               # in the L1 screener score
-  use_vmap: false
 
   # Per-evaluator overrides (all keys optional).  Every knob inherits from
   # the flat block above unless overridden here.  Supported keys per

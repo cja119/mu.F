@@ -69,6 +69,12 @@ def _select_solver_block(cfg: DictConfig) -> DictConfig:
 @hydra.main(config_path="config", config_name="integrator")
 def main(cfg: DictConfig) -> None:
     # Configure logging level from config
+    import multiprocessing
+
+    total_devices = multiprocessing.cpu_count()
+    cfg.max_devices = min(cfg.max_devices, total_devices)
+    
+
     _set_log(cfg.log_level)
     cfg = _select_solver_block(cfg)
     max_devices = _set_jax(cfg.max_devices)

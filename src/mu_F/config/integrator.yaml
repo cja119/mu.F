@@ -9,6 +9,11 @@ defaults:
   - init: hydrogen_export #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator # affine_study  #serial_batch_reactor #tablet_press # convex_estimator # serial_batch_reactor #convex_estimator # serial_batch_reactor #tablet_press #serial_batch_reactor
 
 max_devices: 12
+
+dispatch: vmap     # pmap | vmap | serial — how the per-shard parallelism
+                   # runs.  pmap = multi-device; vmap = single-program,
+                   # XLA-fused; serial = Python for-loop (debug).
+
 formulation: deterministic # probabilistic  # #  #  #
 method: decomposition #decomposition_constraint_tuner #decomposition #direct # decomposition # # #direct # decomposition_constraint_tuner # direct # decomposition # #decomposition #decomposition # direct #
 max_uncertain_samples: 50

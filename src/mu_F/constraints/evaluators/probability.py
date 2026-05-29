@@ -21,13 +21,11 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax import devices
 
 from mu_F.constraints.evaluators.base import (
     BaseEvaluator,
     build_factory,
     build_penalty_screener,
-    cached_parallel_thread,
     precompute_sobol_pool,
     shard_dispatch,
     skip_if_masked,
@@ -231,8 +229,7 @@ def _drive_pmap(evaluator, outputs, aux, cfg, succ_count_fallback: int = 1):
         # collapses to a no-op contribution (P=1 picked at call site).
         return jnp.ones((outputs.shape[0], outputs.shape[1], succ_count_fallback))
 
-    cpu_devs = list(devices('cpu'))
-    W = min(int(cfg.max_devices), len(cpu_devs))
+    W, pmap_fn = evaluator._build_dispatch_fn(evaluator._thread, in_axes=(0, 0, 0))
     n_real = outputs.shape[0]
 
     aux_expanded = jnp.repeat(
@@ -243,15 +240,6 @@ def _drive_pmap(evaluator, outputs, aux, cfg, succ_count_fallback: int = 1):
     total = padded_out.shape[0]
     mask = batch_mask(n_real, total)
 
-    devs = cpu_devs[:W]
-    pmap_fn = cached_parallel_thread(
-        evaluator,
-        '_pmap_cache',
-        evaluator._thread,
-        in_axes=(0, 0, 0),
-        devices=devs,
-        use_vmap=bool(getattr(cfg.solvers, "use_vmap", False)),
-    )
     full_evals, full_viable, full_conv = shard_dispatch(
         pmap_fn, (padded_out, padded_aux, mask), W=W,
     )

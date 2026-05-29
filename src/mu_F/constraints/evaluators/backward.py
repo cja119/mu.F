@@ -36,13 +36,11 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax import devices
 
 from mu_F.constraints.evaluators.base import (
     BaseEvaluator,
     build_factory,
     build_penalty_screener,
-    cached_parallel_thread,
     precompute_sobol_pool,
     shard_dispatch,
     skip_if_masked,
@@ -374,8 +372,9 @@ def backward_constraint_evaluator(outputs, aux, cfg, graph, node):
     if evaluator._keys() == []:
         return jnp.zeros((outputs.shape[0], 1)), None
 
-    cpu_devs = list(devices('cpu'))
-    W = min(int(cfg.max_devices), len(cpu_devs))
+    W, pmap_fn = evaluator._build_dispatch_fn(
+        evaluator._thread_node_local, in_axes=(0, 0, 0),
+    )
     n_real = outputs.shape[0]
 
     aux_expanded = jnp.repeat(
@@ -386,15 +385,6 @@ def backward_constraint_evaluator(outputs, aux, cfg, graph, node):
     total = padded_out.shape[0]
     mask = batch_mask(n_real, total)
 
-    devs = cpu_devs[:W]
-    pmap_fn = cached_parallel_thread(
-        evaluator,
-        '_pmap_cache',
-        evaluator._thread_node_local,
-        in_axes=(0, 0, 0),
-        devices=devs,
-        use_vmap=bool(getattr(cfg.solvers, "use_vmap", False)),
-    )
     full_evals, full_viable, full_conv = shard_dispatch(
         pmap_fn, (padded_out, padded_aux, mask), W=W,
     )
