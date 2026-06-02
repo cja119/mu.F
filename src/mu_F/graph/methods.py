@@ -1,33 +1,34 @@
+"""Per-case-study graph edge transforms and their vmapped variants."""
 import jax.numpy as jnp
 from jax import vmap, jit
 from functools import partial
 from omegaconf import DictConfig
 
 
-
-""" insert case study specific functions for graph edges here"""
-
-
-""" tablet press methods """
+# ---------------------------------------------------------------------------
+# Tablet press edges
+# ---------------------------------------------------------------------------
 
 @jit
 def data_IO_1(steady_state_outputs):
-    # get mass flowrate of api and exipient
+    # mass flowrate of api and excipient
     return (steady_state_outputs[-2:].reshape(1, -1) * steady_state_outputs[-3
     ].reshape(1, -1)).reshape(-1,)
 
 
 @jit
 def data_IO_2(steady_state_outputs):
-    # get porosity
+    # porosity
     return steady_state_outputs[-1].squeeze()
 
 vmap_data_IO_1 = vmap(vmap(data_IO_1, in_axes=(0), out_axes=0), in_axes=(1), out_axes=1)
 vmap_data_IO_2 = vmap(vmap(data_IO_2, in_axes=(0), out_axes=0), in_axes=(1), out_axes=1)
 
 
+# ---------------------------------------------------------------------------
+# Batch reactor edges
+# ---------------------------------------------------------------------------
 
-""" batch reactor methods """
 @jit
 def data_transform(dynamic_profile):
     x = dynamic_profile[:-1].reshape(
@@ -37,7 +38,11 @@ def data_transform(dynamic_profile):
 
 vmap_data_transform = vmap(vmap(data_transform, in_axes=(0), out_axes=0), in_axes=(1), out_axes=1)
 
-""" convex estimator methods """
+
+# ---------------------------------------------------------------------------
+# Convex estimator edges
+# ---------------------------------------------------------------------------
+
 @jit
 def data_transform_cvx(dynamic_profile):
     return dynamic_profile
@@ -58,27 +63,31 @@ vmap_cs35 = vmap(vmap(affine_cs35, in_axes=(0), out_axes=0), in_axes=(1), out_ax
 
 
 def make_markov_edge_cfg(cfg):
-    """cfg-driven edge slicer: slice F block ([..., :F_SIZE]) from the bundled rollout."""
+    """
+    cfg-driven edge slicer: slice the F block ([..., :F_SIZE]) from the rollout.
+    """
     F_size = int(cfg.case_study.sizes.F_SIZE)
     return lambda rollout: rollout[..., :F_size]
 
 
 def vmap_markov_edge_cfg(cfg):
+    """
+    Doubly-vmapped form of the generic markov edge slicer.
+    """
     fn = make_markov_edge_cfg(cfg)
     return vmap(vmap(fn, in_axes=0, out_axes=0), in_axes=1, out_axes=1)
 
 
-# -------------------------------------------------------------------------------- #
-# ----- Per-case-study edge factories ------------------------------------------- #
-# Same return contract as the generic markov edge (rollout -> F_slice).  Each
-# factory body is the place to add saturation / clipping rules.  When
-# `cfg.case_study.edge_clip` is a list of [lo, hi] per F-state-dim, the
-# returned closure clamps the F slice to those bounds; otherwise it's a
-# no-op delegate to the generic markov factory.
-# -------------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
+# Per-case-study edge factories
+# ---------------------------------------------------------------------------
 
 def _markov_edge_with_clip(cfg):
-    """Edge function for case studies with bounds"""
+    """
+    Edge factory for case studies with bounds: slices the F block and, when
+    `cfg.case_study.edge_clip` gives per-dim [lo, hi] pairs, clamps it to those
+    bounds; otherwise delegates to the plain markov slice.
+    """
 
     from omegaconf import OmegaConf, ListConfig, DictConfig
 
@@ -113,6 +122,9 @@ def _markov_edge_with_clip(cfg):
 
 
 def _vmap_with_clip(cfg):
+    """
+    Doubly-vmapped form of the clipping edge factory.
+    """
     fn = _markov_edge_with_clip(cfg)
     return vmap(vmap(fn, in_axes=0, out_axes=0), in_axes=1, out_axes=1)
 
@@ -130,7 +142,10 @@ def make_biohydrogen_edge(cfg):       return _markov_edge_with_clip(cfg)
 def vmap_biohydrogen_edge(cfg):       return _vmap_with_clip(cfg)
 
 
-""" insert case study specific functions for constraints here"""
+# ---------------------------------------------------------------------------
+# Case-study edge registries
+# ---------------------------------------------------------------------------
+
 CS_edge_holder = {  'tablet_press': {(0,1): data_IO_1, (1,2): data_IO_2}, 'serial_mechanism_batch': {(0,1): data_transform},
                     'convex_estimator': {(0,5): data_transform_cvx, (1,5): affine_cs34, (2,5): affine_cs34,
                                             (3,5): data_transform_cvx, (4,5): data_transform_cvx},

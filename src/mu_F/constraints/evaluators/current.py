@@ -1,30 +1,9 @@
-"""
-Current-node surrogate evaluators.
-
-Two flavours, both operating on the current node's own live surrogates
-(not a successor's / predecessor's):
-
-  - `current_constraint_surrogate`  — box-only feasibility check: minimise
-    the (masked) classifier over the reduced decision space.  Used for
-    "rollout constraint" checks.
-
-  - `current_cost_surrogate`  — constrained CTG: minimise the node's CTG
-    surrogate subject to the node's classifier being feasible.
-
-Both consume the integer-NLP abstraction in `mu_F.solvers.integer_nlp`:
-each evaluator builds an `IntegerNLPSpec` once per node in `_build_for_key`
-and runs `solve_integer_nlp(spec, y)` per call.  At rollout there is only
-one theta — the call returns a single solve result which is reshaped to
-`(1, …)` to keep the shape contract identical to the CTG / backward path.
-
-Multi-head classifiers (SOS1 active-head selector) are routed via
-`mask_surrogate` with the right aggregator; design integers are routed
-via the parametric tail of `p_aug` instead of being SQP decision vars.
-"""
+"""Current-node Surrogate evaluators: box-only feasibility and constrained CTG."""
 from __future__ import annotations
 
 import jax.numpy as jnp
 import numpy as np
+from jax import vmap
 
 from mu_F.constraints.evaluators.base import (
     BaseEvaluator,
@@ -50,25 +29,14 @@ __all__ = [
 ]
 
 
-# =============================================================================
+# ---------------------------------------------------------------------------
 # Shared geometry helper — used by both evaluators
-# =============================================================================
+# ---------------------------------------------------------------------------
 
 def _current_geometry(graph, node, cfg):
-    """Compute the geometry of a current-node sub-problem.
-
-    Returns
-    -------
-    ndim          : int   — full NLP dimension (design + input + aux)
-    n_design      : int   — pure design dim (= len(KS_bounds))
-    n_input       : int
-    n_aux         : int
-    input_indices : np.ndarray[int]  — positions of input slots in the full vector
-    aux_indices   : np.ndarray[int]  — positions of aux slots
-    int_indices   : np.ndarray[int]  — positions of design-integer slots
-                                       (same as cfg.case_study.design_domain integer positions)
-    int_values    : tuple[tuple[int, ...], ...]
-    ks_lb / ks_ub : jnp.ndarray      — bounds on the design portion (length n_design)
+    """
+    Compute the geometry of a current-node sub-problem: dimensions, the
+    fix / aux / integer slot indices, and the design-portion bounds.
     """
     n_design = int(graph.nodes[node]['n_design_args'])
     n_input  = int(graph.nodes[node]['n_input_args'])
@@ -121,20 +89,22 @@ def _prepare_inputs(inputs, n_y_expected):
     return jnp.zeros(n_y_expected).at[:min(p.size, n_y_expected)].set(p[:n_y_expected])
 
 
-# =============================================================================
+# ---------------------------------------------------------------------------
 # CurrentConstraintEvaluator — box-only feasibility on current node
-# =============================================================================
+# ---------------------------------------------------------------------------
 
 class CurrentConstraintEvaluator(BaseEvaluator):
     """Stateful current-node feasibility evaluator.
 
-    Box-only NLP: minimise the (masked) classifier over the reduced decision
-    space.  The classifier output IS the objective — no general constraint.
+    Box-only NLP minimising the masked classifier over the reduced decision
+    space, where the classifier output is the objective.  Holds a single
+    sub-problem built once and reused across every evaluate call.
 
-    Single sub-problem (`_keys() = [node]`); built once, reused across every
-    `evaluate(inputs, aux)` call.
     """
+
     _eval_name = 'current_constraint'
+
+    # ---- External Methods ----
 
     def __init__(self, cfg, graph, node):
         self.specs: dict          = {}
@@ -143,10 +113,41 @@ class CurrentConstraintEvaluator(BaseEvaluator):
         super().__init__(cfg, graph, node)
         self._thread = self.evaluate
 
+    def evaluate(self, inputs, aux):
+        """
+        Solve the box-only current-node NLP, returning
+        (decision_variables, objective, converged) with the theta dim kept
+        explicit (trivially 1 at rollout).
+        """
+        key = self.node
+        if key is None:
+            n = 0 if inputs is None else inputs.shape[0]
+            return (jnp.zeros((n, 0)),
+                    jnp.zeros((n, 1)),
+                    jnp.zeros((n, 1), dtype=bool))
+
+        # Batch N trajectory states into (N, n_y), zero-padded / truncated per row.
+        n_y = self.n_y[key]
+        in2 = jnp.atleast_2d(inputs) if inputs is not None else jnp.zeros((1, n_y))
+        take = min(int(in2.shape[1]), int(n_y))
+        ys = jnp.zeros((in2.shape[0], n_y)).at[:, :take].set(in2[:, :take])   # (N, n_y)
+
+        per_theta = solve_integer_nlp_batched(self.specs[key], ys)
+        full_design = vmap(
+            lambda x, a: splice_design_integers(x, self.specs[key], a, self.n_design_full[key])
+        )(per_theta.x, per_theta.assignment_idx)                              # (N, n_design)
+        return (full_design,
+                per_theta.objective.reshape(-1, 1),
+                per_theta.success.reshape(-1, 1).astype(bool))
+
+    # ---- Private Methods ----
+
     def _keys(self) -> list:
+        """Sub-problem keys: the current node only."""
         return [self.node]
 
     def _build_for_key(self, key) -> None:
+        """Build the box-only current-node IntegerNLPSpec."""
         (ndim, n_design, n_input, n_aux,
          input_indices, aux_indices, int_indices, int_values,
          ks_lb, ks_ub) = _current_geometry(self.graph, key, self.cfg)
@@ -197,49 +198,23 @@ class CurrentConstraintEvaluator(BaseEvaluator):
         self.n_design_full[key] = n_design
         self.n_y[key]           = n_y
 
-    def evaluate(self, inputs, aux):
-        """Solve the box-only current-node NLP.
 
-        Returns `(decision_variables, objective, converged)`.  Theta dim
-        is real on every field — trivially 1 at rollout, but the same
-        batched path handles multi-theta without code changes.
-        """
-        key = self.node
-        if key is None:
-            n = 0 if inputs is None else inputs.shape[0]
-            return (jnp.zeros((n, 0)),
-                    jnp.zeros((n, 1)),
-                    jnp.zeros((n, 1), dtype=bool))
-
-        y  = _prepare_inputs(inputs, self.n_y[key])             # (n_y,)
-        ys = y.reshape(1, -1)                                   # (n_theta=1, n_y)
-
-        per_theta = solve_integer_nlp_batched(self.specs[key], ys)
-        full_design = splice_design_integers(
-            per_theta.x[0], self.specs[key],
-            per_theta.assignment_idx[0], self.n_design_full[key],
-        )
-        return (full_design.reshape(1, -1),
-                per_theta.objective.reshape(1, 1),
-                per_theta.success.reshape(1, 1).astype(bool))
-
-
-# =============================================================================
+# ---------------------------------------------------------------------------
 # CurrentCostEvaluator — constrained CTG on current node
-# =============================================================================
+# ---------------------------------------------------------------------------
 
 class CurrentCostEvaluator(BaseEvaluator):
     """Stateful constrained-CTG evaluator for the current node.
 
-    Minimises the node's CTG surrogate (via `mask_surrogate('scalar')`)
-    subject to the classifier being feasible (via `mask_surrogate('scalar' |
-    'onehot_sum')` depending on the rejector mode).  Multi-start seeds use
-    the L1-penalty screen over the Sobol pool.
+    Minimises the node's CTG Surrogate subject to the classifier being
+    feasible, with multi-start seeds drawn from the L1-penalty Sobol screen.
+    Holds a single sub-problem built once per node; theta is an outer vmap.
 
-    Single sub-problem; one `IntegerNLPSpec` built per node in `_build_for_key`.
-    Theta is handled via outer `vmap` (trivially `n_theta = 1` at rollout).
     """
+
     _eval_name = 'current_cost'
+
+    # ---- External Methods ----
 
     def __init__(self, cfg, graph, node):
         self.specs: dict          = {}
@@ -248,21 +223,23 @@ class CurrentCostEvaluator(BaseEvaluator):
         super().__init__(cfg, graph, node)
         self._thread = self.evaluate
 
+    # ---- Private Methods ----
+
     def _keys(self) -> list:
+        """Sub-problem keys: the current node only."""
         return [self.node]
 
     def _build_for_key(self, key) -> None:
+        """Build the constrained-CTG current-node IntegerNLPSpec."""
         (ndim, n_design, n_input, n_aux,
          input_indices, aux_indices, int_indices, int_values,
          ks_lb, ks_ub) = _current_geometry(self.graph, key, self.cfg)
-        n_heads, classifier = _resolve_classifier(self.cfg, self.graph, key)
         n_int = int(int_indices.size)
         n_y   = n_input + n_aux
 
-        # Objective: CTG surrogate, scalar (always single-output regression).
-        ctg_surrogate = self.graph.nodes[key]['ctg_surrogate']
+        # Objective: CTG Surrogate, scalar (always single-output regression).
         objective = mask_surrogate(
-            ctg_surrogate,
+            self.graph.nodes[key]['ctg_surrogate'],
             ndim=ndim,
             fix_ind=input_indices,
             aux_ind=aux_indices,
@@ -271,21 +248,10 @@ class CurrentCostEvaluator(BaseEvaluator):
             aggregator='scalar',
         )
 
-        # Constraint: classifier ≤ 0 — single-head or K-head SOS1 depending on rejector.
-        masked_clf = mask_surrogate(
-            classifier,
-            ndim=ndim,
-            fix_ind=input_indices,
-            aux_ind=aux_indices,
-            int_ind=int_indices,
-            n_heads=n_heads,
-            # aggregator inferred: 'scalar' or 'onehot_sum'
+        # Feasible region: classifier, or chance constraint under direct-probability.
+        constraint, n_heads = self._feasibility_constraint(
+            key, ndim, input_indices, aux_indices, int_indices,
         )
-        # mask_surrogate's scalar/onehot_sum aggregators return () — wrap
-        # to (1,) so septal's lagrangian_grad's `jac_g.T @ lam` aligns
-        # with `n_constraints=1`.
-        def constraint(x_red, p_aug):
-            return jnp.atleast_1d(masked_clf(x_red, p_aug))
 
         bounds = _design_bounds_continuous(ks_lb, ks_ub, int_indices)
         n_d_cont = int(bounds[0].size)
@@ -319,12 +285,50 @@ class CurrentCostEvaluator(BaseEvaluator):
         self.n_design_full[key] = n_design
         self.n_y[key]           = n_y
 
-    def evaluate(self, inputs, aux):
-        """Solve the constrained-CTG current-node NLP.
+    def _feasibility_constraint(self, key, ndim, input_indices, aux_indices, int_indices):
+        """Feasible-region constraint for the current-node CTG optimisation."""
+        direct_prob = (bool(self.cfg.samplers.deus.get('direct_probability', False))
+                       and self.cfg.formulation == 'probabilistic')
+        if direct_prob:
+            return self._chance_constraint(key, ndim, input_indices, aux_indices, int_indices)
+        return self._classifier_constraint(key, ndim, input_indices, aux_indices, int_indices)
 
-        Returns `(decision_variables, objective, converged)` matching the
-        rollout agent's contract.  Theta dim is real (trivially 1 at
-        rollout, multi-theta works without code changes).
+    def _chance_constraint(self, key, ndim, input_indices, aux_indices, int_indices):
+        """Chance constraint `P_feas(x) >= p_target` from the node's probability_map.
+
+        The factory enforces `g <= 0`, so feasibility `P >= p_target` is encoded
+        as `g = p_target - P`.
+        """
+        uw = self.cfg.samplers.unit_wise_target_reliability
+        try:
+            p_target = float(uw[key])
+        except (TypeError, KeyError, IndexError):
+            p_target = float(uw)
+        masked = mask_surrogate(
+            self.graph.nodes[key]['probability_map'],
+            ndim=ndim, fix_ind=input_indices, aux_ind=aux_indices,
+            int_ind=int_indices, n_heads=0, aggregator='scalar',
+        )
+        def constraint(x_red, p_aug):
+            return jnp.atleast_1d(p_target - masked(x_red, p_aug))
+        return constraint, 0
+
+    def _classifier_constraint(self, key, ndim, input_indices, aux_indices, int_indices):
+        """Node feasibility classifier (multi-head aware)."""
+        n_heads, classifier = _resolve_classifier(self.cfg, self.graph, key)
+        masked = mask_surrogate(
+            classifier, ndim=ndim, fix_ind=input_indices, aux_ind=aux_indices,
+            int_ind=int_indices, n_heads=n_heads,
+        )
+        def constraint(x_red, p_aug):
+            return jnp.atleast_1d(masked(x_red, p_aug))
+        return constraint, n_heads
+
+    def evaluate(self, inputs, aux):
+        """
+        Solve the constrained-CTG current-node NLP, returning
+        (decision_variables, objective, converged) per the rollout agent's
+        contract.  Theta dim is kept explicit (trivially 1 at rollout).
         """
         key = self.node
         if key is None:
@@ -333,28 +337,31 @@ class CurrentCostEvaluator(BaseEvaluator):
                     jnp.zeros((n, 1)),
                     jnp.zeros((n, 1), dtype=bool))
 
-        y  = _prepare_inputs(inputs, self.n_y[key])             # (n_y,)
-        ys = y.reshape(1, -1)                                   # (n_theta=1, n_y)
+        # Batch N trajectory states into (N, n_y), zero-padded / truncated per row.
+        n_y = self.n_y[key]
+        in2 = jnp.atleast_2d(inputs) if inputs is not None else jnp.zeros((1, n_y))
+        take = min(int(in2.shape[1]), int(n_y))
+        ys = jnp.zeros((in2.shape[0], n_y)).at[:, :take].set(in2[:, :take])   # (N, n_y)
 
         per_theta = solve_integer_nlp_batched(self.specs[key], ys)
-        full_design = splice_design_integers(
-            per_theta.x[0], self.specs[key],
-            per_theta.assignment_idx[0], self.n_design_full[key],
-        )
-        return (full_design.reshape(1, -1),
-                per_theta.objective.reshape(1, 1),
-                per_theta.success.reshape(1, 1).astype(bool))
+        full_design = vmap(
+            lambda x, a: splice_design_integers(x, self.specs[key], a, self.n_design_full[key])
+        )(per_theta.x, per_theta.assignment_idx)                              # (N, n_design)
+        return (full_design,
+                per_theta.objective.reshape(-1, 1),
+                per_theta.success.reshape(-1, 1).astype(bool))
 
 
-# =============================================================================
+# ---------------------------------------------------------------------------
 # Evaluator caches + public entry points
-# =============================================================================
+# ---------------------------------------------------------------------------
 
 _CURRENT_CONSTRAINT_CACHE: dict = {}
 _CURRENT_COST_CACHE: dict       = {}
 
 
 def _get_constraint_evaluator(cfg, graph, node) -> CurrentConstraintEvaluator:
+    """Return the cached CurrentConstraintEvaluator for this (graph, node)."""
     key = (id(graph), node)
     evaluator = _CURRENT_CONSTRAINT_CACHE.get(key)
     if evaluator is None:
@@ -364,6 +371,7 @@ def _get_constraint_evaluator(cfg, graph, node) -> CurrentConstraintEvaluator:
 
 
 def _get_cost_evaluator(cfg, graph, node) -> CurrentCostEvaluator:
+    """Return the cached CurrentCostEvaluator for this (graph, node)."""
     key = (id(graph), node)
     evaluator = _CURRENT_COST_CACHE.get(key)
     if evaluator is None:
@@ -373,8 +381,9 @@ def _get_cost_evaluator(cfg, graph, node) -> CurrentCostEvaluator:
 
 
 def current_constraint_surrogate(inputs, aux, cfg, graph, node):
-    """Box-only feasibility check — minimise classifier over the reduced
-    decision space with fixed `inputs` threaded as `p`.
+    """
+    Box-only feasibility check: minimise the classifier over the reduced
+    decision space with fixed inputs threaded as p.
     """
     if node is None:
         n = 0 if inputs is None else inputs.shape[0]

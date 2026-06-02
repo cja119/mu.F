@@ -1,5 +1,10 @@
+"""Setup helpers for the reconstruction post-processing stage."""
 
 def post_process_setup(cfg, graph, model):
+    """
+    Instantiate the post-process object and wire its training/solver
+    methods onto the graph.
+    """
     post_process = graph.graph['post_process'](cfg, graph, model, 0)
     assert hasattr(post_process, 'run')
     # TODO: update this to allow flexibility for whether a sampling scheme or local SIP scheme is used
@@ -9,6 +14,9 @@ def post_process_setup(cfg, graph, model):
     return post_process
 
 def post_process_sampling_setup(cfg, post_process, live_set, sampler):
+    """
+    Attach a sampler and a fresh live set to the post-process object.
+    """
     post_process.sampler = lambda : sampler()
     post_process.load_fresh_live_set(live_set=live_set(cfg, cfg.samplers.notion_of_feasibility))
     return post_process

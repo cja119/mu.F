@@ -1,3 +1,4 @@
+"""Dispatcher selecting the appropriate plotting routine for a run mode."""
 from abc import ABC
 from typing import List, Tuple
 from functools import partial
@@ -9,7 +10,16 @@ from mu_F.visualisation.methods import (
     reconstruction_with_policy_plot, rollout_with_policy_plot
 )
 
-class visualiser(ABC):
+class Visualiser(ABC):
+    """Selects and runs a plotting routine for a given visualisation mode.
+
+    Binds the chosen mode's plotter (from visualisation.methods) into a
+    partial at construction, which run/run_with_args then invokes.
+
+    """
+
+    # ---- External Methods ----
+
     def __init__(self, cfg, G, data: pd.DataFrame=None, mode:str='forward', string:str='design_space', path=None):
         self.data = data
         self.cfg, self.G = cfg, G
@@ -43,13 +53,16 @@ class visualiser(ABC):
 
 
     def run(self):
+        """
+        Invoke the bound visualiser with the stored cfg and graph.
+        """
         self.visualiser(self.cfg, self.G)
         return
     
     def run_with_args(self,*args):
         """
-        This method is used to run the visualiser with additional arguments.
-        It allows for flexibility in how the visualiser is executed.
+        Run the bound visualiser with caller-supplied positional arguments
+        instead of the stored cfg and graph.
         """
         return self.visualiser(*args)
 
@@ -149,7 +162,7 @@ if __name__ == '__main__':
 
     print("Backwards Propagation Projections:")
 
-    # TODO plot results from decomposition for affine study and sampling decompsoitons
+    # TODO plot results from Decomposition for affine study and sampling decompsoitons
     """
     vertices_sim = {0: [(1,-0.501604), (1,-1), (0.543809, -1)], 1: [(-0.671903,-1), (0.343159,-1), (1, -0.326864), (1,0.713381)], 
                     2: [(-1,-1), (-0.531559,-1), (0.531537,1), (-1,1)], 3: [(-1,-1), (-0.160083,-1), (1,0.713775), (1,1), (-1,1)], 4: [(-0.895464,-1), (1,-1), (1,1), (0.0384752,1)]}

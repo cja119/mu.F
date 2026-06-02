@@ -1,8 +1,4 @@
-"""
-Classes for solving the problem as a monolithic NLP by single shooting
-"""
-
-
+"""Solves the problem as a monolithic NLP by multiple shooting."""
 import logging
 
 import pandas as pd
@@ -16,6 +12,16 @@ from mu_F.direct.utils import *
 
 
 class MultipleShooting(SolveDirect):
+    """Monolithic NLP solver using a multiple-shooting transcription.
+
+    Builds one decision vector spanning aux, design and inter-node input
+    variables and adds defect equality constraints per edge, then hands the
+    assembled problem to septal's monolithic SQP solver.
+
+    """
+
+    # ---- External Methods ----
+
     def __init__(self, cfg, G):
         super().__init__(cfg, G)
         self._solver = septal_monolithic_solver
@@ -23,11 +29,10 @@ class MultipleShooting(SolveDirect):
             cfg.formulation.lower() == "deterministic"
         ), "Stochastic optimisation is unsupported. Run in deterministic setting"
 
-    # --- Public Methods --- #
     def solve(self):
         """
-        Solves the problem using the loaded solver.  Returns septal's native
-        `SQPResult` unchanged — no adapter tuple.
+        Solve the problem with the loaded solver and return septal's
+        native SQPResult unchanged.
         """
         from dataclasses import replace as dc_replace
 
@@ -62,10 +67,12 @@ class MultipleShooting(SolveDirect):
         self._log_outputs(result)
         return result
 
-    # --- Private Methods --- #
+    # ---- Private Methods ----
+
     def _prepare_model(self, graph):
         """
-        Prepare the model for solving. We will build the model to be solved as a monolithic NLP.
+        Assemble the monolithic NLP (objective, constraints, bounds)
+        from the node graph for the multiple-shooting transcription.
         """
         constraints = []
         rewards = []
@@ -78,16 +85,13 @@ class MultipleShooting(SolveDirect):
         n_aux = graph.graph["n_aux_args"]
         aux_slice = 0, n_aux
 
-        # Variable layout: [aux | des_0, des_1, ..., des_n | inp_0, inp_1, ..., inp_n]
+        # Variable layout: [aux | des_0, ..., des_n | inp_0, ..., inp_n]
         total_des = sum(graph.nodes[node]["n_design_args"] for node in graph.nodes)
         total_inp = sum(graph.nodes[node]["n_input_args"] for node in graph.nodes)
         des_curr = n_aux
         inp_curr = n_aux + total_des
 
-        # Per-state-dim scale used to normalise multiple-shooting defect
-        # residuals.  Same vector is shared across every inter-node edge in
-        # the markov chain (uniform F_size per node).  None disables
-        # equality residual scaling (legacy behaviour).
+        # Per-state-dim scale normalising defect residuals; shared across edges (None disables scaling)
         scale_per_edge = None
         if bool(getattr(self.cfg.solvers, "scale_variables", False)):
             non_root = next(n for n in graph.nodes if graph.in_degree(n) > 0)
@@ -104,7 +108,7 @@ class MultipleShooting(SolveDirect):
             des_slice = des_curr, n_des
             des_curr += n_des
 
-            # Root nodes take fixed inputs from config; all others slice from the decision vector
+            # Root nodes take fixed config inputs; others slice from the decision vector
             if graph.in_degree(node) == 0:
                 input_fn_or_slice = lambda ctrl, n=node: jnp.array(self.cfg.model.root_node_inputs[n]).reshape(1, 1, -1)
             else:
@@ -158,19 +162,25 @@ class MultipleShooting(SolveDirect):
         return problem_data
 
     def _get_solution(self, result):
-        """Return `(decision_variables, objective)` straight off the SQPResult."""
+        """
+        Return the decision variables and objective off the SQPResult.
+        """
         return result.decision_variables, result.objective
 
     def _load_solver(self):
         """
-        Loads in solver object
+        Return the loaded monolithic solver.
         """
         return self._solver
 
     def _get_status(self, result):
-        """`1` if septal reports converged KKT, else `0`."""
+        """
+        Return 1 if septal reports converged KKT, else 0.
+        """
         return 1 if bool(result.success) else 0
 
     def _log_outputs(self, result):
-        """Hand the septal `SQPResult` to the shared logger."""
+        """
+        Hand the septal SQPResult to the shared logger.
+        """
         return log_outputs(self.cfg, self.G, result, bool(result.success))

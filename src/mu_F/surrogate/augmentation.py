@@ -1,24 +1,4 @@
-"""Training-data augmentation around the converged feasible region.
-
-After DEUS finishes for a node, take its feasible live set, cluster it,
-and draw extra samples from a Gaussian around each cluster centre (or per
-integer-combo around the nearest cluster). Push the augmented samples
-through `model.s()` so they join `model.constraint_data` and
-`model.ctg_values` — both classifier and CTG training pools then see the
-enriched data.
-
-(In the worktree this was called "annealing", which was a misnomer —
-nothing about it resembles simulated / annealed importance sampling.
-It's just local density augmentation around the feasibles.)
-
-Toggleable via `cfg.surrogate.augmentation.enabled`. Legacy
-`cfg.samplers.ns.n_anneal` is still honoured for back-compat — set to 0
-to disable when the new `augmentation` section is absent.
-
-Strategy dispatch: `cfg.surrogate.augmentation.strategy` picks between
-the registered strategies. Adding a new one is a subclass plus an entry
-in `_STRATEGY_REGISTRY`.
-"""
+"""Local density augmentation of training data around the feasible region."""
 from __future__ import annotations
 
 import logging
@@ -29,18 +9,15 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 
 
-# =============================================================================
-# Clustering primitive — used by both classifier construction (M3a) and the
-# augmentation strategies below
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Clustering primitive
+# ---------------------------------------------------------------------------
 
 def xmeans_cluster_indices(X_feas):
-    """Cluster `X_feas` (N, D) with DEUS's BIC-driven x-means.
-
-    Returns a list of length K, each entry an `np.ndarray` of row indices
-    into `X_feas` belonging to that cluster. K is chosen by x-means via
-    the `bic_ellipsoid` criterion — same primitive DEUS uses during
-    sumb-xmeans sampling.
+    """
+    Cluster X_feas (N, D) with DEUS's BIC-driven x-means.
+    Returns a list of K index arrays, one per cluster; K is chosen by x-means
+    via the bic_ellipsoid criterion. Shared with classifier construction.
     """
     from deus.activities.solvers.algorithms.primitive import XMeans
     X = np.asarray(X_feas, dtype=float)
@@ -57,18 +34,16 @@ def xmeans_cluster_indices(X_feas):
     return [np.asarray(c, dtype=int) for c in xm.get_clusters_as_indices()]
 
 
-# =============================================================================
-# Strategy protocol + concrete implementations
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Strategy protocol and concrete implementations
+# ---------------------------------------------------------------------------
 
 class AugmentationStrategy(Protocol):
     """Generate extra training samples around a feasible region.
 
-    Implementations return `(aug_samples, log_descriptor)`:
-      aug_samples       (N_aug, n_full)   raw samples in design+input+aux space
-      log_descriptor    str               short human-readable phrase for the
-                                          dispatcher's "added N samples (...)"
-                                          log line.
+    Implementations return (aug_samples, log_descriptor): the raw samples in
+    design+input+aux space and a short phrase for the dispatcher's log line.
+
     """
     def augment(self, X_feas, cfg, graph, node,
                 *, n_samples: int, radius: float) -> Tuple[np.ndarray, str]: ...
@@ -77,15 +52,20 @@ class AugmentationStrategy(Protocol):
 class ClusterGaussianStrategy:
     """Gaussian draws around each x-means cluster centre.
 
-    For each cluster: compute mean + Cholesky of covariance in
-    standardised coordinates, draw `n_samples` Gaussian samples scaled
-    by `radius`, invert the standardisation. Stack across clusters.
+    For each cluster, draw n_samples Gaussian points (scaled by radius) in
+    standardised coordinates and invert the standardisation; stack across
+    clusters. Used when there are no integer design dims to stratify by.
 
-    Used when there are no integer design dims to stratify by.
     """
+
+    # ---- External Methods ----
 
     def augment(self, X_feas, cfg, graph, node,
                 *, n_samples: int, radius: float):
+        """
+        Draw Gaussian augmentation samples around each x-means cluster centre.
+        Called by the dispatcher when no integer design dims are present.
+        """
         cluster_indices = xmeans_cluster_indices(X_feas)
         n_clusters = len(cluster_indices)
 
@@ -120,18 +100,20 @@ class ClusterGaussianStrategy:
 class IntegerCornerGaussianStrategy:
     """Per-integer-combo Gaussian around the nearest feasible cluster.
 
-    For each integer combo (Cartesian product of the integer design dims'
-    domains), find the x-means cluster whose integer-dim mean is closest
-    to the combo's values. Draw `n_samples` Gaussian samples around that
-    cluster's continuous-dim distribution, with the integer dims pinned
-    to the combo's values exactly.
+    For each integer combo, draw n_samples Gaussian samples around the
+    continuous distribution of the nearest cluster, pinning the integer dims
+    to the combo's values; densifies the corners of the integer grid.
 
-    Densifies the corners of the integer-decision grid where the smooth
-    classifier otherwise has the loosest fit.
     """
+
+    # ---- External Methods ----
 
     def augment(self, X_feas, cfg, graph, node,
                 *, n_samples: int, radius: float):
+        """
+        Draw augmentation samples per integer combo around its nearest cluster.
+        Called by the dispatcher when integer design dims are present.
+        """
         from mu_F.solvers.integer_nlp import IntegerProblem
 
         problem = IntegerProblem.from_cfg(
@@ -140,7 +122,7 @@ class IntegerCornerGaussianStrategy:
         )
         int_indices = np.array([d.slot for d in problem.design_dims], dtype=int)
         if int_indices.size == 0:
-            # No integer dims — defer to the cluster-Gaussian strategy.
+            # No integer dims: defer to the cluster-Gaussian strategy.
             return ClusterGaussianStrategy().augment(
                 X_feas, cfg, graph, node, n_samples=n_samples, radius=radius,
             )
@@ -152,8 +134,7 @@ class IntegerCornerGaussianStrategy:
         n_full = X_feas.shape[1]
         cont_indices = np.setdiff1d(np.arange(n_full), int_indices).astype(int)
 
-        # Integer-dim mean per cluster — used to pick the "nearest cluster"
-        # for each integer combo.
+        # Integer-dim mean per cluster, used to pick the nearest cluster.
         cluster_int_centres = np.stack([
             X_feas[cluster_ids][:, int_indices].mean(axis=0)
             for cluster_ids in cluster_indices
@@ -201,18 +182,14 @@ _STRATEGY_REGISTRY = {
 }
 
 
-# =============================================================================
-# Dispatcher — the only public entry point evaluators call
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Dispatcher
+# ---------------------------------------------------------------------------
 
 def _resolve_augmentation_cfg(cfg) -> dict:
-    """Resolve augmentation parameters with back-compat to legacy knobs.
-
-    Preferred location: `cfg.surrogate.augmentation.{enabled, strategy,
-                                                     n_samples, radius}`.
-    Fallback: `cfg.samplers.ns.{n_anneal, anneal_radius}` — n_anneal=0
-    disables; strategy defaults to 'integer_corner_gaussian' (the
-    worktree's effective behaviour).
+    """
+    Resolve augmentation parameters from cfg.surrogate.augmentation, falling
+    back to the legacy cfg.samplers.ns knobs for back-compat.
     """
     aug_cfg = cfg.surrogate.get('augmentation', None) if hasattr(cfg, 'surrogate') else None
     if aug_cfg is not None:
@@ -232,11 +209,10 @@ def _resolve_augmentation_cfg(cfg) -> dict:
 
 
 def _extract_feasibles(model) -> np.ndarray:
-    """Pull DEUS-evaluated samples + feasibility mask from model.constraint_data.
-
-    Returns (N_feas, n_full) feasible-rows-only array. The min over (θ, g)
-    gives the per-point feasibility margin — positive ⇒ all constraints
-    satisfied under positive notion.
+    """
+    Pull DEUS-evaluated samples and feasibility mask from model.constraint_data.
+    A point is feasible when its min over (theta, g) margin is non-negative;
+    returns the feasible rows and the full sample set.
     """
     X = jnp.vstack(model.constraint_data.d)
     if X.ndim > 2:
@@ -251,12 +227,10 @@ def _extract_feasibles(model) -> np.ndarray:
 
 
 def augment_training_data(cfg, graph, node, model) -> None:
-    """Grow `model.constraint_data` and `model.ctg_values` via the
-    configured augmentation strategy.
-
-    Call this AFTER DEUS finishes for a node and BEFORE
-    `process_data_forward` builds `classifier_training`, so the augmented
-    samples land in both the classifier and CTG training pools.
+    """
+    Grow model.constraint_data and model.ctg_values via the configured
+    strategy. Called after DEUS finishes a node and before
+    process_data_forward, so the samples land in both training pools.
     """
     aug_cfg = _resolve_augmentation_cfg(cfg)
     if not aug_cfg['enabled']:
@@ -272,10 +246,8 @@ def augment_training_data(cfg, graph, node, model) -> None:
         )
         return
 
-    # Cache the pre-augmentation x-means K on the graph so
-    # `cluster_classifier_construction` can decide whether multi-head is
-    # warranted on natural feasibility geometry (rather than the post-
-    # augmentation K, which is biased by per-integer-corner blobs).
+    # Cache the pre-augmentation x-means K so cluster_classifier_construction
+    # judges multi-head on natural geometry, not the post-augmentation K.
     graph.nodes[node]['pre_augmentation_n_clusters'] = len(
         xmeans_cluster_indices(X_feas)
     )
@@ -294,24 +266,22 @@ def augment_training_data(cfg, graph, node, model) -> None:
     if aug.shape[0] == 0:
         return
 
-    # Clip the augmented samples to the conservative box defined by the
-    # min/max of every DEUS-evaluated sample seen so far — honours the
-    # sampling region the surrogates were trained on.
+    # Clip to the box spanned by every DEUS-evaluated sample so far, honouring
+    # the sampling region the surrogates were trained on.
     lo = X_all.min(axis=0)
     hi = X_all.max(axis=0)
     aug = np.clip(aug, lo, hi).astype(np.float32)
 
-    # Build the uncertain-parameter vector the same way DEUS does, so
-    # `model.s()` evaluates the augmented samples under the same
-    # parametric distribution it used during sampling.
+    # Build the uncertain-parameter vector the same way DEUS does, so model.s()
+    # evaluates the augmented samples under the same parametric distribution.
     if cfg.formulation == 'deterministic':
         p = jnp.array(graph.nodes[node]['parameters_best_estimate']).reshape(1, -1)
     else:
         p_list = graph.nodes[node]['parameters_samples']
         p = jnp.array([s['c'] for s in p_list])
 
-    # Side effect: model.s() appends to model.constraint_data and
-    # (if eval_cost) model.ctg_values — the whole reason we're here.
+    # model.s() appends to model.constraint_data and (if eval_cost)
+    # model.ctg_values; that side effect is the whole point of this call.
     _ = model.s(jnp.asarray(aug, dtype=jnp.float32), p)
     logging.info(
         f"Augmentation node {node}: added {aug.shape[0]} samples "

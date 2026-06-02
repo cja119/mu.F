@@ -1,3 +1,4 @@
+"""Neural-network surrogate training, serialisation and inference utilities."""
 from typing import Dict
 from itertools import product
 from abc import ABC
@@ -24,11 +25,19 @@ from functools import partial
 from omegaconf import DictConfig
 from functools import partial
 
-from mu_F.surrogate.data_utils import standardisation_metrics
-
+from mu_F.surrogate.data_utils import StandardisationMetrics
 
 
 class Dataset(ABC):
+    """Lightweight (X, y) container that enforces at least 2D arrays.
+
+    Wraps training inputs and targets, expanding rank-1 arrays so downstream
+    NN code can assume a trailing feature/output dimension.
+
+    """
+
+    # ---- External Methods ----
+
     def __init__(self, X, y):
         self.input_rank = len(X.shape)
         self.output_rank = len(y.shape)
@@ -36,22 +45,47 @@ class Dataset(ABC):
         self.y = y if self.output_rank >=2 else jnp.expand_dims(y,axis=-1)
 
 
-# --- neural network regressor --- #
+def resample_inverse_density(D, n_bins: int = 20, seed: int = 0):
+    """
+    Resample designs (with replacement) so the target is flat across n_bins:
+    each point is drawn with probability inverse to its target-value density,
+    restoring the rare high-P_feas region a plain-MSE fit washes out.
+    """
+    y = np.asarray(D.y).reshape(-1)
+    edges = np.linspace(y.min(), y.max() + 1e-9, n_bins + 1)
+    b = np.clip(np.digitize(y, edges) - 1, 0, n_bins - 1)
+    counts = np.bincount(b, minlength=n_bins).astype(float)
+    w = 1.0 / counts[b]
+    w /= w.sum()
+    sel = np.random.default_rng(seed).choice(y.shape[0], size=y.shape[0], replace=True, p=w)
+    return Dataset(jnp.asarray(D.X)[sel], jnp.asarray(D.y)[sel])
 
-def identify_neural_network(hidden_units, output_units, activation_functions) -> nn.Module:
-    return NeuralNetworkEstimator(hidden_units=hidden_units, output_units=output_units, activation_functions=activation_functions)
+
+# ---------------------------------------------------------------------------
+# Neural network regressor
+# ---------------------------------------------------------------------------
+
+def identify_neural_network(hidden_units, output_units, activation_functions, output_activation='identity') -> nn.Module:
+    """Build a NeuralNetworkEstimator from architecture arguments."""
+    return NeuralNetworkEstimator(hidden_units=hidden_units, output_units=output_units,
+                                  activation_functions=activation_functions,
+                                  output_activation=output_activation)
 
 def serialise_model(params, model, x_scalar, y_scalar, model_type, model_data):
+    """
+    Serialise model params, architecture and standardisation metrics into a
+    dict, verifying the params round-trip through (de)serialisation.
+    """
     model_data['hidden_units'] = model.hidden_units
     model_data['output_units'] = model.output_units
     model_data['activation_function'] = model.activation_functions
+    model_data['output_activation'] = getattr(model, 'output_activation', 'identity')
     model_data['serialized_params'] = to_bytes(params)
-    model_data['standardisation_metrics_input'] = standardisation_metrics(x_scalar.mean_, x_scalar.scale_)
+    model_data['standardisation_metrics_input'] = StandardisationMetrics(x_scalar.mean_, x_scalar.scale_)
     if model_type == 'regressor':
-        model_data['standardisation_metrics_output'] = standardisation_metrics(y_scalar.mean_, y_scalar.scale_)
+        model_data['standardisation_metrics_output'] = StandardisationMetrics(y_scalar.mean_, y_scalar.scale_)
 
-    #assess model serialisation 
-    # Function to compare original and deserialized parameters
+    # recursively compare original and deserialised parameters
     def compare_params(original, deserialized):
         for k, v in original.items():
             if isinstance(v, dict):
@@ -59,7 +93,6 @@ def serialise_model(params, model, x_scalar, y_scalar, model_type, model_data):
             else:
                 assert jnp.allclose(v, deserialized[k]), f"Mismatch found in parameter {k}"
 
-    # Compare original and deserialized parameters
     try:
         compare_params(params, from_bytes(params, model_data['serialized_params']))
         print("Serialization and deserialization successful. Parameters match!")
@@ -70,25 +103,10 @@ def serialise_model(params, model, x_scalar, y_scalar, model_type, model_data):
 
 def train_multihead_regressor(cfg, X, Y_kvec, num_folds: int = 2,
                               rng_key=jax.random.PRNGKey(0)):
-    """Train a shared-trunk ANN with K linear output heads on ±1 targets.
-
-    `X` is (N, ndim) input. `Y_kvec` is (N, K) with entries in {-1, +1}.
-    Convention: `Y_kvec[i, k] = -1` means "x_i is in cluster k", `+1` means
-    "not in cluster k" (a different cluster or outright infeasible).
-
-    Loss is per-head class-balanced MSE: each head's in-cluster (`-1`) mass
-    contributes the same total to the loss as its out-of-cluster (`+1`)
-    mass, regardless of the raw class counts.  Mathematically equivalent to
-    upsampling the minority class per head, but uses a single training set.
-
-    Returns a jit-compiled function `f(x) -> (K,)` taking an unstandardised
-    `x` and returning the K-vector of head scores.  `f(x)[k] <= 0` means
-    "predicted in cluster k", matching the existing classifier convention.
-
-    Contract (for future swap-in trainers, e.g. SVM):
-      - input:  cfg, X (N, ndim) float, Y_kvec (N, K) in {-1, +1}, num_folds, rng_key
-      - output: callable f(x); accepts (ndim,) or (n, ndim); returns (K,) or (n, K)
-      - JIT-traceable, smooth in `x`; convention as above.
+    """
+    Train a shared-trunk ANN with K linear heads on +/-1 cluster targets,
+    using per-head class-balanced MSE. Returns a jitted f(x) -> (K,) whose
+    k-th entry <= 0 means "predicted in cluster k".
     """
     X_arr = jnp.asarray(X, dtype=jnp.float32)
     if X_arr.ndim > 2:
@@ -100,13 +118,11 @@ def train_multihead_regressor(cfg, X, Y_kvec, num_folds: int = 2,
     n_heads = int(Y_arr.shape[1])
     n_total = int(Y_arr.shape[0])
 
-    # Standardise X (no scaling for Y — ±1 targets are already on a sensible scale)
+    # standardise X; +/-1 targets need no scaling
     x_scalar = StandardScaler().fit(np.asarray(X_arr))
     X_std = jnp.asarray(x_scalar.transform(np.asarray(X_arr)), dtype=jnp.float32)
 
-    # Per-head, per-class weights.  Each head's two classes contribute the
-    # same total mass; each (i, k) entry's weight = 0.5 / count of its class
-    # within head k.  Heads contribute equally because they all sum to 1.
+    # per-head class-balanced weights: each (i, k) weight = 0.5 / class count in head k
     n_minus = jnp.sum(Y_arr == -1, axis=0)          # (K,)
     n_plus  = jnp.sum(Y_arr ==  1, axis=0)          # (K,)
     w_minus = 0.5 / jnp.maximum(n_minus, 1).astype(jnp.float32)
@@ -144,7 +160,7 @@ def train_multihead_regressor(cfg, X, Y_kvec, num_folds: int = 2,
         val_loss = float(balanced_loss(params, model, X_va, Y_va, W_va))
         return params, val_loss
 
-    # CV-style hyperparameter search over (hidden_size, activation).
+    # CV hyperparameter search over (hidden_size, activation)
     kf = KFold(n_splits=max(num_folds, 2), shuffle=True, random_state=0)
     splits = list(kf.split(np.arange(n_total)))
 
@@ -158,7 +174,7 @@ def train_multihead_regressor(cfg, X, Y_kvec, num_folds: int = 2,
         if avg < best_avg_loss:
             best_avg_loss = avg
             best_hidden, best_af = hidden_size, af
-            # Keep params from the fold with the lowest val_loss for this config.
+            # keep params from the lowest-val_loss fold for this config
             best_params, _ = min(fold_results, key=lambda r: r[1])
             best_model = model
 
@@ -184,7 +200,7 @@ def train_multihead_regressor(cfg, X, Y_kvec, num_folds: int = 2,
 
 
 def check_dims(D):
-
+    """Coerce a Dataset's X and y to 2D arrays in place."""
     x, y = D.X, D.y
 
     if x.ndim < 2:
@@ -192,7 +208,7 @@ def check_dims(D):
     if y.ndim < 2:
         y = y.reshape(1,-1)
 
-    if x.ndim > 2: 
+    if x.ndim > 2:
         x = x.reshape(x.shape[0], -1)
     if y.ndim > 2:
         y = y.reshape(y.shape[0], -1)
@@ -203,12 +219,26 @@ def check_dims(D):
 
 
 class _ScalerShim:
+    """Minimal StandardScaler stand-in exposing mean_/scale_ attributes.
+
+    Used to inject an externally supplied standardisation into
+    hyperparameter_selection without refitting a StandardScaler.
+
+    """
+
+    # ---- External Methods ----
+
     def __init__(self, mean, scale):
         import numpy as np
         self.mean_ = np.array(mean)
         self.scale_ = np.array(scale)
 
 def hyperparameter_selection(cfg: DictConfig, D, num_folds: int, model_type, model_surrogate=None, rng_key: random.PRNGKey=jax.random.PRNGKey(0), x_scalar_override=None):
+    """
+    Cross-validate over (hidden_size, activation), retrain the best on all
+    data, and return the model plus standardised/unstandardised query
+    functions and its serialised payload.
+    """
     if model_type == 'regressor':
         if model_surrogate == 'ctg_surrogate':
             surrogate_cfg = cfg.surrogate.surrogate_ctg.ann
@@ -221,7 +251,6 @@ def hyperparameter_selection(cfg: DictConfig, D, num_folds: int, model_type, mod
     hidden_sizes = surrogate_cfg.hidden_size_options
     afs = surrogate_cfg.activation_functions
 
-    # Initialize the best hyperparameters and the best average validation loss
     best_hyperparams = {}
     best_avg_loss = float('inf')
 
@@ -237,26 +266,31 @@ def hyperparameter_selection(cfg: DictConfig, D, num_folds: int, model_type, mod
         x_scalar = StandardScaler().fit(D.X)
         standard_X = x_scalar.transform(D.X)
 
+    # probability_map uses a sigmoid head on [0, 1]; bypass y-standardisation
+    out_af = 'sigmoid' if model_surrogate == 'probability_map_surrogate' else 'identity'
+
     if model_type == 'regressor':
         y_scalar = StandardScaler().fit(D.y)
+        if out_af == 'sigmoid':
+            y_scalar.mean_[:] = 0.0
+            y_scalar.scale_[:] = 1.0
         standard_D = Dataset(standard_X, y_scalar.transform(D.y))
+        if out_af == 'sigmoid':                    # flatten the P_feas target density
+            standard_D = resample_inverse_density(standard_D)
     elif model_type == 'classifier':
         y_scalar = jnp.astype((D.y + 1)/2, jnp.int32)
         standard_D = Dataset(standard_X, y_scalar)
 
-    # Perform hyperparameter selection using cross-validation
+    # cross-validated hyperparameter selection
     for hidden_size, af in product(hidden_sizes, afs):
-        # Set the current hyperparameters
-        # Train the model using the current hyperparameters
         if model_type == 'regressor':
-            model = identify_neural_network(hidden_size, standard_D.y.shape[1], af)
+            model = identify_neural_network(hidden_size, standard_D.y.shape[1], af, output_activation=out_af)
         elif model_type == 'classifier':
             model = identify_neural_network(hidden_size, 2, af)
         else:
             raise NotImplementedError(f"Model type {model_type} not implemented")
         avg_loss = train_nn_surrogate_model(surrogate_cfg, standard_D, model, num_folds, rng_key, model_type=model_type)
 
-        # Check if the current hyperparameters are the best so far
         if avg_loss < best_avg_loss:
             best_avg_loss = avg_loss
             best_hyperparams = {
@@ -264,9 +298,9 @@ def hyperparameter_selection(cfg: DictConfig, D, num_folds: int, model_type, mod
                 'activation_function': af
             }
 
-    # Train the model with the best hyperparameters using all the data
+    # retrain the best hyperparameters on all the data
     if model_type == 'regressor':
-        best_model = identify_neural_network(best_hyperparams['hidden_size'], standard_D.y.shape[1], best_hyperparams['activation_function'])
+        best_model = identify_neural_network(best_hyperparams['hidden_size'], standard_D.y.shape[1], best_hyperparams['activation_function'], output_activation=out_af)
         best_hyperparams['output_units'] = standard_D.y.shape[1]
     elif model_type == 'classifier':
         best_model = identify_neural_network(best_hyperparams['hidden_size'], 2, best_hyperparams['activation_function'])
@@ -274,7 +308,7 @@ def hyperparameter_selection(cfg: DictConfig, D, num_folds: int, model_type, mod
     else:
         raise NotImplementedError(f"Model type {model_type} not implemented")
 
-    # Hold out one fold for early stopping validation (consistent with CV above)
+    # hold out one fold for early-stopping validation
     kf_final = KFold(n_splits=num_folds, shuffle=True, random_state=0)
     train_idx, val_idx = next(kf_final.split(standard_D.X))
     train_D = Dataset(standard_D.X[train_idx], standard_D.y[train_idx])
@@ -293,6 +327,7 @@ def hyperparameter_selection(cfg: DictConfig, D, num_folds: int, model_type, mod
     )
 
     serialised_model = serialise_model(best_params, best_model, x_scalar, y_scalar, model_type, {})
+    serialised_model['output_activation'] = out_af
 
     del standard_D
  
@@ -313,77 +348,92 @@ def hyperparameter_selection(cfg: DictConfig, D, num_folds: int, model_type, mod
         @jit
         def query_unstandardised_model(x):
             if x.ndim <2 : x = x.reshape(1,-1)
-            return project(opt_model(standardise(x))) # pipeline model
+            return project(opt_model(standardise(x)))
 
         @jit
         def query_standardised_model(x):
             if x.ndim <2: x = x.reshape(1,-1)
             return opt_model(x)
 
-        return opt_model, (query_standardised_model, query_unstandardised_model, standardisation_metrics(x_mean, x_std), standardisation_metrics(y_mean, y_std)), serialised_model
+        return opt_model, (query_standardised_model, query_unstandardised_model, StandardisationMetrics(x_mean, x_std), StandardisationMetrics(y_mean, y_std)), serialised_model
     
     elif model_type == 'classifier':
 
         def mapp_(y):
             if y.ndim <2 : y = y.reshape(1,-1)
-            return jnp.array([0.5]) - softmax(y, axis=-1)[0,0]    # if this quantity is less than or equal to zero, then the sample predicts feasibility.
+            # quantity <= 0 means the sample predicts feasibility
+            return jnp.array([0.5]) - softmax(y, axis=-1)[0,0]
 
         @jit
         def query_unstandardised_classifier(x):
             if x.ndim <2 : x = x.reshape(1,-1)
-            return mapp_(opt_model(standardise(x))) # pipeline model
-        
+            return mapp_(opt_model(standardise(x)))
+
         @jit
         def query_standardised_classifier(x):
             if x.ndim <2: x = x.reshape(1,-1)
             if x.shape[0]>= x.shape[1]: x= x.T
             return mapp_(opt_model(x))
-        
-        return opt_model, (query_standardised_classifier, query_unstandardised_classifier, standardisation_metrics(x_mean, x_std)), serialised_model #, standardisation_metrics(jnp.zeros((1,2)), jnp.ones((1,2))))
+
+        return opt_model, (query_standardised_classifier, query_unstandardised_classifier, StandardisationMetrics(x_mean, x_std)), serialised_model
 
 
 
 def train_nn_surrogate_model(cfg: DictConfig, D, model: nn.Module, num_folds: int, rng_key: random.PRNGKey=jax.random.PRNGKey(0), model_type='regressor') -> float:
-    # Split data into folds
+    """
+    K-fold train and validate a model, returning the average validation
+    loss used to score a candidate architecture.
+    """
     kf = KFold(n_splits=num_folds, shuffle=True, random_state=0)
     fold_indices = kf.split(D.X)
 
-
-    # Train and validate the model for each fold
     fold_losses = []
     for train_index, val_index in fold_indices:
-        # Split data into train and validation sets
         X_train, X_val = D.X[train_index], D.X[val_index]
         y_train, y_val = D.y[train_index], D.y[val_index]
 
         trained_params, _, _ = train(cfg, model, Dataset(X_train, y_train), Dataset(X_val, y_val), model_type=model_type)
 
-        # Evaluate the model on the validation set
         y_pred = model.apply(trained_params, X_val)
         if model_type == 'classifier':
             fold_loss = jnp.mean(optax.softmax_cross_entropy_with_integer_labels(jnp.expand_dims(y_pred, axis=1), y_val))
+        elif getattr(model, 'output_activation', 'identity') == 'sigmoid':
+            fold_loss = _bce(y_val, y_pred)
         elif model_type == 'regressor':
             fold_loss = jnp.mean(jnp.square(y_val - y_pred))
         else:
             raise NotImplementedError(f"Model type {model_type} not implemented")
-        
+
         fold_losses.append(fold_loss)
 
         del X_train, X_val, y_train, y_val
 
-    # Compute average validation loss across folds
     avg_loss = jnp.mean(jnp.array(fold_losses))
-
 
     return avg_loss
 
        
+_OUTPUT_AFS = {'identity': (lambda x: x), 'sigmoid': nn.sigmoid,
+               'relu': nn.relu, 'tanh': nn.tanh}
+
+
 class NeuralNetworkEstimator(nn.Module):
+    """Flax MLP with configurable hidden layers and a typed output activation.
+
+    Builds a stack of Dense layers with per-hidden-layer activations and a
+    final output activation, used as the surrogate model throughout this module.
+
+    """
+
     hidden_units: list
     output_units: int
     activation_functions: list
+    output_activation: str = 'identity'
+
+    # ---- External Methods ----
 
     def setup(self):
+        """Construct the Dense layers and activation stack (flax hook)."""
         self.layers = [nn.Dense(hidden_unit) for hidden_unit in self.hidden_units] + [nn.Dense(self.output_units)]
 
         self.afs = []
@@ -395,9 +445,9 @@ class NeuralNetworkEstimator(nn.Module):
             elif af == 'tanh':
                 self.afs += (nn.tanh,)
 
-        self.afs += (lambda x: x,) # currently have no output activation function (feel free to change it)
+        self.afs += (_OUTPUT_AFS[self.output_activation],)
 
-        # -- Hard-fail structural check ---------------------------------
+        # one activation per layer (output layer gets an implicit identity)
         assert len(self.afs) == len(self.layers), (
             f"NeuralNetworkEstimator layer/activation mismatch: "
             f"len(hidden_units)={len(self.hidden_units)} + 1 output layer "
@@ -413,6 +463,7 @@ class NeuralNetworkEstimator(nn.Module):
 
 
     def __call__(self, x):
+        """Forward pass applying each layer then its activation (flax hook)."""
         for i, (layer, af) in enumerate(zip(self.layers, self.afs)):
             x = layer(x)
             x = af(x)
@@ -420,17 +471,31 @@ class NeuralNetworkEstimator(nn.Module):
         return x
 
 
+def _bce(y, p, eps=1e-6):
+    """
+    Binary cross-entropy for a soft probability target. Matched to a sigmoid
+    head so the logit gradient is (p - y), driving the saturated 0/1 corners
+    that MSE leaves stranded.
+    """
+    p = jnp.clip(p, eps, 1.0 - eps)
+    return -jnp.mean(y * jnp.log(p) + (1.0 - y) * jnp.log1p(-p))
+
+
 @partial(jit, static_argnames=('model',))
 def _loss_fn_regressor(params, model, batch):
+    """Regression loss: BCE for a sigmoid head, otherwise MSE."""
     y_pred = model.apply(params, batch['X'])
+    if getattr(model, 'output_activation', 'identity') == 'sigmoid':
+        return _bce(batch['y'], y_pred)          # probability target -> BCE
     return jnp.mean(jnp.square(batch['y'] - y_pred))
 
 
 @partial(jit, static_argnames=('model',))
 def _loss_fn_classifier(params, model, batch):
-    #labels must be a one hot encoded array
+    """Classification softmax cross-entropy loss over integer labels."""
     y_pred = model.apply(params, batch['X'])
-    return jnp.mean(optax.softmax_cross_entropy_with_integer_labels(jnp.expand_dims(y_pred, axis=1), batch['y']))  #  turns labels to 0 and 1, rather than -1 and 1, with zero indicating the negative class and 1 the positive class
+    # labels map to {0, 1} with 0 the negative class and 1 the positive class
+    return jnp.mean(optax.softmax_cross_entropy_with_integer_labels(jnp.expand_dims(y_pred, axis=1), batch['y']))
 
 
 _grad_fn_regressor  = jax.value_and_grad(_loss_fn_regressor)
@@ -438,55 +503,54 @@ _grad_fn_classifier = jax.value_and_grad(_loss_fn_classifier)
 
 
 def train_one_step_regressor(state, model, batch):
+    """Single value-and-grad step for the regression loss."""
     loss, grad = _grad_fn_regressor(state.params, model, batch)
     return loss, grad
 
 
 def train_one_step_classifier(state, model, batch):
+    """Single value-and-grad step for the classification loss."""
     loss, grad = _grad_fn_classifier(state.params, model, batch)
     return loss, grad
 
 
 def get_initial_params(key: jax.Array, data:jnp.array, model: nn.Module) -> Dict:
-  input_dims = tuple(data.X.shape[1:])  # (minibatch, height, width, stacked frames))
+  """Initialise model params from a Dataset's input shape."""
+  input_dims = tuple(data.X.shape[1:])
   init_shape = jnp.ones(input_dims, jnp.float32)
-  initial_params = model.init(key, init_shape)#['params']
+  initial_params = model.init(key, init_shape)
   return initial_params
 
 def get_initial_params_serial(key: jax.Array, data:jnp.array, model: nn.Module) -> Dict:
-  input_dims = tuple(data.shape[1:])  # (minibatch, height, width, stacked frames))
+  """Initialise model params from a raw array's input shape."""
+  input_dims = tuple(data.shape[1:])
   init_shape = jnp.ones(input_dims, jnp.float32)
-  initial_params = model.init(key, init_shape)#['params']
+  initial_params = model.init(key, init_shape)
   return initial_params
 
 
 @struct.dataclass
 class _ScanEarlyStopping:
-    """
-    JAX-traceable mirror of `flax.training.early_stopping.EarlyStopping`.
+    """JAX-traceable mirror of flax.training.early_stopping.EarlyStopping.
 
-    `min_delta` and `patience` are static pytree fields — they bake into
-    the compiled kernel as constants rather than flowing as tracers.
-    The mutable fields (`best_metric`, `patience_count`, `should_stop`)
-    thread through `lax.scan` cleanly as dynamic state.
+    Holds early-stopping state that threads through lax.scan: min_delta and
+    patience are static fields, the metric/counter/flag fields are dynamic.
+
     """
+
     min_delta: float = struct.field(pytree_node=False)
     patience: int = struct.field(pytree_node=False)
     best_metric: jnp.ndarray = struct.field(pytree_node=True)
     patience_count: jnp.ndarray = struct.field(pytree_node=True)
     should_stop: jnp.ndarray = struct.field(pytree_node=True)
 
+    # ---- External Methods ----
+
     @classmethod
     def create(cls, min_delta: float, patience: int, *, dtype=jnp.float32):
         """
-        `dtype` must match the dtype that `metric` will be passed in as
-        (i.e. the computed validation loss dtype).  If they don't match,
-        `update`'s `jnp.where` will promote `best_metric` to the wider
-        type in one branch of `lax.cond` but not in the other — which
-        fails `cond`'s equal-output-types invariant.
-
-        The caller in `train()` pulls this from `valid_data.y.dtype`
-        since the validation-loss compute preserves that dtype.
+        Build the initial state. dtype must match the validation-loss dtype
+        so update's jnp.where keeps both lax.cond branches type-consistent.
         """
         return cls(
             min_delta=float(min_delta),
@@ -497,10 +561,11 @@ class _ScanEarlyStopping:
         )
 
     def update(self, metric):
-        # `jnp.isinf(best)` handles the first-call case (best starts at inf)
-        # where `best - metric > min_delta` would be inf - finite = inf > x,
-        # which is true anyway — but we keep the explicit isinf for parity
-        # with flax's reference implementation.
+        """
+        Advance the early-stopping state given a new validation metric,
+        flipping should_stop once patience is exhausted.
+        """
+        # isinf handles the first call where best_metric starts at inf
         improved = (jnp.isinf(self.best_metric)
                     | (self.best_metric - metric > self.min_delta))
         new_best = jnp.where(improved, metric, self.best_metric)
@@ -533,10 +598,9 @@ _TRAIN_PMAP_CACHE: Dict = {}
 
 def _build_fused_train_pmap(model, model_type, num_devices, num_epochs, dispatch):
     """
-    Construct a `(pmap | jit(vmap) | serial)(scan_over_epochs)` wrapper for
-    one `(architecture, model_type, num_devices, num_epochs, dispatch)`
-    signature.  Cached in `_TRAIN_PMAP_CACHE`.  Dispatch mode comes from
-    the top-level `cfg.dispatch` knob.
+    Build a pmap/vmap/serial wrapper around the epoch scan for one
+    (architecture, model_type, num_devices, num_epochs, dispatch) signature,
+    cached in _TRAIN_PMAP_CACHE.
     """
     if model_type == 'regressor':
         grad_fn = _grad_fn_regressor
@@ -555,6 +619,8 @@ def _build_fused_train_pmap(model, model_type, num_devices, num_epochs, dispatch
                     jnp.expand_dims(y_pred, axis=1), valid_y,
                 )
             )
+        elif getattr(model, 'output_activation', 'identity') == 'sigmoid':
+            out = _bce(valid_y, y_pred)
         else:
             out = jnp.mean(jnp.square(valid_y - y_pred))
         return out.astype(loss_dtype)
@@ -563,22 +629,9 @@ def _build_fused_train_pmap(model, model_type, num_devices, num_epochs, dispatch
 
     def fused_train(state, minibatch, valid_X, valid_y, init_es):
         """
-        Full training loop fused into one pmap dispatch.
-
-        Args (in-axes):
-          state      : TrainState, broadcast  (in_axes=None).
-          minibatch  : {X,y} dict, sharded    (in_axes=0).
-          valid_X    : broadcast              (in_axes=None).
-          valid_y    : broadcast              (in_axes=None).
-          init_es    : initial _ScanEarlyStopping, broadcast.
-
-        Returns (stacked along pmap axis 0):
-          final_state, losses[num_epochs], val_losses[num_epochs],
-          final_es, converged_at_epoch.
-
-        `converged_at_epoch` is set on the step where `should_stop` first
-        flips True, else stays at `num_epochs`.  Used host-side to trim
-        the loss history.
+        Run the full epoch loop in one dispatch, returning the final state,
+        per-epoch losses, early-stopping state and the epoch where it
+        converged (else num_epochs).
         """
 
         def epoch_body(carry, epoch_idx):
@@ -592,7 +645,7 @@ def _build_fused_train_pmap(model, model_type, num_devices, num_epochs, dispatch
                 val_loss = _val_loss(new_state.params, valid_X, valid_y)
                 new_es = es.update(val_loss)
                 new_done = done | new_es.should_stop
-                # Freeze converged_at at the first step where we flip to done.
+                # freeze converged_at at the first step we flip to done
                 just_converged = new_done & (~done)
                 new_converged_at = jnp.where(just_converged, epoch_idx, converged_at)
                 return (
@@ -634,8 +687,7 @@ def _build_fused_train_pmap(model, model_type, num_devices, num_epochs, dispatch
             in_axes=in_axes, out_axes=out_axes,
         ))
     if dispatch == "serial":
-        # Length-1 vmap per iter keeps `lax.pmean(..., "device")` valid;
-        # the for-loop runs Python-side so prints / pdb work per shard.
+        # length-1 vmap per iter keeps lax.pmean(..., "device") valid; loop runs host-side
         inner = jax.jit(jax.vmap(
             fused_train, axis_name="device",
             in_axes=in_axes, out_axes=out_axes,
@@ -676,15 +728,11 @@ def _get_or_build_train_pmap(model, model_type, num_devices, num_epochs, dispatc
 
 def train(cfg, model, data, valid_data, model_type):
     """
-    Train one NN with device-parallel minibatch SGD + early stopping.
-
-    Uses a single pmap(scan) dispatch for the whole training run — the
-    pmap is cached in `_TRAIN_PMAP_CACHE` and reused across K-fold
-    retraining of the same architecture.  See the block comment at the
-    top of this module for the design rationale.
+    Train one NN with device-parallel minibatch SGD and early stopping via
+    a single cached pmap(scan) dispatch, returning the trained params,
+    model and loss history.
     """
-
-    # define optimizer
+    # define optimiser
     if cfg.decaying_lr_and_clip_param:
         lr = optax.linear_schedule(
             init_value=cfg.learning_rate,
@@ -704,7 +752,7 @@ def train(cfg, model, data, valid_data, model_type):
         tx=tx,
     )
 
-    # Create minibatches — host side, once per training run.
+    # create minibatches host-side, once per training run
     num_devices = jax.local_device_count('cpu')
     minibatches = create_minibatches(data, cfg.batch_size, num_devices)
     minibatches = minibatch_reshape(minibatches)
@@ -716,16 +764,13 @@ def train(cfg, model, data, valid_data, model_type):
         dtype=jnp.asarray(0.0).dtype,
     )
 
-    # Cached training-dispatch — compiles once per
-    # (arch, model_type, device_count, num_epochs, dispatch).
-    # Defaults to 'pmap' for back-compat with existing training sub-configs;
-    # callers that propagate the top-level `cfg.dispatch` can pass it here.
+    # cached dispatch; defaults to 'pmap', overridable via cfg.dispatch
     fused_train = _get_or_build_train_pmap(
         model, model_type, actual_num_devices, int(cfg.num_epochs),
         str(getattr(cfg, "dispatch", "pmap")),
     )
 
-    # One dispatch for the whole training run.
+    # one dispatch for the whole training run
     state_rep, losses, val_losses, es_rep, converged_at_rep = fused_train(
         state,
         minibatches,
@@ -734,7 +779,7 @@ def train(cfg, model, data, valid_data, model_type):
         init_es,
     )
 
-    # Unreplicate once; pmap replicas are identical (pmean'd grads ⇒ identical state).
+    # unreplicate once; pmean'd grads leave all pmap replicas identical
     state = jax_utils.unreplicate(state_rep)
     converged_at = int(jax_utils.unreplicate(converged_at_rep))
     num_epochs = int(cfg.num_epochs)
@@ -752,7 +797,6 @@ def train(cfg, model, data, valid_data, model_type):
         )
 
     if model_type == 'classifier':
-        # get classifier performance
         def model_predict(params, data_points):
             return jnp.argmax(model.apply(params, data_points), axis=-1)
 
@@ -760,7 +804,7 @@ def train(cfg, model, data, valid_data, model_type):
             return jnp.mean(jnp.equal(model_predict(params, data_points), labels.reshape(-1,)))
 
         accuracy = score(state.params, data.X, data.y)
-        # get classifier false positive rates
+        # confusion-matrix entries for false-positive diagnostics
         try:
             tn, fp, fn, tp = confusion_matrix(y_pred=jnp.astype(model_predict(state.params, data.X), jnp.int32), y_true=jnp.astype(data.y, jnp.int32).squeeze()).ravel()
         except:
@@ -789,13 +833,16 @@ def train(cfg, model, data, valid_data, model_type):
 
 
 def get_serial_state_params(params):
+    """Strip the leading pmap device axis from each replicated parameter."""
     return {'params': {layer: {mod: val[0] for mod,val in layer_v.items() } for layer, layer_v in params['params'].items()}}
 
 
 def minibatch_reshape(batches):
+    """Stack equal-sized minibatches into a leading device axis for pmap."""
     return {'X': jnp.vstack([batch['X'].reshape(1,-1,batch['X'].shape[-1]) for batch in batches if batch['X'].shape[0]==batches[0]['X'].shape[0]]), 'y': jnp.vstack([batch['y'].reshape(1,-1,batch['y'].shape[-1]) for batch in batches if batch['X'].shape[0]==batches[0]['X'].shape[0]])}
 
 def create_minibatches(dataset, batch_size, num_devices=1):
+    """Split a Dataset into at most num_devices minibatches for device sharding."""
     num_examples = dataset.X.shape[0]
     num_batches = num_examples // batch_size
 
@@ -816,7 +863,7 @@ def create_minibatches(dataset, batch_size, num_devices=1):
         minibatches.append(minibatch)
 
 
-    # If there are leftover examples, create an additional mini-batch
+    # leftover examples form an extra minibatch
     if num_examples % batch_size != 0:
         if num_devices == 1:
             start = num_batches * batch_size
@@ -833,30 +880,28 @@ def create_minibatches(dataset, batch_size, num_devices=1):
 
 
 def _ann_mapp(y):
-    # Match the original `query_unstandardised_classifier` mapping:
-    #   0.5 - softmax(y)[0]
-    # `<= 0 ⇒ feasible` convention.  The earlier logit-difference variant
-    # was a workaround for the macOS XLA-CPU compile crash; that crash has
-    # since been fixed (the off-by-one in `build_ann`'s positional partial
-    # was returning garbage from every surrogate, so the SQP was solving a
-    # nonsense kernel).
+    """Map classifier logits to 0.5 - softmax(y)[0]; <= 0 means feasible."""
     if y.ndim < 2: y = y.reshape(1, -1)
     return jnp.array([0.5]) - softmax(y, axis=-1)[0, 0]
 
 def _ann_forward_std_regressor(params, x, model):
+    """Forward a regressor on already-standardised inputs."""
     if x.ndim < 2: x = x.reshape(1, -1)
     return model.apply(params, x)
 
 def _ann_forward_unstd_regressor(params, x, x_mean, x_std, y_mean, y_std, model):
+    """Forward a regressor on raw inputs, standardising in and de-standardising out."""
     if x.ndim < 2: x = x.reshape(1, -1)
     return model.apply(params, (x - x_mean) / x_std) * y_std + y_mean
 
 def _ann_forward_std_classifier(params, x, model):
+    """Forward a classifier on already-standardised inputs."""
     if x.ndim < 2: x = x.reshape(1, -1)
     if x.shape[0] >= x.shape[1]: x = x.T
     return _ann_mapp(model.apply(params, x))
 
 def _ann_forward_unstd_classifier(params, x, x_mean, x_std, model):
+    """Forward a classifier on raw inputs, standardising before the model."""
     if x.ndim < 2: x = x.reshape(1, -1)
     return _ann_mapp(model.apply(params, (x - x_mean) / x_std))
 
@@ -867,14 +912,15 @@ _ann_forward_unstd_classifier_jit = jit(_ann_forward_unstd_classifier, static_ar
 
 
 def build_ann(cfg, model_data, model_class):
-
-    # Determine the input and output dimensions
+    """
+    Rebuild a serialised ANN and return a jitted predictor that maps raw
+    inputs to de-standardised regressor outputs or classifier scores.
+    """
     x_standardisation = model_data['standardisation_metrics_input']
     x_mean = x_standardisation.mean
     x_std = x_standardisation.std
 
-    # Create the neural network estimator
-    model = NeuralNetworkEstimator(hidden_units=model_data['hidden_units'], output_units=model_data['output_units'], activation_functions=model_data['activation_function'])
+    model = NeuralNetworkEstimator(hidden_units=model_data['hidden_units'], output_units=model_data['output_units'], activation_functions=model_data['activation_function'], output_activation=model_data.get('output_activation', 'identity'))
     params = get_initial_params_serial(jax.random.PRNGKey(0), x_mean.reshape(1,-1), model)
     params = from_bytes(params, model_data['serialized_params'])
 

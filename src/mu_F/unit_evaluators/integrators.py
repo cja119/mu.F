@@ -1,10 +1,7 @@
-""" python files to define integration schemes """
+"""Diffrax-based integration of the case-study ODE dynamics."""
 
-
-# here we will implement dynamics to be used in the case studies
 from typing import List
 
-# stock imports
 import numpy as np
 import matplotlib.pyplot as plt
 import jax
@@ -12,28 +9,21 @@ import jax.numpy as jnp
 from jax import grad, jit, vmap
 import time
 import logging
-# hydra imports
 from omegaconf import DictConfig, OmegaConf
 
-# diffrax imports
 from functools import partial
 import diffrax
 from diffrax import ODETerm, SaveAt, diffeqsolve, DirectAdjoint
 from diffrax import Tsit5
 
-
-# package specific imports 
 from mu_F.unit_evaluators.ode import case_studies
 
 
-def unit_dynamics(design_params, u, aux, decision_dependent, uncertainty_params, cfg, node, graph=None):   
+def unit_dynamics(design_params, u, aux, decision_dependent, uncertainty_params, cfg, node, graph=None):
     """
-    Here we assume that the dynamics are defined by a system of ODEs.
-    This is a general function that assumes initial conditions are defined by input parameters within the extended design space 
-    The design parameters, decision dependent parameters and uncertainty parameters are passed as arguments to the ODE function.
-    As of yet I am not sure how to handle the case where input args provide arguments to the ODE function in a general way. 
-    - NOTE to user, this is a single function which should be relatively easy to redefine to your case if the assumptions above do not hold for your system. 
-
+    Integrate a system of ODEs whose initial conditions are the input args.
+    Design, decision-dependent and uncertainty params are passed to the field;
+    redefine per case study if these assumptions do not hold.
     """
 
     if design_params.ndim < 2:

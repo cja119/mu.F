@@ -1,6 +1,6 @@
-""" define ODE systems that we are interested in characterizing feasibility for """
+"""ODE systems whose feasibility is characterised across the case studies."""
 
-from jax import jit 
+from jax import jit
 import jax.numpy as jnp
 
 
@@ -9,11 +9,9 @@ def serial_mechanism_vc_batch_dynamics_u1(
     t: float, state: jnp.ndarray, parameters: jnp.ndarray
 ):
     """
-    - This case study is from Pound # NOTE for Ekundayo, this is defined to give intuition as to what we need from a dynamics term
-    - dynamics normalised to selection of batch time.
-    - constant volume, batch mode, design variables are Temp. and Batch time
-    - serial reaction mechanism 2A ->_{k1} B ->_{k2} C"""
-    
+    Serial mechanism 2A ->_{k1} B ->_{k2} C, constant volume batch mode.
+    Dynamics normalised to the selected batch time; design vars Temp and tf.
+    """
     # component_concentrations
     Ca = state[0]
     Cb = state[1]
@@ -43,11 +41,9 @@ def serial_mechanism_vc_batch_dynamics_u2(
     t: float, state: jnp.ndarray, parameters: jnp.ndarray
 ):
     """
-    - This case study is from Pound # NOTE for Ekundayo, this is defined to give intuition as to what we need from a dynamics term
-    - dynamics normalised to selection of batch time.
-    - constant volume, batch mode, design variables are Temp. and Batch time
-    - serial reaction mechanism 2A ->_{k1} B ->_{k2} C"""
-    
+    Serial mechanism 2A ->_{k1} B ->_{k2} C, constant volume batch mode.
+    Dynamics normalised to the selected batch time; design vars Temp and tf.
+    """
     # component_concentrations
     Ca = state[0]
     Cb = state[1]

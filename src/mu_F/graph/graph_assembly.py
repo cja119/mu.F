@@ -1,3 +1,4 @@
+"""DAG construction from adjacency matrices and per-graph argument wiring."""
 from abc import ABC
 import networkx as nx
 import numpy as np
@@ -6,20 +7,10 @@ from mu_F.utils import check_requires
 
 
 def _normalise_aux_spec(spec):
-    """Coerce an aux spec to a (count, ids_tuple) pair.
-
-    Accepts either:
-      • int K            — back-compat: "carry the first K aux", expands to aux IDs (0,…,K-1).
-      • list/tuple ints  — explicit list of aux IDs to carry, in canonical order.
-
-    The list form lets different edges into the same successor route different
-    aux IDs to different slots — e.g. edge (a,c)=[0] and edge (b,c)=[1] write
-    to slots 0 and 1 respectively, with no overlap.
-
-    Returns
-    -------
-    count : int                 — len(ids); number of aux slots this spec uses.
-    ids   : tuple[int, ...]     — canonical aux IDs.
+    """
+    Coerce an aux spec (int K or list of IDs) to a (count, ids_tuple) pair.
+    The list form lets different edges into the same successor route distinct
+    aux IDs to distinct slots; int K is the back-compat form for IDs (0,…,K-1).
     """
     if isinstance(spec, (list, tuple)):
         ids = tuple(int(x) for x in spec)
@@ -28,7 +19,16 @@ def _normalise_aux_spec(spec):
     return count, tuple(range(count))
 
 
-class graph_constructor_base(ABC):
+class GraphConstructorBase(ABC):
+    """Base builder wrapping a networkx DAG.
+
+    Holds the configuration and adjacency-derived DiGraph, exposing helpers to
+    attach arbitrary arguments and objects to the graph, its nodes and edges.
+
+    """
+
+    # ---- External Methods ----
+
     def __init__(self, cfg, adjacency_matrix):
         self.cfg = cfg
         self.adjacency_matrix = adjacency_matrix
@@ -40,7 +40,7 @@ class graph_constructor_base(ABC):
 
     def get_graph(self):
         return self.G.copy()
-    
+
     def add_arg_to_graph(self,  arg_name, arg_value):
         self.G.graph[arg_name] = arg_value
         return
@@ -64,11 +64,20 @@ class graph_constructor_base(ABC):
         self.G.edges[i, j][edge_object_name] = edge_object
         return
 
-class graph_constructor(graph_constructor_base):
+class GraphConstructor(GraphConstructorBase):
+    """General DAG constructor for explicit adjacency case studies.
+
+    Extends the base with input/aux argument counting and the per-edge index
+    bookkeeping that maps each predecessor's outputs into a successor's
+    decision vector.
+
+    """
+
+    # ---- External Methods ----
+
     def __init__(self, cfg, adjacency_matrix):
         super().__init__(cfg, adjacency_matrix)
-     
-    
+
     def add_n_input_args(self, n_input_args):
         for (i, j) in self.G.edges:
             self.G.edges[i,j]["n_input_args"] = n_input_args[f'({i},{j})']
@@ -77,15 +86,9 @@ class graph_constructor(graph_constructor_base):
         return
     
     def add_n_aux_args(self, n_aux_args):
-        """Set per-edge and per-node aux counts + aux_ids on the graph.
-
-        Each entry in `n_aux_args` may be:
-          • an int K       — interpreted as "carry the first K aux", i.e. IDs (0, …, K-1).
-          • a list of ints — explicit aux IDs to carry on this edge / register at this node.
-
-        Both forms produce two attributes on the affected edge/node:
-          'n_auxiliary_args' — integer count (length of the ID tuple)
-          'aux_ids'          — tuple of integer aux IDs in canonical order
+        """
+        Set per-edge and per-node aux counts ('n_auxiliary_args') and 'aux_ids'.
+        Each entry may be an int K (IDs 0,…,K-1) or an explicit list of aux IDs.
         """
         for (i, j) in self.G.edges:
             count, ids = _normalise_aux_spec(n_aux_args[f'({i},{j})'])
@@ -100,16 +103,10 @@ class graph_constructor(graph_constructor_base):
         return
 
     def add_input_aux_indices(self):
-        """Compute per-edge aux slot positions in each successor's decision vector.
-
-        In 'global' mode each edge's aux_ids list directly indexes the K global
-        aux slots at the successor (slot positions `n_d + aux_id`).  This lets
-        different edges into the same successor write to different slots:
-        edge with aux_ids=[0] writes slot 0; edge with aux_ids=[1] writes slot 1.
-
-        Back-compat: when `aux_ids = (0, 1, …, K-1)` (the int-form default), the
-        produced slot positions are `(n_d, n_d+1, …, n_d+K-1)` — identical to
-        the legacy `[n_d + i for i in range(count)]` formulation.
+        """
+        Compute per-edge input and aux slot positions in each successor's
+        decision vector. In 'global' mode aux_ids index the shared aux slots;
+        in 'local' mode each edge's aux block is appended after its inputs.
         """
         for node in self.G.nodes:
             n_d = 0
@@ -141,7 +138,17 @@ class graph_constructor(graph_constructor_base):
             self.G.edges[i,j][arg_name] = arg_value
         return
 
-class markov_graph_constructor(graph_constructor):
+class MarkovGraphConstructor(GraphConstructor):
+    """Constructor for the linear Markov-chain graph topology.
+
+    Builds a chain adjacency matrix from the node count and broadcasts a single
+    shared argument spec across every node and edge, so every stage of the chain
+    is wired identically.
+
+    """
+
+    # ---- External Methods ----
+
     def __init__(self, cfg):
         adjacency_matrix = self._build_adjacency_matrix(cfg)
         super().__init__(cfg, adjacency_matrix)
@@ -149,7 +156,6 @@ class markov_graph_constructor(graph_constructor):
     def get_graph(self):
         return self.G.copy()
 
-    
     def add_n_input_args(self, n_input_args):
         for (i, j) in self.G.edges:
             self.G.edges[i,j]["n_input_args"] = n_input_args
@@ -158,11 +164,10 @@ class markov_graph_constructor(graph_constructor):
         return
     
     def add_n_aux_args(self, n_aux_args):
-        """Markov variant — every node and every edge has the same aux spec.
-
-        Pulls the spec from `n_aux_args['(0,1)']` (edge) and `n_aux_args['node_0']`
-        (node), broadcasts it across every edge / node in the chain. Each spec
-        may be int K (back-compat: aux_ids=(0,…,K-1)) or a list of aux IDs.
+        """
+        Markov variant: pull one edge spec and one node spec, then broadcast
+        them across every edge and node in the chain. Each spec may be int K
+        (aux_ids=(0,…,K-1)) or an explicit list of aux IDs.
         """
         if hasattr(n_aux_args, 'keys'):
             edge_spec = n_aux_args.get('(0,1)', 0)
@@ -209,6 +214,8 @@ class markov_graph_constructor(graph_constructor):
             self.G.edges[i,j][arg_name] = arg_value
         return None
 
+    # ---- Private Methods ----
+
     def _build_adjacency_matrix(self, cfg):
         N = cfg.case_study.num_nodes
         adjacency_matrix = np.zeros((N, N), dtype=int)
@@ -217,10 +224,9 @@ class markov_graph_constructor(graph_constructor):
 
 def case_study_uncertain_parameters_dummy(G):
     """
-    Add uncertain parameters to the nodes of the graph
-    :param G: The graph
+    Attach dummy best-estimate and sampled uncertain parameters to each node.
     """
-    parameter_be = 1.0 # best estimate
+    parameter_be = 1.0  # best estimate
     p_sdev = 0. #p.sqrt(0.3)
     np.random.seed(1)
     n_samples_p = 1
@@ -236,6 +242,9 @@ def case_study_uncertain_parameters_dummy(G):
 
 
 def load_dag_from_adjacency_matrix(adj_matrix):
+    """
+    Build a networkx DiGraph from a binary adjacency matrix.
+    """
     G = nx.DiGraph()
     num_nodes = len(adj_matrix)
     G.add_nodes_from(range(num_nodes))

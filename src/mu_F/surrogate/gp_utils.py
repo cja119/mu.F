@@ -1,4 +1,4 @@
-""" no GP utils implemented yet """
+"""Placeholder for Gaussian process surrogate utilities (not yet implemented)."""
 
 def train():
     return None

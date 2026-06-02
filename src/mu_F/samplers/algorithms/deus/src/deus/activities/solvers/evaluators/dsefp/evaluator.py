@@ -120,6 +120,13 @@ class EFPEvaluator(ExpensiveFunctionEvaluator):
         g_mat_list = self._eval_options['ufunc_ptr'](d_mat, p_mat)
         n_model_evals = d_num * p_num
 
+        # Direct-probability: the model already returns P_feas(d) per design.
+        if self._eval_options.get('direct_probability', False):
+            efp_values = [float(np.ravel(g)[0]) for g in g_mat_list]
+            if not must_store_g:
+                g_mat_list = []
+            return efp_values, n_model_evals, g_mat_list
+
         efp_values = [0.0]*d_num
         for i, g_mat in enumerate(g_mat_list):
             efp = 0.0

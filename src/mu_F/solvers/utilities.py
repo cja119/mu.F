@@ -1,27 +1,11 @@
-"""
-Solver-layer utilities.
-
-After Phase 3f this module is the common scaffolding the septal backend and
-the evaluator layer both reach for:
-
-  - `determine_batches` / `create_batches`  — pmap shard sizing
-  - `generate_initial_guess`                — Sobol sequence inside bounds
-  - `construct_model`                        — surrogate rebuild from a
-                                               serialised params dict (used by
-                                               the checkpoint-resume fallback
-                                               in `evaluators.post_process`)
-
-Everything else (casadify bridges, ray batch helpers, multi-start with
-penalty screens, IPOPT-solution unpackers) was legacy plumbing for the
-deleted CasADi + IPOPT stack.
-"""
+"""Solver-layer utilities: batch sizing, Sobol initial guesses, surrogate rebuild."""
 from __future__ import annotations
 
 import numpy as np
 import jax.numpy as jnp
 from scipy.stats import qmc
 
-from mu_F.surrogate.surrogate import surrogate_reconstruction
+from mu_F.surrogate.surrogate import SurrogateReconstruction
 
 
 __all__ = [
@@ -34,8 +18,8 @@ __all__ = [
 
 def determine_batches(n_starts, num_workers):
     """
-    Chunk `n_starts` items into batches sized `num_workers`; the remainder
-    (if any) goes into a final short batch.  Returns `(batch_sizes, cumsum)`.
+    Chunk n_starts items into batches sized num_workers, with any remainder
+    in a final short batch.
     """
     num_batches = n_starts // num_workers
     batch_size = [num_workers for _ in range(num_batches)]
@@ -45,7 +29,9 @@ def determine_batches(n_starts, num_workers):
 
 
 def create_batches(batch_size, object_iterable):
-    """Split `object_iterable` along its leading axis according to `batch_size`."""
+    """
+    Split object_iterable along its leading axis according to batch_size.
+    """
     cumsum = np.cumsum(batch_size) - batch_size[0]
     return [
         object_iterable[cumsum[i] : cumsum[i] + batch_size[i]]
@@ -55,10 +41,8 @@ def create_batches(batch_size, object_iterable):
 
 def generate_initial_guess(n_starts, n_d, bounds, seed=None):
     """
-    Draw `n_starts` scrambled Sobol points inside the given box bounds.
-
-    `n_d` is inferred from `bounds[0]` — kept as a positional arg only for
-    back-compat with callers that also pass it explicitly.
+    Draw n_starts scrambled Sobol points inside the given box bounds.
+    n_d is inferred from bounds[0]; the positional arg is kept for back-compat.
     """
     n_d = len(bounds[0])
     lower_bound = bounds[0]
@@ -70,13 +54,11 @@ def generate_initial_guess(n_starts, n_d, bounds, seed=None):
 def construct_model(problem_data, cfg, supervised_learner: str,
                     model_type: str, model_surrogate: str):
     """
-    Rebuild a live surrogate callable from the serialised weights dict.
-
+    Rebuild a live Surrogate callable from the serialised weights dict.
     Only reached on checkpoint-resume paths where a pickle has dropped the
-    live callable — normal runs read the live callable off the graph
-    directly.
+    live callable; normal runs read it off the graph directly.
     """
-    return surrogate_reconstruction(
+    return SurrogateReconstruction(
         cfg,
         (supervised_learner, model_type, model_surrogate),
         problem_data,

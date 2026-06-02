@@ -1,10 +1,10 @@
+"""Regressor data-processing helpers for post-process estimators."""
+
 
 def estimator_regressor_data_function(candidates, constraints, desired_node_index):
     """
-    A function to process regressor data for convex estimator
-    :param constraints: The constraint values
-    :param candidates: The candidate points
-    :return: The processed edge data
+    Process regressor data for a convex estimator: builds the input/output
+    pairs used to fit the estimator at the desired node.
     """
     inputs = candidates[:,:-1]
     outputs = (candidates[:,-1].reshape(-1,1) - constraints[desired_node_index].reshape(-1,1))**2

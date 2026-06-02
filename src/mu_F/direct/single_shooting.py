@@ -1,8 +1,4 @@
-"""
-Classes for solving the problem as a monolithic NLP by single shooting
-"""
-
-
+"""Solves the problem as a monolithic NLP by single shooting."""
 import logging
 
 import pandas as pd
@@ -16,6 +12,16 @@ from mu_F.direct.utils import *
 
 
 class SingleShooting(SolveDirect):
+    """Monolithic NLP solver using a single-shooting transcription.
+
+    Composes each node's forward evaluation through the graph into one
+    decision vector of aux and design variables, then hands the assembled
+    problem to septal's monolithic SQP solver.
+
+    """
+
+    # ---- External Methods ----
+
     def __init__(self, cfg, G):
         super().__init__(cfg, G)
         self._solver = septal_monolithic_solver
@@ -23,13 +29,10 @@ class SingleShooting(SolveDirect):
             cfg.formulation.lower() == "deterministic"
         ), "Stochastic optimistaion is unsupported. Run in deterministic setting"
 
-
-    # --- Public Methods --- #
-
     def solve(self):
         """
-        Solves the problem using the loaded solver.  Returns septal's native
-        `SQPResult` unchanged — no adapter tuple.
+        Solve the problem with the loaded solver and return septal's
+        native SQPResult unchanged.
         """
         from dataclasses import replace as dc_replace
 
@@ -64,11 +67,12 @@ class SingleShooting(SolveDirect):
         self._log_outputs(result)
         return result
 
-    # --- Private Methods --- #
-    
+    # ---- Private Methods ----
+
     def _prepare_model(self, graph):
         """
-        Prepare the model for solving. We will build the model to be solved as a monolithic NLP.
+        Assemble the monolithic NLP (objective, constraints, bounds)
+        from the node graph for the single-shooting transcription.
         """
 
         constraints = []
@@ -101,11 +105,7 @@ class SingleShooting(SolveDirect):
 
             # ------- Constraint Functions -------
             cons = list(graph.nodes[node]["constraints"].copy())
-
-            # Then process the constraint functions
             cons_fns = process_constraints(cons, composed_eval[node], self.pos_feas, self.cfg)
-
-            # Extending the constraint functions with new funcitons
             constraints.extend(cons_fns)
 
             # ------- Objective Function -------
@@ -132,20 +132,26 @@ class SingleShooting(SolveDirect):
         return problem_data
     
     def _log_outputs(self, result):
-        """Hand the septal `SQPResult` to the shared logger."""
+        """
+        Hand the septal SQPResult to the shared logger.
+        """
         return log_outputs(self.cfg, self.G, result, bool(result.success))
 
     def _get_solution(self, result):
-        """Return `(decision_variables, objective)` straight off the SQPResult."""
+        """
+        Return the decision variables and objective off the SQPResult.
+        """
         return result.decision_variables, result.objective
 
     def _get_status(self, result):
-        """`1` if septal reports converged KKT, else `0`."""
+        """
+        Return 1 if septal reports converged KKT, else 0.
+        """
         return 1 if bool(result.success) else 0
 
     def _load_solver(self):
         """
-        Loads in solver object
+        Return the loaded monolithic solver.
         """
         return self._solver
         

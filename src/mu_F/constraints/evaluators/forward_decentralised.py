@@ -1,69 +1,4 @@
-"""
-Decentralised forward coupling constraint evaluator.
-
-Single joint NLP per node — every predecessor's decision vector is
-concatenated into one big `x`:
-
-    x_concat = concat([x_pred_1, x_pred_2, ...])
-
-    min   -classifier_node(hstack([v, fwd_1(x_1), fwd_2(x_2), ...])) - node_backoff
-              where v   = this sample's measured input vector (parametric `p`)
-                    fwd_i = pred_i's forward surrogate applied to x's slice for pred i
-
-    s.t.  classifier_pred_i(x_i) + backoff_i  <=  0   for every predecessor
-          lb_concat <= x_concat <= ub_concat
-
-Contrasts with `forward.py`:
-
-  - `forward.py` solves one **independent** NLP per predecessor, each with a
-    hard equality `forward_surrogate_i(x_i) = target_i`.
-  - This file solves one **joint** NLP over all predecessors together.  The
-    node classifier appears as the objective (evaluated on stacked surrogate
-    outputs alongside `v`).  Per-pred classifiers are inequality constraints.
-
-### Joint integer problem
-
-When integer design dims live in `cfg.case_study.design_domain` (one
-position list shared across nodes) or when one or more classifiers are
-K-head (`rejector='sumb-xmeans'`), `IntegerProblem` is built **jointly**:
-
-  - `design_dims`  — one `DesignIntegerDim` per (pred, integer dim).  Slots
-    are global positions in the concatenated full vector (pred offset +
-    local dim position).
-  - `structural_domains` — concatenation of every pred's K-head binaries,
-    then the node's K-head binaries (if multi-head).
-  - `sos1_groups`        — one SOS1 group per multi-head classifier
-    (preds first, node last).
-  - `linear_constraints` — one Σ=1 per multi-head classifier.
-
-`feasible_assignments()` enumerates the Cartesian product of every per-pred
-integer × every per-pred K-head × the node's K-head; SOS1 filtering keeps
-only the K^n_classifiers one-hot rows.
-
-### Parametric tail layout
-
-`p_aug` is shared between objective and constraint:
-
-    p_aug = [ v (n_y_node) | int_values (n_int_total) | head_onehots (n_heads_total) ]
-
-  - `v`             — node's measured input for this sample (the target).
-  - `int_values`    — integer design values, concatenated across preds in
-                      iteration order.
-  - `head_onehots`  — head selector one-hots, concatenated across preds
-                      then the node.
-
-The objective and constraint hand-roll their reconstruction of each pred's
-full vector instead of going through `mask_surrogate` — the node-side
-hstacking of surrogate outputs is too custom to fit `mask_surrogate`'s
-single-callable shape, and constraint-side requires per-pred slicing of
-the concatenated `x_red`.
-
-### Evaluate path
-
-`evaluate(inputs, aux)` vmaps `solve_integer_nlp` over the sample axis —
-each sample gets its own `v`, the spec is shared.  `aux` is unused (each
-pred's aux slots live inside its own slice of the concat decision vector).
-"""
+"""Decentralised forward evaluator: one joint NLP over all predecessors per node."""
 from __future__ import annotations
 
 import jax
@@ -106,29 +41,11 @@ def _resolve_classifier(cfg, graph, key):
 
 def _build_joint_integer_problem(design_domain, pred_offsets_in_concat,
                                   pred_n_heads, n_heads_node):
-    """Concatenated per-pred design integers + per-classifier K-head SOS1 selectors.
-
-    Parameters
-    ----------
-    design_domain         : `cfg.case_study.design_domain` list (per-position
-                            entries: `'real'` or a tuple of allowed ints).
-    pred_offsets_in_concat: start position of each pred's full slice in
-                            the concatenated decision vector.  Length n_preds.
-    pred_n_heads          : K per predecessor (0 = single-head).  Length n_preds.
-    n_heads_node          : K for the node classifier (0 = single-head).
-
-    Layout in `feasible_assignments()` rows:
-
-        [ pred_0_int_dim_0, pred_0_int_dim_1, …,
-          pred_1_int_dim_0, …,
-          | pred_0_head_0, … pred_0_head_K0,
-          pred_1_head_0, …,
-          node_head_0, … node_head_Kn ]
-
-    Each SOS1 group + Σ=1 constraint is *local* to one classifier — the
-    coeff vector zeroes out other classifiers' binaries.
     """
-    # ── Design integers ──
+    Build the joint integer problem: concatenated per-pred design integers
+    plus one local SOS1 K-head selector group (and Σ=1) per classifier.
+    """
+    # Design integers.
     design_dims = []
     int_dims_local, _ = resolve_integer_spec(design_domain)
     for offset in pred_offsets_in_concat:
@@ -138,7 +55,7 @@ def _build_joint_integer_problem(design_domain, pred_offsets_in_concat,
                 domain=tuple(design_domain[d_local]),
             ))
 
-    # ── Structural (K-head) selectors: preds first, node last ──
+    # Structural (K-head) selectors: preds first, node last.
     all_n_heads = list(pred_n_heads) + [int(n_heads_node)]
     n_total_struct = int(sum(all_n_heads))
 
@@ -166,9 +83,9 @@ def _build_joint_integer_problem(design_domain, pred_offsets_in_concat,
     )
 
 
-# =============================================================================
+# ---------------------------------------------------------------------------
 # ForwardDecentralisedEvaluator — one instance per (cfg, graph, node)
-# =============================================================================
+# ---------------------------------------------------------------------------
 
 class ForwardDecentralisedEvaluator(BaseEvaluator):
     """Stateful decentralised forward evaluator.
@@ -177,7 +94,11 @@ class ForwardDecentralisedEvaluator(BaseEvaluator):
     measured-input vector `v` is threaded as the parametric tail's leading
     `n_y_node` slots; integer values and head one-hots fill the rest of
     `p_aug`.
+
     """
+
+    # ---- External Methods ----
+
     _eval_name = 'forward_decentralised'
 
     def __init__(self, cfg, graph, node):
@@ -186,18 +107,22 @@ class ForwardDecentralisedEvaluator(BaseEvaluator):
         super().__init__(cfg, graph, node)
         self._thread = self.evaluate
 
+    # ---- Private Methods ----
+
     def _keys(self) -> list:
+        """Single joint sub-problem key (the node itself) when it has predecessors."""
         if self.node is None or not list(self.graph.predecessors(self.node)):
             return []
         return [self.node]
 
     def _build_for_key(self, key) -> None:
+        """Build the joint NLP spec over all predecessors' concatenated vectors."""
         preds = list(self.graph.predecessors(key))
         n_preds = len(preds)
         n_aux = int(self.graph.graph['n_aux_args'])
         design_domain = self.cfg.case_study.get('design_domain', None)
 
-        # ── Per-pred geometry ──
+        # Per-pred geometry.
         pred_full_dims = [
             int(self.graph.nodes[p]['n_design_args'])
             + int(self.graph.nodes[p]['n_input_args'])
@@ -223,7 +148,7 @@ class ForwardDecentralisedEvaluator(BaseEvaluator):
         cont_slice_ends   = [int(e) for e in np.cumsum(pred_cont_dims)]
         n_d_cont = int(sum(pred_cont_dims))
 
-        # ── Multi-head resolution per pred + node ──
+        # Multi-head resolution per pred + node.
         pred_n_heads = []
         pred_classifiers = []
         for p in preds:
@@ -236,7 +161,7 @@ class ForwardDecentralisedEvaluator(BaseEvaluator):
         head_offsets  = [0] + [int(o) for o in np.cumsum(pred_n_heads)]
         node_head_offset = int(sum(pred_n_heads))
 
-        # ── Forward surrogates + backoffs ──
+        # Forward surrogates + backoffs.
         pred_forward_sg = [self.graph.edges[p, key]['forward_surrogate'] for p in preds]
         pred_backoffs = [
             jnp.sum(jnp.asarray(self.graph.nodes[p]['constraint_backoff']))
@@ -244,7 +169,7 @@ class ForwardDecentralisedEvaluator(BaseEvaluator):
         ]
         node_backoff = jnp.sum(jnp.asarray(self.graph.nodes[key]['constraint_backoff']))
 
-        # ── Continuous-only concat bounds (drop integer slots per pred) ──
+        # Continuous-only concat bounds (drop integer slots per pred).
         lb_parts, ub_parts = [], []
         for i, p in enumerate(preds):
             decision_bounds = self.graph.nodes[p]['extendedDS_bounds'].copy()
@@ -256,7 +181,7 @@ class ForwardDecentralisedEvaluator(BaseEvaluator):
         ub = jnp.concatenate(ub_parts)
         bounds = [lb, ub]
 
-        # ── Probe forward surrogate output widths ──
+        # Probe forward Surrogate output widths.
         def _fwd_width(i):
             decision_bounds = self.graph.nodes[preds[i]]['extendedDS_bounds'].copy()
             lb_full = jnp.asarray(decision_bounds[0]).reshape(-1)
@@ -267,8 +192,7 @@ class ForwardDecentralisedEvaluator(BaseEvaluator):
         n_y_node = int(sum(fwd_widths))                     # parametric tail leading-slice width
         n_params = n_y_node + n_int_total + n_heads_total
 
-        # ── Closure helpers ──
-        # Hoist Python lists into JAX-friendly form once at build time.
+        # Closure helpers: hoist Python lists into JAX-friendly form once.
         pred_cont_idx_jnp = [jnp.asarray(c) for c in pred_cont_indices]
         pred_int_idx_jnp  = [jnp.asarray(c) for c in pred_int_indices]
 
@@ -358,17 +282,12 @@ class ForwardDecentralisedEvaluator(BaseEvaluator):
         )
         self.n_y[key] = n_y_node
 
-    # ------------------------------------------------------------------
-    # Evaluate — vmap over samples
-    # ------------------------------------------------------------------
+    # ---- External Methods ----
 
     def evaluate(self, inputs, aux):
-        """Solve the joint decentralised NLP for every sample.
-
-        Returns `evaluations` of shape `(N_samples, 1)` — `classifier_node(x*)
-        + node_backoff` (positive = feasible — sign flipped at the return,
-        matching legacy).  SQP convergence flags are not returned; they're
-        recorded internally via `BaseEvaluator._record_sqp_outcome`.
+        """
+        Solve the joint decentralised NLP for every sample (vmap over samples).
+        Returns `(N_samples, 1)`, sign flipped so positive = feasible.
         """
         key = self.node
         if self._keys() == []:
@@ -384,28 +303,26 @@ class ForwardDecentralisedEvaluator(BaseEvaluator):
         else:
             ys = jnp.zeros((inputs2d.shape[0], n_y)).at[:, :n_raw].set(inputs2d)
 
-        # Module-level batched solver, one cached compiled program per
-        # spec.  Per-sample (not per-theta) here but the vmap structure
-        # is identical — outer batch axis on ys, spec held static.
+        # Batched solver, one cached compiled program per spec.
         per_sample = solve_integer_nlp_batched(self.specs[key], ys)
         self._record_sqp_outcome(
             viable_flags=per_sample.success,
             converged_flags=per_sample.kkt_converged,
             node_label=f"forward_dec node={self.node}",
         )
-        # objective stored as `-classifier - backoff` (minimised);
-        # negate at return so positive = feasible (legacy convention).
+        # objective stored as `-classifier - backoff`; negate so positive = feasible.
         return (-per_sample.objective).reshape(-1, 1)
 
 
-# =============================================================================
+# ---------------------------------------------------------------------------
 # Evaluator cache + top-level entry point
-# =============================================================================
+# ---------------------------------------------------------------------------
 
 _FWDDEC_EVALUATOR_CACHE: dict = {}
 
 
 def _get_evaluator(cfg, graph, node) -> ForwardDecentralisedEvaluator:
+    """Cached evaluator lookup keyed on graph id and node."""
     key = (id(graph), node)
     evaluator = _FWDDEC_EVALUATOR_CACHE.get(key)
     if evaluator is None:
@@ -415,10 +332,8 @@ def _get_evaluator(cfg, graph, node) -> ForwardDecentralisedEvaluator:
 
 
 def forward_constraint_decentralised_evaluator(inputs, aux, cfg, graph, node):
-    """Drop-in replacement for the legacy entry point.
-
-    Sample-batched via `jax.vmap` inside `evaluate`; no pmap layer (this
-    evaluator is typically called on modest batches — add pmap if profiling
-    shows the inner solve is the hot path).
+    """
+    Top-level decentralised forward entry point, sample-batched inside
+    `evaluate` (no pmap layer).
     """
     return _get_evaluator(cfg, graph, node).evaluate(inputs, aux)

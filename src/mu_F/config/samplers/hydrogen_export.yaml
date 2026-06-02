@@ -3,10 +3,16 @@ target_reliability: 1.
 unit_wise_target_reliability: 1.
 deus:
   activity_type: 'dsc'
+  # Probabilistic only: hand DEUS P_feas(d) straight from the probability_map
+  # surrogate (via model.get_probability) instead of letting DEUS aggregate
+  # per-scenario constraints into the EFP itself.  Requires
+  # surrogate.probability_map and formulation: probabilistic.
+  direct_probability: false
 
 notion_of_feasibility: 'positive'
 ku_approximation: 'box'
 vol_scale: 0.05
+design_expansion: 0.0   # decision-dim sampling-box expansion (fraction of range; 0 = off)
 
 pmap_batch: 100  # samples per pmap/vmap dispatch in evaluate_subproblem_batch
 

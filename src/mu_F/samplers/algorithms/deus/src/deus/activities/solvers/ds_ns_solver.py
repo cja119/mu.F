@@ -132,7 +132,8 @@ class DesignSpaceSolverUsingNS(Subject):
         if eval_method == "serial":
             eval_options = {
                 'ufunc_ptr': score_eval["constraints_func_ptr"],
-                'store_constraints': score_eval["store_constraints"]
+                'store_constraints': score_eval["store_constraints"],
+                'direct_probability': score_eval.get("direct_probability", False),
             }
 
         elif eval_method == "mppool":
@@ -166,7 +167,8 @@ class DesignSpaceSolverUsingNS(Subject):
         if eval_method == "serial":
             eval_options = {
                 'ufunc_ptr': efp_eval["constraints_func_ptr"],
-                'store_constraints': efp_eval["store_constraints"]
+                'store_constraints': efp_eval["store_constraints"],
+                'direct_probability': efp_eval.get("direct_probability", False),
             }
 
         elif eval_method == "mppool":

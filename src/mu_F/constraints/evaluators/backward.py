@@ -1,36 +1,4 @@
-"""
-Backward coupling constraint evaluator (box-only feasibility check).
-
-For each successor of `node`, solves
-
-    min  classifier_succ(x, succ_input)       (live-set feasibility score)
-    s.t. lb <= x <= ub                        (reduced box; no general constraints)
-
-where `x` is the successor's reduced (continuous-only) decision vector and
-`succ_input` is the current node's output slice feeding that edge, threaded
-as the parametric tail `p`.  Multi-head classifiers (SOS1 active head) are
-routed via `mask_surrogate` with the right aggregator.
-
-Two modes, decided at construction from
-`graph.graph['solve_post_processing_problem']`:
-
-  - **node-local** (`_keys() = list(successors(node))`):  per-successor
-    `IntegerNLPSpec`.  Theta axis is handled by an outer `vmap` — trivially
-    `n_theta = 1` in deterministic settings but kept explicit (no hidden
-    axis drop) for shape consistency with CTG / probability.
-
-  - **graph-wide** (`_keys() = [None]`):  single `IntegerNLPSpec` over the
-    graph-level decision space with `post_process_lower_classifier` as the
-    (negated) objective.  Single solve at evaluate time — no theta axis at
-    this layer.
-
-Standard Sobol + SQP-polish multi-start lives inside `solve_integer_nlp`'s
-`EnumerationBackend`: per integer assignment, the screener scores every
-Sobol pool point, the top-n_starts become warm-starts, and septal's SQP
-polishes from each.  In the box-only case here the screener is the bare
-objective (`build_penalty_screener(obj, None, …)` short-circuits the
-penalty term when there's no constraint).
-"""
+"""Backward coupling constraint evaluator (box-only successor feasibility check)."""
 from __future__ import annotations
 
 import jax
@@ -64,9 +32,8 @@ from mu_F.solvers.mixed_integer import resolve_integer_spec
 __all__ = ["BackwardEvaluator", "backward_constraint_evaluator"]
 
 
-# Local copy of the multi-head resolver — duplicated in current.py and
-# cost_to_go.py for the same reason (avoiding import cycles between
-# sibling evaluator modules).
+# Local copy of the multi-head resolver — duplicated across sibling
+# evaluator modules to avoid import cycles.
 def _resolve_classifier(cfg, graph, key):
     is_multihead = (
         cfg.samplers.ns.get('rejector', '') == 'sumb-xmeans'
@@ -78,18 +45,22 @@ def _resolve_classifier(cfg, graph, key):
     return (0, graph.nodes[key]['classifier'])
 
 
-# =============================================================================
+# ---------------------------------------------------------------------------
 # BackwardEvaluator — one instance per (cfg, graph, node)
-# =============================================================================
+# ---------------------------------------------------------------------------
 
 class BackwardEvaluator(BaseEvaluator):
     """Stateful backward feasibility evaluator.
 
-    Per-key (per-successor in node-local mode, single `None` in graph-wide
-    mode) `IntegerNLPSpec` built once in `_build_for_key`.  Per call, the
-    spec is reused across every theta and the JIT cache stays warm.
+    Builds one IntegerNLPSpec per key (per-successor in node-local mode, a
+    single None in graph-wide mode) once in _build_for_key, then reuses each
+    spec across every theta so the JIT cache stays warm between calls.
+
     """
+
     _eval_name = 'backward'
+
+    # ---- External Methods ----
 
     def __init__(self, cfg, graph, node):
         self._graph_wide = bool(graph.graph.get('solve_post_processing_problem', False))
@@ -110,7 +81,10 @@ class BackwardEvaluator(BaseEvaluator):
             mask_s = jnp.asarray(True)
         return self.evaluate_node_local(outputs_s, aux_s, mask_s)
 
+    # ---- Private Methods ----
+
     def _keys(self) -> list:
+        """Sub-problem keys: successors (node-local) or [None] (graph-wide)."""
         if self._graph_wide:
             return [None]
         if self.node is None:
@@ -118,16 +92,15 @@ class BackwardEvaluator(BaseEvaluator):
         return list(self.graph.successors(self.node))
 
     def _build_for_key(self, key) -> None:
+        """Dispatch to the node-local or graph-wide builder."""
         if self._graph_wide:
             self._build_graph_wide(key)
         else:
             self._build_node_local(key)
 
-    # ------------------------------------------------------------------
-    # Build — node-local (per-successor)
-    # ------------------------------------------------------------------
-
+    # Build — node-local (per-successor).
     def _build_node_local(self, succ: int) -> None:
+        """Build the per-successor box-only IntegerNLPSpec for this edge."""
         n_d_succ = int(self.graph.nodes[succ]['n_design_args'])
         input_indices = np.array(
             [n_d_succ + inp for inp in self.graph.edges[self.node, succ]['input_indices']],
@@ -163,8 +136,7 @@ class BackwardEvaluator(BaseEvaluator):
         n_d_cont = int(lb.size)
         n_params = n_fix + n_int + n_heads
 
-        # Classifier IS the objective in this box-only NLP — no separate
-        # general constraint.  Aggregator inferred from n_heads.
+        # Classifier is the objective in this box-only NLP; aggregator from n_heads.
         objective = mask_surrogate(
             classifier,
             ndim=ndim,
@@ -204,11 +176,9 @@ class BackwardEvaluator(BaseEvaluator):
         self.fix_indices[succ]   = fix_indices
         self.n_fix[succ]         = n_fix
 
-    # ------------------------------------------------------------------
-    # Build — graph-wide (post-process lower classifier)
-    # ------------------------------------------------------------------
-
+    # Build — graph-wide (post-process lower classifier).
     def _build_graph_wide(self, key) -> None:
+        """Build the single graph-level IntegerNLPSpec over the decision space."""
         n_d   = int(self.graph.graph['n_design_args'])
         n_aux = int(self.graph.graph['n_aux_args'])
         total_ind = np.arange(n_d + n_aux)
@@ -266,27 +236,11 @@ class BackwardEvaluator(BaseEvaluator):
         self.fix_indices[key] = fix_ind
         self.n_fix[key]       = n_fix
 
-    # ------------------------------------------------------------------
-    # Thread entry points
-    # ------------------------------------------------------------------
-
+    # Thread entry points — pmap targets.
     def evaluate_node_local(self, outputs_s, aux_s, mask_s):
-        """Per-scenario backward feasibility via outer-theta vmap.
-
-        Parameters
-        ----------
-        outputs_s : (N_uncertainty, N_output_dim)
-        aux_s     : (N_uncertainty, N_aux)
-        mask_s    : scalar bool
-
-        Returns
-        -------
-        (evals, viable, converged) : each shape (N_uncertainty, N_successors).
-                                     `evals` is post-`shaping_function`;
-                                     `viable` is the per-pick feasibility
-                                     flag; `converged` is septal's KKT
-                                     flag.  Both feed the base-class
-                                     counters at the entry function.
+        """
+        Per-scenario backward feasibility via outer-theta vmap.
+        Returns per-successor evals, viability and KKT-convergence flags.
         """
         def real():
             succ_inputs = get_successor_inputs(self.graph, self.node, outputs_s)
@@ -295,8 +249,7 @@ class BackwardEvaluator(BaseEvaluator):
                 ys = succ_inputs[succ]
                 if aux_s is not None and aux_s.size > 0:
                     ys = jnp.concatenate([ys, aux_s], axis=-1)
-                # ys : (n_theta, n_y) — module-level batched solver, one
-                # cached compiled program per spec.
+                # ys is (n_theta, n_y); module-level solver caches one program per spec.
                 per_theta = solve_integer_nlp_batched(self.specs[succ], ys)
                 evals.append(per_theta.objective.reshape(-1, 1))
                 viable.append(per_theta.success.reshape(-1, 1))
@@ -308,11 +261,10 @@ class BackwardEvaluator(BaseEvaluator):
         return skip_if_masked(mask_s, real)
 
     def evaluate_graph_wide(self, outputs_s, aux_s):
-        """Single graph-wide solve — `outputs_s` plays the graph-level p.
-
-        Returns `-shaping_function(obj.reshape(1, 1))` — the inner objective
-        is `-classifier` (negated to minimise), the outer `-` restores the
-        maximisation sign before the cfg-driven `shaping_function` flip.
+        """
+        Single graph-wide solve with outputs_s as the graph-level p.
+        Inner objective is -classifier; the outer negation restores the
+        maximisation sign before the cfg-driven shaping_function flip.
         """
         key = None
         if outputs_s.ndim < 2:
@@ -326,14 +278,15 @@ class BackwardEvaluator(BaseEvaluator):
         )
 
 
-# =============================================================================
+# ---------------------------------------------------------------------------
 # Evaluator cache + top-level entry point
-# =============================================================================
+# ---------------------------------------------------------------------------
 
 _BACKWARD_EVALUATOR_CACHE: dict = {}
 
 
 def _get_evaluator(cfg, graph, node) -> BackwardEvaluator:
+    """Return the cached BackwardEvaluator for this (graph, node, mode)."""
     key = (id(graph), node,
            bool(graph.graph.get('solve_post_processing_problem', False)))
     evaluator = _BACKWARD_EVALUATOR_CACHE.get(key)
@@ -344,20 +297,10 @@ def _get_evaluator(cfg, graph, node) -> BackwardEvaluator:
 
 
 def backward_constraint_evaluator(outputs, aux, cfg, graph, node):
-    """Top-level backward feasibility evaluator — threads samples across
-    CPU devices via pmap.
-
-    Returns
-    -------
-    (evaluations, None)
-        evaluations : (N_batch, N_uncertainty, N_successors) after the
-                      `shaping_function` sign flip.  When `N_uncertainty = 1`
-                      (deterministic setting) the middle dim is trivial but
-                      kept explicit — matches the CTG / probability shape
-                      contract.
-
-    Trailing `None` keeps tuple parity with the legacy warmstart slot
-    (warmstart plumbing was dropped earlier — consumer never used it).
+    """
+    Top-level backward feasibility evaluator; threads samples across CPU
+    devices via pmap.  Trailing None keeps tuple parity with the unused
+    legacy warmstart slot.
     """
     evaluator = _get_evaluator(cfg, graph, node)
 

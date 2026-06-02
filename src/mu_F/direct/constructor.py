@@ -1,6 +1,4 @@
-"""
-Direct method constructor
-"""
+"""Direct method constructor: dispatches to the requested discretisation scheme."""
 
 from mu_F.direct.multiple_shooting import MultipleShooting
 from mu_F.direct.single_shooting import SingleShooting

@@ -1,28 +1,4 @@
-"""
-Post-processing global NLP evaluator.
-
-Solves the upper-level reconstruction problem: find decision variables
-(graph-level, excluding `post_process_decision_indices`) that minimise
-the last decision component subject to the upper-level classifier staying
-feasible (`classifier(x) <= 0`).
-
-Epigraph reformulation: the casadi path encoded the objective as the
-integer sentinel `obj_fn = -1` (interpreted as "minimise `x[-1]`").  We
-write that as a plain JAX scalar — no sentinel indirection.
-
-Classifier resolution: preferred-live-then-rebuild via the graph attrs
-`post_process_upper_classifier` (callable) or
-`post_process_upper_classifier_serialised` (params dict — checkpoint-
-resume path).
-
-Graph-wide, so `_keys()` yields `[None]`.  No `p` (problem is fully static
-at construction); no integer enumeration (graph-level NLP is purely
-continuous); no multi-head (upper classifier is single-output).  Runs
-through the unified `solve_integer_nlp` path with an empty
-`IntegerProblem` for uniformity with the other rewired evaluators —
-`feasible_assignments()` returns the trivial `(1, 0)` and the solve
-degenerates to a standard multi-start SQP.
-"""
+"""Post-processing global NLP evaluator for the upper-level Reconstruction problem."""
 from __future__ import annotations
 
 from typing import Tuple
@@ -67,8 +43,7 @@ def _load_upper_classifier(graph, cfg):
             "a live `post_process_upper_classifier` callable nor a "
             "`post_process_upper_classifier_serialised` params dict."
         )
-    # Lazy import: avoid paying the surrogate-reconstruction cost on the
-    # happy path.
+    # Lazy import: avoid the Surrogate-Reconstruction cost on the happy path.
     from mu_F.solvers.utilities import construct_model
     return construct_model(
         serialised, cfg,
@@ -99,16 +74,20 @@ def _upper_level_bounds(graph, cfg) -> list:
     return [lb[dec_ind], ub[dec_ind]]
 
 
-# =============================================================================
+# ---------------------------------------------------------------------------
 # PostProcessUpperLevelEvaluator — one instance per (cfg, graph)
-# =============================================================================
+# ---------------------------------------------------------------------------
 
 class PostProcessUpperLevelEvaluator(BaseEvaluator):
     """Stateful upper-level post-processing evaluator.
 
     Single graph-wide sub-problem; one `IntegerNLPSpec` built in
     `_build_for_key` and reused across calls.
+
     """
+
+    # ---- External Methods ----
+
     _eval_name = 'post_process'
 
     def __init__(self, cfg, graph, node=None):
@@ -118,10 +97,14 @@ class PostProcessUpperLevelEvaluator(BaseEvaluator):
         super().__init__(cfg, graph, node)
         self._thread = self.evaluate
 
+    # ---- Private Methods ----
+
     def _keys(self) -> list:
+        """Single graph-wide key (None); the problem is not node-local."""
         return [None]
 
     def _build_for_key(self, key) -> None:
+        """Build the purely-continuous graph-level NLP spec."""
         classifier = _load_upper_classifier(self.graph, self.cfg)
         lb_raw, ub_raw = _upper_level_bounds(self.graph, self.cfg)
         lb = jnp.asarray(lb_raw).reshape(-1)
@@ -136,8 +119,7 @@ class PostProcessUpperLevelEvaluator(BaseEvaluator):
         def constraint(x, p):
             return classifier(x.reshape(1, -1)).reshape(-1)
 
-        # Probe the classifier at midpoint to discover n_g (usually 1, but
-        # don't assume — some upper classifiers bundle multiple outputs).
+        # Probe the classifier at midpoint to discover n_g (may bundle outputs).
         x_probe = 0.5 * (lb + ub)
         n_g = int(classifier(x_probe.reshape(1, -1)).reshape(-1).shape[0])
 
@@ -154,7 +136,6 @@ class PostProcessUpperLevelEvaluator(BaseEvaluator):
         sobol_pool = precompute_sobol_pool(bounds, n_d, self.n_sobol_screen)
 
         # Empty integer problem — purely continuous graph-level NLP.
-
         integer_problem = IntegerProblem()
 
         self.specs[key] = IntegerNLPSpec(
@@ -167,15 +148,12 @@ class PostProcessUpperLevelEvaluator(BaseEvaluator):
         )
         self.n_d[key] = n_d
 
-    # ------------------------------------------------------------------
-    # Evaluate
-    # ------------------------------------------------------------------
+    # ---- External Methods ----
 
     def evaluate(self) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        """Solve the upper-level NLP via the unified integer-NLP path.
-
-        Returns `(objective, decision_variables)` matching the legacy
-        contract.  Empty `y` since the problem is fully static.
+        """
+        Solve the upper-level NLP via the unified integer-NLP path.
+        Returns `(objective, decision_variables)`; empty `y` (fully static).
         """
         key = None
         y = jnp.zeros((0,))                                 # n_params = 0
@@ -183,14 +161,15 @@ class PostProcessUpperLevelEvaluator(BaseEvaluator):
         return jnp.asarray(result.objective).reshape(()), result.x.reshape(-1)
 
 
-# =============================================================================
+# ---------------------------------------------------------------------------
 # Evaluator cache + public entry point
-# =============================================================================
+# ---------------------------------------------------------------------------
 
 _POST_PROCESS_EVALUATOR_CACHE: dict = {}
 
 
 def _get_evaluator(cfg, graph, node) -> PostProcessUpperLevelEvaluator:
+    """Cached evaluator lookup keyed on graph id."""
     key = id(graph)
     evaluator = _POST_PROCESS_EVALUATOR_CACHE.get(key)
     if evaluator is None:
@@ -200,14 +179,8 @@ def _get_evaluator(cfg, graph, node) -> PostProcessUpperLevelEvaluator:
 
 
 def post_process_upper_level(cfg, graph, node) -> Tuple[jnp.ndarray, jnp.ndarray]:
-    """Solve the upper-level global reconstruction NLP via septal.
-
-    Arguments match `constraint_evaluator(..., constraint_type='post_process_upper_level')`.
-    `node` is accepted for signature parity with other evaluators but
-    unused — this problem is graph-wide, not node-local.
-
-    Returns
-    -------
-    (objective, decision_variables) : (scalar, (n_d,))
+    """
+    Solve the upper-level global Reconstruction NLP via septal.
+    `node` is unused (graph-wide); returns `(objective, decision_variables)`.
     """
     return _get_evaluator(cfg, graph, node).evaluate()

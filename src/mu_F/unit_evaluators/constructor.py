@@ -1,18 +1,29 @@
+"""Per-unit forward evaluators and the network simulator over the graph."""
 
 from abc import ABC
 from copy import copy
 from functools import partial
-import jax.numpy as jnp 
+import jax.numpy as jnp
 from jax import vmap, jit
 import numpy as np
-import pandas as pd 
+import pandas as pd
 import logging
 
 from mu_F.unit_evaluators.integrators import unit_dynamics
 from mu_F.unit_evaluators.steady_state import unit_steady_state
 from mu_F.unit_evaluators.utils import arrhenius_kinetics_fn as arrhenius, RegressorData
 
-class base_unit(ABC):
+
+class BaseUnit(ABC):
+    """Abstract unit interface.
+
+    Defines the decision-dependent-parameter and evaluate hooks that every
+    concrete unit evaluator in this module implements.
+
+    """
+
+    # ---- External Methods ----
+
     def __init__(self, cfg, graph, node):
         self.cfg = cfg
         self.graph = graph
@@ -24,48 +35,34 @@ class base_unit(ABC):
     def evaluate(self, decisions, x0):
         raise NotImplementedError
 
-class unit_evaluation(base_unit):
+class UnitEvaluation(BaseUnit):
+    """Forward evaluator for a single graph node.
+
+    Wraps a UnitCfg holding the vmapped unit and decision-dependent-parameter
+    functions, and is driven by the NetworkSimulator during a forward pass.
+
+    """
+
+    # ---- External Methods ----
+
     def __init__(self, cfg, graph, node):
         """
-        Initializes the unit_evaluation object.
-
-        Args:
-            cfg (object): Configuration object containing various settings and parameters.
-            graph (object): Graph object representing the structure of the system.
-            node (str): The node in the graph for which this unit_evaluation object is being created.
-
-        The method calls the base_unit's __init__ method and sets the unit_cfg object.
+        Build the evaluator for a node and its associated UnitCfg.
         """
         super().__init__(cfg, graph, node)
-        self.unit_cfg = unit_cfg(cfg, graph, node)
+        self.unit_cfg = UnitCfg(cfg, graph, node)
 
 
     def get_decision_dependent_params(self, decisions, uncertain_params=None):
         """
-        Returns the decision dependent parameters.
-
-        Args:
-            decisions (array): Array of decisions.
-
-        Returns:
-            array: Decision dependent parameters.
+        Return the decision-dependent parameters for the given decisions.
         """
         return self.unit_cfg.decision_dependent_params(decisions, uncertain_params)
 
     def evaluate(self, design_args, input_args, aux_args, uncertain_params=None):
         """
-        Evaluates the unit.
-
-        Args:
-            design_args (array): Array of design arguments selected by sampler.
-            input_args (array): Array of input arguments selected by sampler or by previous unit operation.
-
-        Returns:
-            array: The result of the evaluation.
-
-        The method gets the decision dependent parameters using the design arguments, 
-        concatenates them with the design arguments to form the system parameters, 
-        and then evaluates the unit using these parameters.
+        Evaluate the unit over the design / input / aux / uncertainty batch.
+        Falls back to a row-by-row pass to isolate a failing case on error.
         """
 
         dd_params = self.get_decision_dependent_params(design_args, uncertain_params)
@@ -112,44 +109,48 @@ class unit_evaluation(base_unit):
                         row_exc,
                     )
                     raise
-            # Loop finished without re-failing → outer error came from
-            # something other than a deterministic single-row failure.
+            # no single row reproduced the failure; re-raise the outer error
             raise
+
+    def evaluate_diagonal(self, design_args, input_args, aux_args, uncertain_params):
+        """
+        Diagonal evaluation: row i uses realisation i, scenario axis collapsed.
+        uncertain_params is (N, param_dim); returns (N, 1, n_out).
+        """
+        dd_params = self.unit_cfg.decision_dependent_params_diag(design_args, uncertain_params)
+        outputs = self.unit_cfg.evaluator_diag(
+            design_args, input_args, aux_args, dd_params, uncertain_params,
+        )
+        return jnp.expand_dims(outputs, axis=1)
 
 
 def expand_dims(array, axis):
+    """Promote an array to at least 3 dims for the batched evaluators."""
     if array.ndim < 3:
         array = jnp.expand_dims(array, axis=axis)
     return array
 
 
-class subproblem_unit_wrapper(unit_evaluation):
+class SubproblemUnitWrapper(UnitEvaluation):
+    """Single-node evaluator exposed to the subproblem solvers.
+
+    Splits a flat decision vector into design / input / aux blocks, supplies
+    root-node defaults, and returns the node constraints for DEUS / rollouts.
+
+    """
+
+    # ---- External Methods ----
+
     def __init__(self, cfg, graph, node):
         """
-        Initializes the subproblem_unit_wrapper object.
-
-        Args:
-            cfg (object): Configuration object containing various settings and parameters.
-            graph (object): Graph object representing the structure of the system.
-            node (str): The node in the graph for which this subproblem_unit_wrapper object is being created.
-
-        The method calls the unit_evaluation's __init__ method to initialize the object.
+        Build the wrapper for a node, delegating to UnitEvaluation.
         """
         super().__init__(cfg, graph, node)
 
     def get_constraints(self, decisions, uncertain_params=None):
         """
-        Returns the constraints for the given decisions and uncertain parameters.
-
-        Args:
-            decisions (array): Array of decisions.
-            uncertain_params (array, optional): Array of uncertain parameters. Defaults to None.
-
-        Returns:
-            array: The constraints for the given decisions and uncertain parameters.
-
-        The method splits the decisions into design arguments and input arguments based on the number of design arguments in the node, 
-        and then evaluates the unit using these arguments and the uncertain parameters.
+        Split the decision vector and evaluate the node constraints over the
+        uncertainty set (broadcasting a scenario axis onto the inputs).
         """
         if uncertain_params is None:
             uncertain_params = jnp.empty((1,1))
@@ -162,8 +163,8 @@ class subproblem_unit_wrapper(unit_evaluation):
                 input_args = jnp.array([self.cfg.model.root_node_inputs[self.node]]*design_args.shape[0])
             else:
                 input_args = jnp.empty((design_args.shape[0], 0))
-        # if no inputs to the unit, use the root node inputs or add empty array
-        if aux_args.shape[1] == 0: 
+        # if no aux to the unit, use the root node aux or add empty array
+        if aux_args.shape[1] == 0:
             if not (self.cfg.model.node_aux[self.node] == 'None'):
                 aux_args = jnp.array([self.cfg.model.root_node_aux[self.node]]*design_args.shape[0])
             else:
@@ -171,11 +172,32 @@ class subproblem_unit_wrapper(unit_evaluation):
             
         input_args = expand_input_args(input_args, uncertain_params)
         #aux_args = expand_input_args(aux_args, uncertain_params)
-        
+
         return self.evaluate(design_args, input_args, aux_args, uncertain_params)
-    
+
+    def get_constraints_rollout(self, decisions, uncertain_params):
+        """
+        Rollout forward pass with parameters paired one-per-trajectory.
+        Row i is trajectory i's realisation; returns (N, 1, n_out) with no
+        scenario-axis broadcast.
+        """
+        design_args, input_args, aux_args = self.get_auxilliary_input_decision_split(decisions)
+        n = design_args.shape[0]
+        if input_args.shape[1] == 0:
+            if not (self.cfg.model.root_node_inputs[self.node] == 'None'):
+                input_args = jnp.array([self.cfg.model.root_node_inputs[self.node]] * n)
+            else:
+                input_args = jnp.empty((n, 0))
+        if aux_args.shape[1] == 0:
+            if not (self.cfg.model.node_aux[self.node] == 'None'):
+                aux_args = jnp.array([self.cfg.model.root_node_aux[self.node]] * n)
+            else:
+                aux_args = jnp.empty((n, 0))
+        return self.evaluate_diagonal(design_args, input_args, aux_args, uncertain_params)
+
     def get_auxilliary_input_decision_split(self, decisions):
         """
+        Split a flat decision vector into design / input / auxiliary blocks.
         """
         n_d = self.graph.nodes[self.node]['n_design_args']
         n_u = self.graph.nodes[self.node]['n_input_args']
@@ -183,6 +205,7 @@ class subproblem_unit_wrapper(unit_evaluation):
         return design_args, input_args, auxiliary_args
 
 def expand_input_args(array, template):
+    """Broadcast input args across the uncertainty scenarios in template."""
     if array.ndim == 1:
         array = jnp.expand_dims(array, axis=1)
     if array.ndim < 3:
@@ -193,40 +216,47 @@ def expand_input_args(array, template):
 
     return array
 
-class unit_cfg:
+class UnitCfg:
+    """Builds the (optionally vmapped) evaluators for a single node.
+
+    Selects the unit-operation function (dynamic / steady-state) and the
+    decision-dependent-parameter function from the node's graph attributes,
+    constructing both grid and diagonal variants for search and rollout.
+
+    """
+
+    # ---- External Methods ----
+
     def __init__(self, cfg, graph, node):
         """
-        Initializes the unit_cfg object.
-
-        Args:
-            cfg (object): Configuration object containing various settings and parameters.
-            graph (object): Graph object representing the structure of the system.
-            node (str): The node in the graph for which this unit_cfg object is being created.
-
-        Raises:
-            NotImplementedError: If vmap of unit evaluation is enabled in cfg or if the unit operation or unit parameters function is not implemented.
-
-        The method sets the unit evaluation function and the decision dependent evaluation function based on the node's attributes in the graph. 
-        If the unit operation is 'dynamic', the unit evaluation function is set to unit_dynamics. 
-        If the unit parameters function is 'Arrhenius', the decision dependent evaluation function is set to arrhenius. 
-        If the unit parameters function is None, the decision dependent evaluation function is set to return an empty array of the same shape as the input.
+        Build the grid and diagonal evaluators and the decision-dependent
+        parameter functions from the node's graph attributes.
         """
 
         self.cfg, self.graph, self.node = cfg, graph, node
+
+        # diagonal evaluators (rollout) built alongside the grid ones below.
+        self.evaluator_diag = None
+        self.decision_dependent_params_diag = None
 
         # if vmap is enabled in cfg, set the unit evaluation and decision dependent evaluation functions using vmap
         if cfg.case_study.vmap_evaluations:
             # --- set the unit evaluation fn
             if graph.nodes[node]['unit_op'] == 'dynamic':
-                self.evaluator = vmap(vmap(jit(partial(unit_dynamics, cfg=cfg, node=node, graph=graph)), in_axes=(0, 0, 0, 0, None), out_axes=0), in_axes=(None, 1, None, 1, 0), out_axes=1) # inputs are design args, input args, deicsion_and_uncertainty_dependent_params, uncertain params
+                base = jit(partial(unit_dynamics, cfg=cfg, node=node, graph=graph))
             elif graph.nodes[node]['unit_op'] == 'steady_state':
-                self.evaluator = vmap(vmap(jit(partial(unit_steady_state, cfg=cfg, node=node, graph=graph)), in_axes=(0, 0, 0, 0, None), out_axes=0), in_axes=(None, 1, None, 1, 0), out_axes=1)   
+                base = jit(partial(unit_steady_state, cfg=cfg, node=node, graph=graph))
             else:
                 raise NotImplementedError(f'Unit corresponding to node {node} is a {graph.nodes[node]["unit_op"]} operation, which is not yet implemented.')
+            # grid (search): one weather list shared across the design batch
+            self.evaluator = vmap(vmap(base, in_axes=(0, 0, 0, 0, None), out_axes=0), in_axes=(None, 1, None, 1, 0), out_axes=1) # inputs are design args, input args, deicsion_and_uncertainty_dependent_params, uncertain params
+            # diagonal (rollout): weather paired one-per-trajectory along the batch
+            self.evaluator_diag = vmap(base, in_axes=(0, 0, 0, 0, 0), out_axes=0)
 
-            # --- set the decision dependent evaluation 
+            # --- set the decision dependent evaluation
             fn = graph.nodes[node]['unit_params_fn']
             self.decision_dependent_params = vmap(vmap(fn, in_axes=(0, None), out_axes=0), in_axes=(None, 0), out_axes=1)
+            self.decision_dependent_params_diag = vmap(fn, in_axes=(0, 0), out_axes=0)
 
         # if vmap is not enabled in cfg, set the unit evaluation and decision dependent evaluation functions without using vmap
         else: 
@@ -244,13 +274,17 @@ class unit_cfg:
 
         return
     
-class network_simulator(ABC):
-    """
-    Abstract base class for a network simulator.
+class NetworkSimulator(ABC):
+    """Forward simulation of the process graph.
 
-    This class is responsible for simulating a network of interconnected nodes and edges. 
-    Each node represents a unit operation in a process, and each edge represents the flow of material between units.
+    Walks the nodes in order, propagating each unit's outputs along its edges
+    and storing per-node constraints; subclasses specialise the evaluation
+    mode (search, direct, post-process).
+
     """
+
+    # ---- External Methods ----
+
     def __init__(self, cfg, graph, constraint_evaluator, type_cons='process'):
         self.cfg = cfg
         self.graph = graph.copy()
@@ -262,18 +296,8 @@ class network_simulator(ABC):
 
     def simulate(self, decisions, uncertain_params=None):
         """
-        Simulates the network for the given decisions and uncertain parameters.
-
-        Args:
-            decisions (array): Array of decisions.
-            uncertain_params (list, optional): Array of uncertain parameters. Defaults to None.
-
-        Returns:
-            dict: A dictionary where the keys are the nodes and the values are the constraints for each node.
-            dict: A dictionary where the keys are the edges and the values are the input data for each edge.
-
-        The method simulates the network by iterating over each node, evaluating the node, storing the output in the input data store of each successor edge, 
-        and storing the constraints of the node in the constraint store of the node.
+        Walk the graph, evaluating each node and propagating its outputs along
+        successor edges. Returns the per-node constraints and per-edge inputs.
         """
         u_p = None
         n_d = 0
@@ -310,16 +334,8 @@ class network_simulator(ABC):
     
     def get_constraints(self, decisions, uncertain_params=None):
         """
-        Returns the constraints for the given decisions and uncertain parameters.
-
-        Args:
-            decisions (array): Array of decisions.
-            uncertain_params (array, optional): Array of uncertain parameters. Defaults to None.
-
-        Returns:
-            dict: A dictionary where the keys are the nodes and the values are the constraints for each node.
-
-        The method simulates the network and returns the constraints.
+        Simulate the network and return the per-node constraints, tallying
+        function evaluations and optionally collecting regressor data.
         """
         constraints, _ = self.simulate(decisions, uncertain_params)
         for node, g in constraints.copy().items():
@@ -330,33 +346,16 @@ class network_simulator(ABC):
     
     def get_extended_ks_info(self, decisions, uncertain_params=None):
         """
-        Returns the input data for each edge for the given decisions and uncertain parameters.
-
-        Args:
-            decisions (array): Array of decisions.
-            uncertain_params (array, optional): Array of uncertain parameters. Defaults to None.
-
-        Returns:
-            dict: A dictionary where the keys are the edges and the values are the input data for each edge.
-
-        The method simulates the network and returns the input data for each edge.
+        Simulate the network and return the per-edge input data used for the
+        extended KS bounds.
         """
         _, edge_data = self.simulate(decisions, uncertain_params)
         return edge_data
 
     def get_data(self, decisions, uncertain_params=None):
         """
-        Returns the constraints and the input data for each edge for the given decisions and uncertain parameters.
-
-        Args:
-            decisions (array): Array of decisions.
-            uncertain_params (array, optional): Array of uncertain parameters. Defaults to None.
-
-        Returns:
-            dict: A dictionary where the keys are the nodes and the values are the constraints for each node.
-            dict: A dictionary where the keys are the edges and the values are the input data for each edge.
-
-        The method simulates the network and returns the constraints and the input data for each edge.
+        Simulate the network and return both per-node constraints and per-edge
+        input data.
         """
         constraints, edge_data = self.simulate(decisions, uncertain_params)
         for node, g in constraints.items():
@@ -366,17 +365,8 @@ class network_simulator(ABC):
     
     def evaluate_direct(self, decisions, uncertain_params):
         """
-        Evaluates the network for the given decisions and uncertain parameters.
-
-        Args:
-            decisions (array): Array of decisions.
-            uncertain_params (array, optional): Array of uncertain parameters. Defaults to None.
-
-        Returns:
-            dict: A dictionary where the keys are the nodes and the values are the constraints for each node.
-            dict: A dictionary where the keys are the edges and the values are the input data for each edge.
-
-        The method simulates the network and returns the constraints and the input data for each edge.
+        Direct-mode network walk that slices each node's uncertainty block from
+        a flat parameter vector. Returns per-node constraints and per-edge inputs.
         """
         n_theta = [self.graph.nodes[node]['n_theta'] for node in self.graph.nodes]
         nu_pk = 0
@@ -422,17 +412,8 @@ class network_simulator(ABC):
 
     def direct_evaluate(self, decisions, uncertain_params):
         """
-        Evaluates the network for the given decisions and uncertain parameters.
-
-        Args:
-            decisions (array): Array of decisions.
-            uncertain_params (array, optional): Array of uncertain parameters. Defaults to None.
-
-        Returns:
-            dict: A dictionary where the keys are the nodes and the values are the constraints for each node.
-            dict: A dictionary where the keys are the edges and the values are the input data for each edge.
-
-        The method simulates the network and returns the constraints and the input data for each edge.
+        Direct-mode evaluation returning the concatenated node constraints as a
+        per-decision list (the form the direct solvers consume).
         """
         constraints, _ = self.evaluate_direct(decisions, uncertain_params)
         for node, g in constraints.items():
@@ -447,9 +428,8 @@ class network_simulator(ABC):
 
     def process_select_regressor_data(self, constraints, candidates):
         """
-        Process the edge data
-        :param edge_data: The edge data
-        :return: The processed edge data
+        Map the candidates and constraints through the global regressor
+        function and append the result to the live regressor set.
         """
         fn = self.graph.graph['global_regressor_function']
         inputs, outputs = fn(candidates, constraints, self.desired_node_index)
@@ -458,11 +438,16 @@ class network_simulator(ABC):
 
 
 
-class post_process_evaluation(network_simulator):
+class PostProcessEvaluation(NetworkSimulator):
+    """Post-processing pass over the network simulation.
+
+    Extends NetworkSimulator to sweep the auxiliary space on a grid and map a
+    fixed solution to its feasibility surface for plotting.
+
     """
-    This class is responsible for post-processing the results of the network simulation.
-    It extends the network_simulator class and provides additional functionality for post-processing.
-    """
+
+    # ---- External Methods ----
+
     def __init__(self, cfg, graph, constraint_evaluator):
         super().__init__(cfg, graph, constraint_evaluator, type_cons='post_process_evals')
         self.type = 'post_process_evals'
@@ -472,36 +457,27 @@ class post_process_evaluation(network_simulator):
         aux_lb = jnp.array([bound[0][0] for bound in aux_bounds])
         aux_ub = jnp.array([bound[0][1] for bound in aux_bounds])
         return aux_lb, aux_ub
-    
+
     def wrap_get_constraints(self, solution):
         """
-        Wraps the get_constraints method to handle the solution.
-
-        Args:
-            solution (array): The solution to be processed.
-
-        Returns:
-            Dataframe mapping the solution to the constraints.
-            # NOTE set up custom for the current case study (haven't thought of a general way to do this yet)
+        Sweep the auxiliary space on a grid for a fixed solution and return the
+        feasibility surface as a dict (custom to the current case study).
         """
         logging.warning('This post-process evaluation is set up for a specific case study and is not generalised yet.')
         bounds = self.get_auxiliary_bounds()
         x_range = (bounds[0][0], bounds[1][0])
         y_range = (bounds[0][1], bounds[1][1])
         num_points = 200
-        # Create a grid of points for the x and y axes
+        # grid of points for the x and y axes
         x = np.linspace(x_range[0], x_range[1], num_points)
         y = np.linspace(y_range[0], y_range[1], num_points)
-        
-        # Use numpy.meshgrid to create the 2D grid from the 1D arrays
+
         X, Y = np.meshgrid(x, y)
 
-        # Flatten the X and Y grids into 1D arrays for the batch evaluation
-        # This creates a "batch" of all coordinate pairs to be evaluated
+        # flatten the grids into a batch of coordinate pairs
         x_coords_batch = X.ravel().reshape(-1, 1)
         y_coords_batch = Y.ravel().reshape(-1, 1)
 
-        # Combine the x and y coordinates into a single array of shape (num_points, 2)
         solution_batch = np.tile(solution, (num_points * num_points, solution.shape[0]))
         coords_batch = np.hstack((solution_batch, x_coords_batch, y_coords_batch, np.zeros((num_points*num_points,1))))
 

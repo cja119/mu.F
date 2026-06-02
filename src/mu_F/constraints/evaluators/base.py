@@ -1,35 +1,4 @@
-"""
-Base class + shared helpers for septal-backed constraint evaluators.
-
-Every concrete evaluator (CTG, backward, forward, current, ...) inherits from
-`BaseEvaluator` and provides three pieces:
-
-  - `_keys()`               — what sub-problems to iterate (successors,
-                              predecessors, just `[node]`, graph-wide, ...)
-  - `_build_for_key(key)`   — build and cache the stable state for one
-                              sub-problem (factory, screener, sobol pool,
-                              wrapped callables, shapes)
-  - `evaluate(...)`         — the pmap thread body; pure function of its
-                              traced arguments, closing only over `self`
-
-The base `__init__` reads the common cfg knobs, initialises the per-key
-state dicts, then drives the `_build_for_key` loop.  Subclass state lives
-on `self` under those dicts so the instance has a stable id() — necessary
-for pmap to cache the compiled thread across calls.
-
-All compile-relevant work happens in `__init__`.  `evaluate` does only
-pure JAX operations on traced arrays (and on the precomputed JAX arrays
-stored on `self`), which is what makes the JIT cache hit on every call
-after the first.
-
-Module-level helpers:
-  - `build_factory`               ParametricSQPFactory assembly
-  - `build_penalty_screener`      L1-augmented multi-start screener
-  - `precompute_sobol_pool`       fixed Sobol draws for the screener
-  - `pick_best`                   argmin-where-viable over a flat SQPResult
-                                  (used by diagnostic scripts; evaluators
-                                  pick best inside `solve_integer_nlp`)
-"""
+"""Base class and shared helpers for septal-backed constraint evaluators."""
 from __future__ import annotations
 
 import logging
@@ -59,9 +28,9 @@ __all__ = [
 ]
 
 
-# =============================================================================
+# ---------------------------------------------------------------------------
 # Module-level helpers
-# =============================================================================
+# ---------------------------------------------------------------------------
 
 def build_factory(
     objective: Callable,
@@ -77,16 +46,9 @@ def build_factory(
     constraint_rhs=None,
 ) -> ParametricSQPFactory:
     """
-    Assemble a `ParametricSQPFactory` for one sub-problem.
-
-    Defaults:
-      - `constraint_lhs = -inf`  (one-sided inequality)
-      - `constraint_rhs =  0`    (feasibility: g(x, p) <= 0)
-
-    Set both explicitly to encode a two-sided or equality constraint.
-
-    The `objective` / `constraint` callables must have signature `f(x, p)`
-    where `x` has shape `(n_decision,)` and `p` has shape `(n_params,)`.
+    Assemble a ParametricSQPFactory for one sub-problem.  Defaults to the
+    one-sided feasibility constraint g(x, p) <= 0; set constraint_lhs/rhs
+    explicitly for two-sided or equality constraints.
     """
     if constraint is None:
         problem = ParametricNLPProblem(
@@ -127,20 +89,8 @@ def build_penalty_screener(
 ) -> Callable:
     """
     Build an L1-penalty-augmented screener for multi-start selection.
-
-    Returns a `screener(sobol_pool, p) -> scores` callable that scans
-    across the Sobol pool:
-
-        score(x, p) = objective(x, p) + penalty * sum(max(0, constraint(x, p)))
-
-    Low scores correspond to points that are both feasible (small
-    violation) and have low objective — good multi-start seeds.
-
-    Calling pattern the thread should use:
-        scores = screener(sobol_pool, p)           # shape (N_pool,)
-        best   = sobol_pool[jnp.argsort(scores)[:n_starts]]
-
-    
+    Scores each Sobol point by objective + penalty * constraint violation;
+    low scores are feasible, low-objective seeds.
     """
     penalty = float(penalty)
 
@@ -163,22 +113,20 @@ def build_penalty_screener(
 
 def precompute_sobol_pool(bounds, n_d: int, n_sobol: int, seed: int = 42) -> jnp.ndarray:
     """
-    Draw a fixed, reproducible Sobol pool for screening.
-
-    Stored on the evaluator instance at construction; passed as an argument
-    to the jit'd screener so the cache keys only on abstract shape.
+    Draw a fixed, reproducible Sobol pool for screening.  Stored at
+    construction and passed to the jit'd screener so the cache keys only
+    on abstract shape.
     """
     return generate_initial_guess(n_sobol, n_d, bounds, seed=seed)
 
 
 def parallel_thread(thread_fn, *, in_axes, devices, dispatch: str):
     """
-    Dispatch the per-shard parallelism via `pmap`, `jit(vmap(…))`, or a
-    Python serial for-loop over a jit'd body.  All three preserve the
-    same `(*args) -> pytree` contract with axis-0 mapping semantics.
+    Dispatch per-shard parallelism via pmap, jit(vmap(...)), or a serial
+    Python loop over a jit'd body, all sharing the (*args) -> pytree
+    contract with axis-0 mapping.
     """
-    # Inner vmap fuses the per-shard sample loop into the compiled program
-    # so `shard_dispatch` can do one dispatch instead of a Python chunk loop.
+    # Inner vmap fuses the per-shard sample loop into the compiled program.
     inner = jax.vmap(thread_fn, in_axes=in_axes, out_axes=0)
 
     if dispatch == "pmap":
@@ -196,11 +144,9 @@ def parallel_thread(thread_fn, *, in_axes, devices, dispatch: str):
 
 
 def _serial_dispatch(inner, *, in_axes):
-    """Sequential Python for-loop over the leading axis.
-
-    Slices each in_axes!=None arg along its mapped axis, calls a jit'd
-    single-shard `inner` per iter, stacks the results.  Prints land
-    per-iter and exceptions carry the iteration index for debugging.
+    """
+    Sequential Python for-loop over the leading axis: slice each mapped
+    arg, call a jit'd single-shard inner per iter, stack the results.
     """
     axes_tuple = in_axes if isinstance(in_axes, tuple) else (in_axes,)
     inner_jit  = jax.jit(inner)
@@ -222,15 +168,9 @@ def _serial_dispatch(inner, *, in_axes):
 
 def shard_dispatch(pmap_fn, padded_inputs, *, W):
     """
-    Reshape `(total, *trailing) -> (W, total//W, *trailing)`, dispatch through
-    `pmap_fn`, and reshape outputs back to `(total, *trailing)`.
-
-    `pmap_fn` is expected to come from `parallel_thread` / `cached_parallel_thread`
-    (so it already wraps `pmap(vmap(thread_fn))`).  Caller is responsible for
-    padding `padded_inputs` so the leading axis is a multiple of `W`.
-
-    Returns the same pytree type `pmap_fn` returns (tuple or single array),
-    with its leading two axes collapsed.
+    Reshape (total, ...) -> (W, total//W, ...), dispatch through pmap_fn,
+    and collapse the leading two output axes back to (total, ...).  Caller
+    pads padded_inputs so the leading axis is a multiple of W.
     """
     total = padded_inputs[0].shape[0]
     if total % W != 0:
@@ -254,13 +194,9 @@ def shard_dispatch(pmap_fn, padded_inputs, *, W):
 
 def cached_parallel_thread(owner, attr, thread_fn, *, in_axes, devices, dispatch: str):
     """
-    Memoised wrapper around `parallel_thread`.
-
-    `jax.pmap(...)` allocates per-call dispatch state on macOS (Mach-port
-    slots) that isn't reclaimed when the wrapper is GC'd — rebuilding per
-    DEUS iter leaks ~80–130 slots/call and the kernel kills the process
-    after ~90 min.  Build once per `(owner, n_devices, dispatch, in_axes)`
-    and reuse.
+    Memoised wrapper around parallel_thread.  Built once per
+    (owner, n_devices, dispatch, in_axes) and reused rather than rebuilt
+    each DEUS iteration.
     """
     cache = getattr(owner, attr, None)
     if cache is None:
@@ -276,22 +212,9 @@ def cached_parallel_thread(owner, attr, thread_fn, *, in_axes, devices, dispatch
 
 def skip_if_masked(mask, real_fn):
     """
-    Conditionally execute `real_fn()` under a scalar boolean mask.
-
-    Used inside pmap threads to skip the SQP solve on padded lanes.  When
-    `mask` is True the real branch runs; when False, a zero-filled pytree
-    matching the real branch's abstract output is returned instead.
-
-    Shapes and dtypes of the dummy branch are discovered via
-    `jax.eval_shape` so the caller just writes `real_fn` once — no
-    separate "dummy" declaration, no risk of the two branches drifting
-    out of sync.
-
-    Behaviour under pmap: each device evaluates its own `lax.cond`
-    independently, so padded lanes genuinely skip the solve.  pmap still
-    synchronises on the slowest lane, so wall-time doesn't drop below
-    the real-lanes' critical path — but cache stability (fixed pmap
-    width) is the win we're after here.
+    Conditionally execute real_fn() under a scalar boolean mask, skipping
+    the SQP solve on padded lanes.  The zero-filled dummy branch matches
+    real_fn's abstract output via jax.eval_shape so the two cannot drift.
     """
     out_struct = jax.eval_shape(real_fn)
     dummy_fn = lambda: jax.tree_util.tree_map(
@@ -301,13 +224,10 @@ def skip_if_masked(mask, real_fn):
 
 
 def _viable_mask(result: SQPResult, factory, feasibility_tol: float):
-    """Per-start viability mask: KKT-feasibility within tol AND iterate in bounds.
-
-    Used by `pick_best` below.  Drops the convergence-based filter so
-    non-KKT-converged-but-feasible iterates remain candidates — septal's
-    line search guarantees the iterate is at worst as good in merit as
-    `x0`, so a feasible final iterate is still usable even when `max_iter`
-    truncated the solve.
+    """
+    Per-start viability mask: KKT-feasibility within tol and iterate in
+    bounds.  No convergence filter, so feasible-but-unconverged iterates
+    remain usable candidates for pick_best.
     """
     x = result.decision_variables                              # (..., n_d)
     lb = factory.problem.lb
@@ -333,84 +253,35 @@ def pick_best(result: SQPResult, factory, feasibility_tol: float):
     )
 
 
-# =============================================================================
+# ---------------------------------------------------------------------------
 # Base class
-# =============================================================================
+# ---------------------------------------------------------------------------
 
 class BaseEvaluator(ABC):
-    """
-    Stateful, stable-id evaluator for septal-backed NLP sub-problems.
+    """Stateful, stable-id evaluator for septal-backed NLP sub-problems.
 
-    One instance per `(cfg, graph, node)` triple — all factories, screeners
-    and Sobol pools are built once in `__init__`.  The pmap thread body lives
-    on `evaluate(...)`; since the instance id is stable across calls, pmap
-    caches the compiled thread and only re-uses it.
+    One instance per (cfg, graph, node): all factories, screeners and Sobol
+    pools are built once in __init__, and because the instance id is stable
+    the pmap thread body on evaluate stays cached across calls.  Subclasses
+    supply _keys, _build_for_key and evaluate; knobs resolve per-evaluator
+    via _resolve_knob with a flat cfg.solvers fallback.
 
-    Subclasses implement:
-
-      - `_keys()`                 — list of sub-problem keys to iterate
-                                    (successors, predecessors, `[node]`, ...)
-      - `_build_for_key(key)`     — populate per-key state on `self`
-                                    (factory, screener, sobol pool, wrapped
-                                    callables, shapes).  Called once per
-                                    `_keys()` entry from `__init__`.
-      - `evaluate(...)`           — the pmap thread body.  Argument signature
-                                    varies per evaluator; documented in the
-                                    concrete subclass.  Must be a pure
-                                    function of its traced inputs and `self`.
-
-    Common state populated in `__init__`:
-
-      self.cfg, self.graph, self.node
-      self.n_starts, self.feasibility_tol, self.optimality_tol, self.max_iter,
-      self.n_sobol_screen, self.screen_penalty
-      self.factories : dict[key -> ParametricSQPFactory]
-      self.screeners : dict[key -> Callable]
-      self.sobol_pool: dict[key -> jnp.ndarray]
-
-    `cfg.solvers.standardised` is deprecated — every surrogate stored on
-    the graph is self-scaling, and evaluators always operate in real-world
-    units.  Setting the flag to `True` still works (the value is read to
-    warn) but has no effect.
-
-    Per-evaluator knob overrides
-    ----------------------------
-    Each subclass sets a `_eval_name` class attribute (e.g.
-    ``_eval_name = 'backward'``).  Knobs are resolved via
-    ``self._resolve_knob(cfg, knob_name, default=...)`` which walks:
-
-        cfg.solvers.<_eval_name>.<knob>     # per-evaluator override
-        cfg.solvers.<knob>                  # flat fallback (shared default)
-        default                             # if supplied to _resolve_knob
-        raises AttributeError               # otherwise
-
-    Lets the yaml stay compact for the common case (one flat block) while
-    allowing knob-by-knob overrides where they matter.  Example:
-
-        decomposition:
-          n_starts: 1
-          max_iter: 10
-          cost_to_go:
-            max_iter: 50        # CTG-only override
     """
 
-    # Subclasses set this to enable per-evaluator yaml overrides.  When
-    # None, `_resolve_knob` skips the per-evaluator step and falls back to
-    # the flat `cfg.solvers.<knob>` immediately.
+    # Subclasses set this to enable per-evaluator yaml overrides; when None,
+    # _resolve_knob falls straight back to the flat cfg.solvers.<knob>.
     _eval_name: Optional[str] = None
 
-    # Sentinel for "no default supplied" — distinct from `None` so callers
-    # can legitimately default to None.
+    # Sentinel for "no default supplied" — distinct from None.
     _MISSING = object()
 
-    def _resolve_knob(self, cfg, knob_name: str, *, default=_MISSING):
-        """Resolve a solver knob with per-evaluator override fallback.
+    # ---- Private Methods ----
 
-        Lookup order:
-          1. ``cfg.solvers.<_eval_name>.<knob_name>``  — per-evaluator override.
-          2. ``cfg.solvers.<knob_name>``               — flat fallback.
-          3. ``default`` (if supplied).
-          4. raises ``AttributeError``.
+    def _resolve_knob(self, cfg, knob_name: str, *, default=_MISSING):
+        """
+        Resolve a solver knob, preferring the per-evaluator override
+        cfg.solvers.<_eval_name>.<knob>, then the flat cfg.solvers.<knob>,
+        then default; raises AttributeError if none are set.
         """
         if self._eval_name is not None:
             sub = getattr(cfg.solvers, self._eval_name, None)
@@ -425,14 +296,14 @@ class BaseEvaluator(ABC):
             f"under cfg.solvers.{self._eval_name!r}.{knob_name}"
         )
 
+    # ---- External Methods ----
+
     def __init__(self, cfg, graph, node):
         self.cfg   = cfg
         self.graph = graph
         self.node  = node
 
-        # Cached scalar knobs — pulled out of OmegaConf once via the per-
-        # evaluator resolver.  Reading `cfg.solvers.*` inside a tight loop
-        # in `evaluate` would add measurable Python overhead on every call.
+        # Cached scalar knobs — read from OmegaConf once to avoid per-call cost.
         self.n_starts        = int(  self._resolve_knob(cfg, 'n_starts'))
         self.feasibility_tol = float(self._resolve_knob(cfg, 'feasibility_tol'))
         self.optimality_tol  = float(self._resolve_knob(cfg, 'optimality_tol'))
@@ -440,9 +311,7 @@ class BaseEvaluator(ABC):
         self.n_sobol_screen  = int(  self._resolve_knob(cfg, 'n_sobol_screen'))
         self.screen_penalty  = float(self._resolve_knob(cfg, 'screen_penalty', default=1000.0))
 
-        # Deprecation warning for legacy configs that set the flag.  Fires
-        # once per evaluator construction; harmless otherwise.  Remove the
-        # warning (and the field) once every yaml has been cleaned up.
+        # Deprecation warning for legacy configs that set the standardised flag.
         if bool(getattr(cfg.solvers, "standardised", False)):
             import logging
             logging.getLogger(__name__).warning(
@@ -456,33 +325,30 @@ class BaseEvaluator(ABC):
         self.screeners: dict  = {}
         self.sobol_pool: dict = {}
 
-        # SQP outcome counters.  Plain Python ints, accumulated by entry
-        # functions via `_record_sqp_outcome(...)` — not JAX-traced, so
-        # they don't affect the pjit cache.
+        # SQP outcome counters — plain Python ints, not JAX-traced.
         self.n_sqp_calls:     int = 0
         self.n_sqp_viable:    int = 0
         self.n_sqp_converged: int = 0
         self._last_warn_at:   int = 0
 
-        # Dispatch state cached once — cfg.max_devices and cfg.dispatch
-        # don't change at runtime, devices('cpu') is stable.  Per-call
-        # `_build_dispatch_fn` becomes a pure dict lookup.
+        # Dispatch state cached once so _build_dispatch_fn is a dict lookup.
         from jax import devices
         cpu_devs = list(devices('cpu'))
         self._dispatch_W       = min(int(cfg.max_devices), len(cpu_devs))
         self._dispatch_devices = cpu_devs[:self._dispatch_W]
         self._dispatch_mode    = str(cfg.dispatch)
 
-        # Drive the build loop.  After this completes, the instance holds all
-        # compile-relevant state and its __call__ / evaluate can safely pmap.
+        # Build all compile-relevant per-key state before any evaluate call.
         for key in self._keys():
             self._build_for_key(key)
 
+    # ---- Private Methods ----
+
     def _build_dispatch_fn(self, thread_fn, *, in_axes):
-        """Build a cached `(*sharded_args) → pytree` wrapper around
-        `thread_fn`.  Returns `(W, fn)` — caller pads inputs to a multiple
-        of `W` and dispatches via `shard_dispatch`.  After the first call
-        per (thread_fn, in_axes) this is a dict lookup.
+        """
+        Build a cached (*sharded_args) -> pytree wrapper around thread_fn,
+        returning (W, fn).  Caller pads inputs to a multiple of W and
+        dispatches via shard_dispatch.
         """
         fn = cached_parallel_thread(
             self, '_dispatch_cache', thread_fn,
@@ -501,16 +367,10 @@ class BaseEvaluator(ABC):
         viable_warn_threshold: float = 0.5,
         converged_warn_threshold: float = 0.5,
     ) -> None:
-        """Accumulate SQP feasibility + KKT-convergence stats; emit a
-        throttled warning if either rate drops below its threshold.
-
-        Caller filters real lanes (pass `flags[:n_real]`).  Warning fires
-        each time `n_sqp_calls` crosses a `warn_every` boundary, only
-        when a metric's success rate is at or below its threshold.
-
-        Counters track SUCCESSES (viable / converged), so a healthy run
-        reads `N/N (100%)` for both metrics.  The gap between viability
-        and convergence is the SQP-tuning signal.
+        """
+        Accumulate SQP feasibility and KKT-convergence successes; emit a
+        throttled warning whenever either rate drops at or below its
+        threshold.  Caller passes only the real lanes (flags[:n_real]).
         """
         vf = np.asarray(viable_flags).reshape(-1)
         cf = np.asarray(converged_flags).reshape(-1)
@@ -540,42 +400,27 @@ class BaseEvaluator(ABC):
                 )
             self._last_warn_at = self.n_sqp_calls
 
-    # --- contract --------------------------------------------------------
+    # ---- Base Methods ----
 
     @abstractmethod
     def _keys(self) -> list:
         """
-        Return the list of sub-problem keys this evaluator iterates over.
-
-        Examples:
-          CTGEvaluator              -> list(graph.successors(node))
-          ForwardEvaluator          -> list(graph.predecessors(node))
-          CurrentCostEvaluator      -> [node]
-          PostProcessUpperLevel     -> [None]   (graph-wide)
+        Return the list of sub-problem keys this evaluator iterates over
+        (successors, predecessors, [node], or [None] for graph-wide).
         """
 
     @abstractmethod
     def _build_for_key(self, key) -> None:
         """
-        Populate `self.factories[key]`, `self.screeners[key]`,
-        `self.sobol_pool[key]` plus any per-key shape/indices state.
-
-        Called once per key from `__init__`.  Should close only over static
-        per-(cfg, graph, node, key) data so the stored factory / screener
-        objects have stable identities across all subsequent `evaluate`
-        calls.
+        Populate the per-key factory, screener, Sobol pool and shape state.
+        Called once per key from __init__; closes only over static
+        per-(cfg, graph, node, key) data so the stored objects keep stable ids.
         """
 
     @abstractmethod
     def evaluate(self, *args, **kwargs):
         """
-        Pmap thread body.  Argument signature is evaluator-specific.
-
-        Must be a pure function of:
-          - its (traced) arguments, and
-          - the static state stored on `self` at construction.
-
-        No new Python closures, no fresh jit / pmap objects, no partial()
-        construction — anything that would change function identity breaks
-        the compile cache.
+        Pmap thread body, evaluator-specific in signature.  Must be a pure
+        function of its traced arguments and the static state on self — any
+        fresh closure / jit / pmap object would break the compile cache.
         """

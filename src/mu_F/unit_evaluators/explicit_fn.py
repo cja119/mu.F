@@ -1,6 +1,7 @@
+"""Explicit (steady-state) unit functions and ODE-step factories per case study."""
 
 from functools import partial
-import logging 
+import logging
 from jax import jit
 from omegaconf import DictConfig
 import jax.numpy as jnp
@@ -8,26 +9,15 @@ from jax import hessian
 from jax.nn import sigmoid
 
 
-# --- tablet press case study --- # 
+# ---------------------------------------------------------------------------
+# Tablet press case study
+# ---------------------------------------------------------------------------
 
 @partial(jit, static_argnums=(0,))
 def bulk_density_u1(cfg, design_args, input_args, *args):
-    """bulk density function for conical mill
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - mass inflow of api, mass inflow of excipient, blade speed
-    input args - None
-    args - None
-
-    Output:
-        critical quality attributes (CQAs) - bulk density
-        process constraints - None
-        outputs - None
-
+    """
+    Bulk density for the conical mill (unit 1).
+    Design args: API inflow, excipient inflow, blade speed.
     """
     cfg_args = cfg.model.unit_1_args.bulk_density
     return (
@@ -40,22 +30,9 @@ def bulk_density_u1(cfg, design_args, input_args, *args):
 
 @partial(jit, static_argnums=(0,))
 def mean_residence_time_u1(cfg, design_args, input_args, *args):
-    """mean residence time function for conical mill
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - mass inflow of api, mass inflow of excipient, blade speed
-    input args - None
-    args - None
-
-    Output:
-        critical quality attributes (CQAs) - mean residence time
-        process constraints - None
-        outputs - None
-
+    """
+    Mean residence time for the conical mill (unit 1).
+    Design args: API inflow, excipient inflow, blade speed.
     """
     cfg_args = cfg.model.unit_1_args.mean_residence_time
     cfg_d_args = cfg.case_study.KS_bounds.design_args[0][2]
@@ -69,20 +46,9 @@ def mean_residence_time_u1(cfg, design_args, input_args, *args):
 def unit_1_dynamics(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, *args: None
 ):
-    """unit 1 function for conical mill
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - mass inflow of api, mass inflow of excipient, blade speed
-    input args - None
-    args - None
-
-    Output:
-        outputs - hold up mass, hold_up volume, mass outflow rate, mass fraction of api, mass fraction of excipient
-
+    """
+    Conical mill (unit 1) dynamics: returns hold-up mass and volume, mass
+    outflow rate, and API / excipient mass fractions.
     """
     design_args = design_args.squeeze()
     bulk_density = bulk_density_u1(cfg, design_args, input_args, *args) #+ design_args[-1] - design_args[-2] 
@@ -102,20 +68,9 @@ def unit_1_dynamics(
 
 @partial(jit, static_argnums=(0,))
 def hold_up_mass_u2(cfg, design_args, input_args, *args):
-    """steady state hold up mass function for convective blender
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - mass inflow of lubricant, blade speed
-    input args - mass flow of api, mass flow of excipient
-    args - None
-
-    Output:
-        outputs - steady state hold up mass
-
+    """
+    Steady-state hold-up mass for the convective blender (unit 2).
+    Design args: lubricant inflow, blade speed; inputs: API / excipient flow.
     """
     cfg_args = cfg.model.unit_2_args.hold_up_mass
     mass_flow_in = input_args[0] + input_args[1] + design_args[0]
@@ -130,20 +85,9 @@ def hold_up_mass_u2(cfg, design_args, input_args, *args):
 
 @partial(jit, static_argnums=(0,))
 def bulk_density_u2(cfg, design_args, input_args, *args):
-    """bulk density function for convective blender
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - mass inflow of lubricant, blade speed
-    input args - mass flow of api, mass flow of excipient
-    args - None
-
-    Output:
-        outputs - bulk density
-
+    """
+    Bulk density for the convective blender (unit 2).
+    Design args: lubricant inflow, blade speed; inputs: API / excipient flow.
     """
     cfg_args = cfg.model.unit_2_args.bulk_density
     mass_flow_in = input_args[0] + input_args[1] + design_args[0]
@@ -170,20 +114,9 @@ def bulk_density_u2(cfg, design_args, input_args, *args):
 def porosity_estimate_u2(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, *args: None
 ):
-    """porosity estimate function for convective blender
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - mass inflow of lubricant, blade speed
-    input args - mass flow of api, mass flow of excipient
-    args - None
-
-    Output:
-        outputs - porosity estimate
-
+    """
+    Porosity estimate for the convective blender (unit 2).
+    Design args: lubricant inflow, blade speed; inputs: API / excipient flow.
     """
     mass_flow_in = input_args[0] + input_args[1] + design_args[0]
     # particle density calculation
@@ -215,20 +148,9 @@ def porosity_estimate_u2(
 def unit_2_dynamics(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, *args: None
 ):
-    """unit 2 function for convective blender
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - mass inflow of lubricant, blade speed
-    input args - mass flow of api, mass flow of excipient
-    args - None
-
-    Output:
-        outputs - hold up mass, hold_up volume, mass outflow rate, mass fraction of api, mass fraction of excipient, mass fraction of lubricant, porosity
-
+    """
+    Convective blender (unit 2) dynamics: returns hold-up mass and volume,
+    mass outflow rate, API / excipient / lubricant mass fractions, porosity.
     """
     input_args = input_args.squeeze()
     design_args= design_args.squeeze()
@@ -254,20 +176,9 @@ def unit_2_dynamics(
 def main_comp_volume_unit_3(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, *args: None
 ):
-    """volume function for tablet press
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - Pre-compression pressure, main compression pressure
-    input args - initial porosity
-    args - pre-compression volume, pre-compression porosity
-
-    Output:
-        outputs - main-compression volume
-
+    """
+    Main-compression volume for the tablet press (unit 3).
+    Design args: pre- and main-compression pressure; input: initial porosity.
     """
     V_pre, pre_comp_psty = args[0], args[1]
     main_comp_kawakita = cfg.model.unit_3_args.main_comp_kawakita
@@ -280,20 +191,9 @@ def main_comp_volume_unit_3(
 def pre_comp_volume_unit_3(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, *args: None
 ):
-    """pre comp volume function for tablet press
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - Pre-compression pressure, main compression pressure
-    input args - initial porosity
-    args - None
-
-    Output:
-        outputs - pre-compression volume
-
+    """
+    Pre-compression volume for the tablet press (unit 3).
+    Design args: pre- and main-compression pressure; input: initial porosity.
     """
     V_0 = cfg.model.unit_3_args.initial_volume_in_die
     pre_comp_kawakita = cfg.model.unit_3_args.pre_comp_kawakita
@@ -306,20 +206,9 @@ def pre_comp_volume_unit_3(
 def porosity_update_u3(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, *args: None
 ):
-    """porosity update function for tablet press
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - Pre-compression pressure, main compression pressure
-    input args - initial porosity
-    args - pre-compression volume
-
-    Output:
-        outputs - porosity
-
+    """
+    Porosity update for the tablet press (unit 3).
+    Design args: pre- and main-compression pressure; input: initial porosity.
     """
     V_0 = cfg.model.unit_3_args.initial_volume_in_die
     V_pre = args[0]
@@ -329,20 +218,9 @@ def porosity_update_u3(
 def hardness_estimate_u3(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, *args: None
 ):
-    """hardness estimate function for tablet press
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - Pre-compression pressure, main compression pressure
-    input args - initial porosity
-    args - main-compression volume
-
-    Output:
-        outputs - hardness
-
+    """
+    Hardness estimate for the tablet press (unit 3).
+    Design args: pre- and main-compression pressure; input: initial porosity.
     """
     relative_density = (
         (1 - input_args) * cfg.model.unit_3_args.initial_volume_in_die / args[0]
@@ -357,20 +235,9 @@ def hardness_estimate_u3(
 def unit_3_dynamics(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, *args: None
 ):
-    """unit 3 function for tablet press
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - Pre-compression pressure, main compression pressure
-    input args - porosity
-    args - None
-
-    Output:
-        outputs - tablet hardness, pre-compression volume, main compression volume
-
+    """
+    Tablet press (unit 3) dynamics: returns tablet hardness, pre-compression
+    volume and main-compression volume.
     """
     input_args = input_args.squeeze() #+ design_args[-1] - design_args[-2]
     design_args = design_args.squeeze() 
@@ -383,26 +250,16 @@ def unit_3_dynamics(
 
 
 
-# --- convex estimator case study --- #
+# ---------------------------------------------------------------------------
+# Convex estimator case study
+# ---------------------------------------------------------------------------
 
 @partial(jit, static_argnums=(0,))
 def sub_fn_2_eval(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
 ):
-    """sub function 1 for convex estimator
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - None
-    input args - None
-    args - None
-
-    Output:
-        outputs - Block 1 output
-
+    """
+    Block 1 evaluation for the convex estimator.
     """
 
     log_terms = jnp.array([jnp.log(aux[i] + 1).squeeze() for i in range(aux.shape[0])])
@@ -416,7 +273,7 @@ def sub_fn_2(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
     ):
     """
-    sub fn 2 for convex estimator
+    Block 2 for the convex estimator (value with convexity property).
     """
     eval = sub_fn_2_eval(
     cfg, design_args, input_args, aux.squeeze(), args)
@@ -430,20 +287,8 @@ def sub_fn_2(
 def sub_fn_3_eval(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
     ):
-    """sub function 3 for convex estimator
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - None
-    input args - None
-    args - None
-
-    Output:
-        outputs - Block 2 output
-
+    """
+    Block 3 evaluation for the convex estimator.
     """
     log_terms = jnp.array([aux[i]*jnp.log(aux[i] + 1) for i in range(aux.shape[0])])
     coefficients = jnp.array([design_args[i] for i in range(design_args.shape[0])])
@@ -457,20 +302,8 @@ jax_hessian_sub_fn_3 = hessian(sub_fn_3_eval, argnums=3, has_aux=False)
 def sub_fn_3(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
 ):
-    """sub function 3 for convex estimator
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - None
-    input args - None
-    args - None
-
-    Output:
-        outputs - Block 3 output
-
+    """
+    Block 3 for the convex estimator (value with convexity property).
     """
     eval = sub_fn_3_eval(
     cfg, design_args, input_args, aux.squeeze(), args)
@@ -484,20 +317,8 @@ def sub_fn_3(
 def sub_fn_1(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
 ):
-    """sub function 3 for convex estimator
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - None
-    input args - None
-    args - None
-
-    Output:
-        outputs - Block 3 output
-
+    """
+    Block 1 passthrough for the convex estimator.
     """
     return jnp.hstack([design_args.reshape(1,1), aux])
 
@@ -505,20 +326,8 @@ def sub_fn_1(
 def sub_fn_4(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
 ):
-    """sub function 4 for convex estimator
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - None
-    input args - None
-    args - None
-
-    Output:
-        outputs - Block 4 output
-
+    """
+    Block 4 for the convex estimator (linear form in the aux variables).
     """
     return jnp.hstack([jnp.dot(design_args, aux.T).reshape(1,1), aux])
 
@@ -526,20 +335,8 @@ def sub_fn_4(
 def sub_fn_5(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
 ):
-    """sub function 5 for convex estimator
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - None
-    input args - None
-    args - None
-
-    Output:
-        outputs - Block 5 output
-
+    """
+    Block 5 for the convex estimator (quadratic form in the aux variables).
     """
     Q = jnp.diag(design_args[0,:-1])
     Q= Q.at[0,1].set(design_args[0,-1])
@@ -550,43 +347,21 @@ def sub_fn_5(
 
 @partial(jit, static_argnums=(0,))
 def sub_fn_6(cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None):
-    """sub function 6 for convex estimator
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - None
-    input args - None
-    args - None
-
-    Output:
-        outputs - Block 6 output
-
+    """
+    Block 6 for the convex estimator (sum of upstream inputs).
     """
     return jnp.hstack([jnp.sum(input_args[:-2]).reshape(1,1), aux])
 
-# ----------- estimator --------------  #
+# ---------------------------------------------------------------------------
+# Estimator
+# ---------------------------------------------------------------------------
 
 @partial(jit, static_argnums=(0,))
 def esub_fn_2_eval(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
 ):
-    """sub function 1 for convex estimator
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - None
-    input args - None
-    args - None
-
-    Output:
-        outputs - Block 1 output
-
+    """
+    Block 1 evaluation for the estimator.
     """
 
     log_terms = jnp.array([jnp.log(aux[i] + 1).squeeze() for i in range(aux.shape[0])])
@@ -600,7 +375,7 @@ def esub_fn_2(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
     ):
     """
-    sub fn 2 for convex estimator
+    Block 2 for the estimator.
     """
     z = aux[:,:-1]
     eval = esub_fn_2_eval(
@@ -612,20 +387,8 @@ def esub_fn_2(
 def esub_fn_3_eval(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
     ):
-    """sub function 3 for convex estimator
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - None
-    input args - None
-    args - None
-
-    Output:
-        outputs - Block 2 output
-
+    """
+    Block 3 evaluation for the estimator.
     """
     log_terms = jnp.array([aux[i]*jnp.log(aux[i] + 1) for i in range(aux.shape[0])])
     coefficients = jnp.array([design_args[i] for i in range(design_args.shape[0])])
@@ -639,20 +402,8 @@ jax_hessian_sub_fn_3 = hessian(esub_fn_3_eval, argnums=3, has_aux=False)
 def esub_fn_3(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
 ):
-    """sub function 3 for convex estimator
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - Nonee
-    input args - None
-    args - None
-
-    Output:
-        outputs - Block 3 output
-
+    """
+    Block 3 for the estimator.
     """
     z = aux[:,:-1]
     eval = esub_fn_3_eval(
@@ -664,20 +415,8 @@ def esub_fn_3(
 def esub_fn_1(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
 ):
-    """sub function 3 for convex estimator
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - None
-    input args - None
-    args - None
-
-    Output:
-        outputs - Block 3 output
-
+    """
+    Block 1 passthrough for the estimator.
     """
     return jnp.hstack([design_args.reshape(1,1), aux])
 
@@ -685,20 +424,8 @@ def esub_fn_1(
 def esub_fn_4(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
 ):
-    """sub function 4 for convex estimator
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - None
-    input args - None
-    args - None
-
-    Output:
-        outputs - Block 4 output
-
+    """
+    Block 4 for the estimator (linear form in the aux variables).
     """
     z = aux[:,:-1]
     return jnp.hstack([jnp.dot(design_args, z.T).reshape(1,1), aux])
@@ -707,20 +434,8 @@ def esub_fn_4(
 def esub_fn_5(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
 ):
-    """sub function 5 for convex estimator
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - None
-    input args - None
-    args - None
-
-    Output:
-        outputs - Block 5 output
-
+    """
+    Block 5 for the estimator (quadratic form in the aux variables).
     """
     z = aux[:,:-1]
     Q = jnp.diag(design_args[0,:-1])
@@ -732,45 +447,21 @@ def esub_fn_5(
 
 @partial(jit, static_argnums=(0,))
 def esub_fn_6(cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None):
-    """sub function 6 for convex estimator
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - None
-    input args - None
-    args - None
-
-    Output:
-        outputs - Block 6 output
-
+    """
+    Block 6 for the estimator (sum of upstream inputs).
     """
     return jnp.hstack([jnp.sum(input_args[:-2]).reshape(1,1), aux])
 
-# ------------------------------------- #
-# --------- affine case study --------- #
-# ------------------------------------- #
+# ---------------------------------------------------------------------------
+# Affine case study
+# ---------------------------------------------------------------------------
 
 @partial(jit, static_argnums=(0,))
 def affine_case_study_1(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
 ):
-    """affine case study for illustration
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - None
-    input args - None
-    args - None
-
-    Output:
-        outputs -  1-3
-
+    """
+    Affine map for the illustration case study (block 1-3).
     """
 
     A = jnp.array(cfg.model.affine_case_study_args.A[0])
@@ -782,20 +473,8 @@ def affine_case_study_1(
 def affine_case_study_2(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
 ):
-    """affine case study for illustration
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - None
-    input args - None
-    args - None
-
-    Output:
-        outputs - 2-3
-
+    """
+    Affine map for the illustration case study (block 2-3).
     """
 
     A = jnp.array(cfg.model.affine_case_study_args.A[1])
@@ -809,20 +488,8 @@ def affine_case_study_2(
 def affine_case_study_3(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
 ):
-    """affine case study for illustration
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - None
-    input args - None
-    args - None
-
-    Output:
-        outputs - 3-[4,5]
-
+    """
+    Affine map for the illustration case study (block 3-[4,5]).
     """
 
     A = jnp.array(cfg.model.affine_case_study_args.A[2])
@@ -835,20 +502,8 @@ def affine_case_study_3(
 def affine_case_study_4(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
 ):
-    """affine case study for illustration
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - None
-    input args - None
-    args - None
-
-    Output:
-        outputs
-
+    """
+    Affine map for the illustration case study (block 4).
     """
 
     A = jnp.array(cfg.model.affine_case_study_args.A[3])
@@ -861,20 +516,8 @@ def affine_case_study_4(
 def affine_case_study_5(
     cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
 ):
-    """affine case study for illustration
-    Args:
-        cfg: hydra config
-        design_args: design arguments
-        input_args: input arguments
-        *args: additional arguments
-
-    design args - None
-    input args - None
-    args - None
-
-    Output:
-        outputs
-
+    """
+    Affine map for the illustration case study (block 5).
     """
 
     A = jnp.array(cfg.model.affine_case_study_args.A[4])
@@ -882,9 +525,9 @@ def affine_case_study_5(
 
     return A @ design_args.T + B @ input_args
 
-# -------------------------------------------------------------------------------- #
-# ----------------------------- CSTR (pcgym, jax) -------------------------------- #
-# -------------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
+# CSTR (pcgym, jax)
+# ---------------------------------------------------------------------------
 
 def _smooth_log(z, z0=0.02):
     f0 = jnp.log(z0)
@@ -896,13 +539,10 @@ def _smooth_log(z, z0=0.02):
 
 
 def _make_cstr_step(cfg: DictConfig):
-    """Factory: build a JIT-compiled CSTR step function.
-
-    All cfg-dependent values (constraint thresholds, setpoint trajectory,
-    pcgym model class) are resolved eagerly into Python scalars / jnp arrays /
-    Python objects at factory time, so the inner JIT'd body only ever touches
-    JAX arrays. This avoids OmegaConf attribute-access overhead inside the
-    per-step trace and makes the step XLA-friendly.
+    """
+    Factory for the JIT-compiled CSTR step.
+    cfg-dependent constants are resolved eagerly so the inner body touches
+    only JAX arrays, keeping the per-step trace XLA-friendly.
     """
     import importlib
 
@@ -931,16 +571,10 @@ def _make_cstr_step(cfg: DictConfig):
 
 
 def cstr_simulator(cfg: DictConfig):
-    """Factory for the CSTR steady-state-style simulator (used when
-    unit_op == 'steady_state'). Returns a function with the standard
-    case-study signature (cfg, design_args, input_args, aux, uncertainties, node).
-
-    The inner step is JIT-compiled with cfg-resolved constants closed over.
-
-    Bundled tensor returned by the step is [F | G | R] (no terminal cost):
-        F = dxdt       (state derivatives, F_SIZE = X_SIZE = 2)
-        G = path cons  (lower / upper temperature, G_SIZE = 2)
-        R = stage cost (smooth log distance to setpoint, L_SIZE = 1)
+    """
+    Factory for the CSTR steady-state simulator (unit_op == 'steady_state').
+    The step returns the bundled tensor [F | G | R]: state derivatives,
+    lower / upper temperature path constraints and the setpoint stage cost.
     """
     step = _make_cstr_step(cfg)
 
@@ -950,21 +584,15 @@ def cstr_simulator(cfg: DictConfig):
     return cstr_simulator_fn
 
 
-# -------------------------------------------------------------------------------- #
-# -------- Waste water (Bernard et al. 2001 AM2 anaerobic digestion) ------------- #
-# -------------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
+# Waste water (Bernard et al. 2001 AM2 anaerobic digestion)
+# ---------------------------------------------------------------------------
 
 def _make_waste_water_step(cfg: DictConfig):
-    """Factory: build a JIT-compiled AM2 step function.
-
-    Returns a function with signature `_step(x, u, z, node)` that emits the
-    bundled tensor [F | G | R] of shape (X_SIZE + G_SIZE + L_SIZE,) = 12:
-        F = dxdt        (state derivatives, F_SIZE = X_SIZE = 6)
-        G = path cons   (5 feasibility margins, positive = feasible)
-        R = stage cost  (-q_m / Q_M_REF, lower is better; du² penalty dropped)
-
-    All cfg-dependent constants are resolved eagerly at factory time so the
-    inner JIT'd body only touches plain JAX arrays.
+    """
+    Factory for the JIT-compiled AM2 step, emitting [F | G | R]: state
+    derivatives, five feasibility margins and the -q_m / Q_M_REF stage cost.
+    cfg-dependent constants are resolved eagerly at factory time.
     """
     # Kinetics
     mu_1_max = float(cfg.model.mu_1_max)
@@ -1095,9 +723,10 @@ def _make_waste_water_step(cfg: DictConfig):
 
 
 def waste_water_simulator(cfg: DictConfig):
-    """Factory for the waste-water steady-state-style simulator (used when
-    unit_op == 'steady_state'). Returns a function with the standard
-    case-study signature (cfg, design, input, aux, uncertainties, node)."""
+    """
+    Factory for the waste-water steady-state simulator
+    (unit_op == 'steady_state').
+    """
     step = _make_waste_water_step(cfg)
 
     def waste_water_simulator_fn(cfg_unused: DictConfig, design_args, input_args, aux, uncertainties, node):
@@ -1106,13 +735,11 @@ def waste_water_simulator(cfg: DictConfig):
     return waste_water_simulator_fn
 
 
-# -------------------------------------------------------------------------------- #
-# ----- Softplus-based smooth min/max helpers (used by smooth-dynamics models) --- #
-# `_smooth_max(x, y, β) → max(x, y)` as `β → ∞`.  Inside the rounding zone
-# `|x − y| ≲ 1/β` it's a smooth (C^∞) transition; outside it's effectively
-# the hard max.  Composed for `_smooth_clip`.  Replaces kinks (`jnp.maximum(·, 0)`
-# and `jnp.clip(·, lo, hi)`) that fundamentally break smooth-Newton SQP.
-# -------------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
+# Softplus-based smooth min/max helpers (smooth-dynamics models)
+# ---------------------------------------------------------------------------
+# beta -> inf recovers the hard operators; smoothing the kinks lets Newton SQP
+# differentiate through the dynamics.
 
 def _smooth_max(x, y, beta):
     """Softplus-smooth max(x, y).  beta -> inf recovers jnp.maximum."""
@@ -1127,30 +754,15 @@ def _softplus(x, beta):
     return jnp.logaddexp(x * beta, 0.0) / beta
 
 
-# -------------------------------------------------------------------------------- #
-# ----------------- Hydrogen export (port of sample_envs/hydrogen3.py) ----------- #
-# -------------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
+# Hydrogen export (port of sample_envs/hydrogen3.py)
+# ---------------------------------------------------------------------------
 
 def _make_hydrogen_export_step(cfg: DictConfig):
-    """Factory: build a JIT-compiled hydrogen-export steady-state step.
-
-    Port of sample_envs/hydrogen3.py: 3-train ammonia-vector hydrogen export.
-    Renewable-energy disturbance is consumed *directly* (z = energy value),
-    matching the legacy markov_process.yaml `parameters_*` semantics — the
-    discrete distribution lives in `cfg.case_study.parameters_samples`, not
-    in an inverse-CDF table.
-
-    Returns a function `_step(x, u, z, node)` emitting the bundled tensor
-    [F | G | R] of shape (X_SIZE + G_SIZE + L_SIZE,) = (2 + 3 + 1,) = 6:
-        F = [hydrogen_storage, train_throughput]    (next state, F_SIZE=2)
-        G = [lower_h2_storage, upper_h2_storage,
-             energy_balance]                         (positive = feasible, G_SIZE=3)
-        R = stage cost  (lower = better; 3-train negative throughput +
-                         storage decay - lambda·||ramp||²)
-
-    Note: hydrogen3.py treats the 3 conversion trains identically (same state
-    component x[1], same control component u[0]), so the dynamics collapse to
-    one shared throughput multiplied by 3.
+    """
+    Factory for the JIT-compiled hydrogen-export step (3-train ammonia vector).
+    The renewable-energy disturbance z is consumed directly; the step emits
+    [F | G | R]: next state, storage / energy-balance constraints, stage cost.
     """
     # Capacities / counts
     n_turbines              = float(cfg.model.n_turbines)
@@ -1174,13 +786,6 @@ def _make_hydrogen_export_step(cfg: DictConfig):
     upper_ramp_limit        = float(cfg.model.upper_ramp_limit)
     minimum_train_throughput = float(cfg.model.minimum_train_throughput)
 
-    N = int(cfg.case_study.num_nodes)
-    t_on = int(cfg.model.get('renewable_pickup_node', N // 2))
-    t_on = max(0, min(N, t_on))
-    RENEWABLE_ENERGY = jnp.concatenate(
-        [jnp.zeros(t_on), jnp.ones(N - t_on)]
-    ) * 11.88
-
     # Smoothness for the fuel-cell / electrolyser split (softplus β).
     split_beta = float(cfg.model.get('smooth_beta_power_split', 20.0))
 
@@ -1192,7 +797,8 @@ def _make_hydrogen_export_step(cfg: DictConfig):
 
         _storage, _throughput, _n_active, = x
         n_active, delta_throughput, power_action = u
-        renewable_energy = jnp.take(RENEWABLE_ENERGY, node)
+        # Weather realisation (0..11.88) sampled per scenario, passed via p.
+        renewable_energy = jnp.ravel(z)[0]
 
         fuel_cell_energy    = _softplus(-power_action, beta=split_beta)
         electrolysis_energy = _softplus( power_action, beta=split_beta)
@@ -1210,8 +816,7 @@ def _make_hydrogen_export_step(cfg: DictConfig):
             electrolysis_energy * electrolyser_efficiency - throughput / vector_molar_efficiency
         )
 
-        # All cons >= 0 is feasible.  fc − el ≡ −power_action exactly via the
-        # softplus identity, so this is a single linear term in power_action.
+        # all cons >= 0 is feasible; fc - el = -power_action via the softplus identity
         energy_balance = (renewable_energy * n_turbines - power_action - vector_production_energy) / (11.88 * n_turbines)
         lower_storage = (storage - storage_lo) / (storage_hi)
         upper_storage = (storage_hi - storage)  / (storage_hi)
@@ -1235,8 +840,9 @@ def _make_hydrogen_export_step(cfg: DictConfig):
 
 
 def hydrogen_export_simulator(cfg: DictConfig):
-    """Factory for hydrogen_export (steady-state). Returns a function with the
-    standard case-study signature (cfg, design, input, aux, uncertainties, node)."""
+    """
+    Factory for the hydrogen-export steady-state simulator.
+    """
     step = _make_hydrogen_export_step(cfg)
 
     def hydrogen_export_simulator_fn(cfg_unused: DictConfig, design_args, input_args, aux, uncertainties, node):
@@ -1245,31 +851,15 @@ def hydrogen_export_simulator(cfg: DictConfig):
     return hydrogen_export_simulator_fn
 
 
-# -------------------------------------------------------------------------------- #
-# ----- Biohydrogen (port of sample_envs/biohydrogen.py — fed-batch H2 culture) -- #
-# -------------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
+# Biohydrogen (port of sample_envs/biohydrogen.py, fed-batch H2 culture)
+# ---------------------------------------------------------------------------
 
 def _make_biohydrogen_step(cfg: DictConfig):
-    """Factory: build a JIT-compiled biohydrogen step (fed-batch H2 culture).
-
-    Port of sample_envs/biohydrogen.py.  States: X (biomass), C (carbon),
-    N (culture nitrate), q (intracellular nitrogen quota), O (oxygen %),
-    H (accumulated H2), F (accumulated feed volume).  Controls: u[0] =
-    N_Fed (feed nitrate concentration mg/L), u[1] = log_F_in (natural log
-    of feed flow rate L/h).  F_in = exp(u[1]) inside the step.  Sampling
-    u[1] in log space biases Sobol/DEUS toward small F_in values, which
-    is where the budget-feasible region lives.  No disturbance (Z_SIZE = 0).
-
-    Global aux variable (sampled per trajectory): max_fr_per_node ∈ [0, 1].
-    Sets the per-node F_in cap to max_fr_per_node · F_max / tf via the
-    g_rate path constraint.  Lets Sobol / DEUS explore both how much to
-    feed (u[1]) and how concentrated the feed strategy is (aux).
-
-    Budget F ≤ F_max is also enforced as a path constraint (g_F).  Both
-    PCs use the framework's negative-violated / zero-feasible convention.
-
-    Returns `_step(x, u, z, aux, node)` emitting [F | G | R | Φ] of shape
-    (7 + 4 + 1 + 1,) = 13.  Integration is in hours.
+    """
+    Factory for the JIT-compiled biohydrogen step (fed-batch H2 culture).
+    Controls feed nitrate concentration and log feed flow; the per-trajectory
+    aux caps the feed rate. Emits [F | G | R | Phi]; integration is in hours.
     """
     mu_max = float(cfg.model.mu_max)
     k_q    = float(cfg.model.k_q)
@@ -1308,13 +898,11 @@ def _make_biohydrogen_step(cfg: DictConfig):
         t1 = mu_max * (1.0 - k_q / q_safe) * (C / (K_c + C + 1e-8))
         t2 = N / (K_N + N)
         t3 = sigmoid(O * 2.0)                  # ~0 at O≈0, ~1 at O>0
-        # Numerically-stable (1 - σ(2·O)): σ(-2·O) avoids the catastrophic
-        # cancellation that makes (1 - σ(2·20)) round to 0 in float64.
+        # numerically-stable (1 - σ(2·O)) avoiding float64 cancellation
         gate = sigmoid(-O * 2.0)
         f_N = sigmoid((N_SWITCH - N) * 1.0)    # ~1 at N<switch, ~0 otherwise
 
-        # State derivatives.  F_in is the decision directly (L/h); cumulative
-        # budget is enforced via g_F below, per-node cap via g_rate.
+        # state derivatives; F_in is the decision directly (L/h)
         dX = X * t1 - mu_d * X ** 2
         dC = -Y_CX * X * t1 + F_in * C_Fed
         dN = -Y_NX * X * t2 * mu_max + F_in * N_Fed
@@ -1346,11 +934,10 @@ def _make_biohydrogen_step(cfg: DictConfig):
 
 
 def biohydrogen_simulator(cfg: DictConfig):
-    """Factory for biohydrogen used when `unit_op == 'steady_state'`.
-
-    Real workflow uses `unit_op: 'dynamic'` and routes through
-    `unit_evaluators.ode.biohydrogen_ode`; this entry exists for symmetry
-    with the other dynamic case studies.
+    """
+    Factory for biohydrogen used when unit_op == 'steady_state'.
+    The real workflow is dynamic and routes through ode.biohydrogen_ode; this
+    entry exists for symmetry with the other dynamic case studies.
     """
     step = _make_biohydrogen_step(cfg)
 

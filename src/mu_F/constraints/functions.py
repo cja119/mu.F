@@ -1,15 +1,15 @@
-""" case study specific functions """
+"""Case-study-specific constraint and cost functions, with the dispatch registries."""
 
 from jax import jit, vmap
 import jax.numpy as jnp
 from functools import partial
 
 
-# ----------------------------------------------------------------------------- #
-# ---------------------------- Serial Mechanism Batch ------------------------- #
-# ----------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
+# Serial mechanism batch
+# ---------------------------------------------------------------------------
 
-# --- critical quality attribute constraints --- #
+# critical quality attribute constraints
 @partial(jit, static_argnums=(1))
 def purity_b(dynamic_profile, cfg):
     pb = dynamic_profile[1] / jnp.sum(dynamic_profile[:])
@@ -21,7 +21,7 @@ def purity_c(dynamic_profile, cfg):
     return dynamic_profile[2] / jnp.sum(dynamic_profile[:])
 
 
-# --- constraint indicators --- #
+# constraint indicators
 
 @partial(jit, static_argnums=(1))
 def purity_unit_2_lb(dynamic_profile, cfg):
@@ -35,12 +35,12 @@ def purity_unit_1_ub(dynamic_profile, cfg):
 
 
 
-# ----------------------------------------------------------------------------- #
-# ---------------------------- Tableting cont --------------------------------- #
-# ----------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
+# Tableting (continuous)
+# ---------------------------------------------------------------------------
 
 
-# --- critical quality attribute constraints --- #
+# critical quality attribute constraints
 @partial(jit, static_argnums=(1))
 def tablet_hardness(steady_state_outputs, cfg):
     # steady state outputs are in the order: [H, V_pre, V_main]
@@ -53,7 +53,7 @@ def tablet_composition(steady_state_outputs, cfg):
     return steady_state_outputs[3]
 
 
-# ----- process constraints ----- #
+# process constraints
 @partial(jit, static_argnums=(1))
 def tablet_size(steady_state_outputs, cfg):
     # steady state outputs are in the order: [H, V_pre, V_main]
@@ -66,7 +66,7 @@ def unit_volume(steady_state_outputs, cfg):
     return steady_state_outputs[1]
 
 
-# --- constraint indicators --- #
+# constraint indicators
 @partial(jit, static_argnums=(1))
 def tablet_hardness_lb(steady_state_outputs, cfg):
     return tablet_hardness(steady_state_outputs, cfg) - cfg.constraint.tablet_hardness[0]  # >= 0
@@ -101,15 +101,14 @@ def unit2_volume_ub(steady_state_outputs, cfg):
 
 
 
-# -------------------------------------------------------------------------------- #
-# ---------------------------- batch_reaction_network ---------------------------- #
-# -------------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
+# Batch reaction network
+# ---------------------------------------------------------------------------
 
 
 @partial(jit, static_argnums=(1))
 def purity_b(dynamic_profile, cfg):
     pb = dynamic_profile[1] / jnp.sum(dynamic_profile[:])
-    # jax.debug.print('pb {x}', x=pb)
     return pb
 
 
@@ -128,13 +127,13 @@ def purity_unit_1_brn_ub(dynamic_profile, cfg):
 
 
 
-# -------------------------------------------------------------------------------- #
-# ---------------------------- convex estimator --------------------------------- #
-# -------------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
+# Convex estimator
+# ---------------------------------------------------------------------------
 
 @partial(jit, static_argnums=(1))
 def psd_constraint(dynamic_profile, cfg):
-    return dynamic_profile[0] # this quantity must just be non-negative.
+    return dynamic_profile[0]  # must just be non-negative
 
 @partial(jit, static_argnums=(1))
 def log_term_hess_1(dynamic_profile, cfg):
@@ -159,38 +158,40 @@ def estimation_bound_lb(dynamic_profile, cfg):
 
 @partial(jit, static_argnums=(1))
 def underestimation_constraint(dynamic_profile, cfg):
-    return nonconvex_ground_truth(dynamic_profile, cfg) - dynamic_profile[0]  # this quantity must just be non-negative.
+    return nonconvex_ground_truth(dynamic_profile, cfg) - dynamic_profile[0]  # must just be non-negative
 
 @partial(jit, static_argnums=(1))
 def evaluation_function(dynamic_profile, cfg):
     """
-    Evaluation for the post_processing problem.
+    Evaluation for the post-processing problem.
     """
-    return jnp.linalg.norm(underestimation_constraint(dynamic_profile, cfg)) 
+    return jnp.linalg.norm(underestimation_constraint(dynamic_profile, cfg))
 
 @partial(jit, static_argnums=(1))
 def estimation_g_aux(dynamic_profile, cfg):
-    """    """
-    return dynamic_profile[-1] - evaluation_function_aux(dynamic_profile, cfg)  # this quantity must just be non-negative.
+    """
+    Auxiliary slack constraint for the post-processing problem.
+    """
+    return dynamic_profile[-1] - evaluation_function_aux(dynamic_profile, cfg)  # must just be non-negative
 
 @partial(jit, static_argnums=(1))
 def evaluation_function_aux(dynamic_profile, cfg):
     """
-    Auxiliary evaluation for the post_processing problem.
+    Auxiliary evaluation for the post-processing problem.
     """
     return jnp.linalg.norm(nonconvex_ground_truth(dynamic_profile[-3:-1], cfg) - dynamic_profile[0])
 
 
-# -------------------------------------------------------------------------------- #
-# --------------------- Affine constraints for the case study ---------------------#
-# -------------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
+# Affine constraints
+# ---------------------------------------------------------------------------
 @partial(jit, static_argnums=(1))
 def negative_output_constraint(output, cfg):
-    return -output 
+    return -output
 
-# -------------------------------------------------------------------------------- #
-# ----------- cfg-driven Markov slicers (no MarkovEnvironment needed) ------------ #
-# -------------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
+# Cfg-driven Markov slicers
+# ---------------------------------------------------------------------------
 
 
 def _markov_cons_cfg(F_size: int, G_size: int, i: int, rollout, cfg=None):
@@ -221,9 +222,9 @@ def make_markov_cost_cfg(cfg):
                     int(sizes.PHI_SIZE))]
 
 
-# -------------------------------------------------------------------------------- #
-# ----- Per-case-study cost / constraint factories ------------------------------- #
-# -------------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
+# Per-case-study cost / constraint factories
+# ---------------------------------------------------------------------------
 
 def make_cstr_cost(cfg):            return make_markov_cost_cfg(cfg)
 def make_cstr_cons(cfg):            return make_markov_cons_cfg(cfg)
@@ -238,7 +239,7 @@ def make_biohydrogen_cost(cfg):     return make_markov_cost_cfg(cfg)
 def make_biohydrogen_cons(cfg):     return make_markov_cons_cfg(cfg)
 
 
-""" insert case study specific functions for constraints here"""
+# Per-case-study constraint registry keyed on cfg.case_study.case_study.
 CS_holder = {'tablet_press': {0: [unit1_volume_ub], 1: [unit2_volume_ub, tablet_composition_lb, tablet_composition_ub], 2: [tablet_hardness_lb, tablet_hardness_ub, tablet_size_lb, tablet_size_ub]},
              'serial_mechanism_batch': {0: [purity_unit_1_ub], 1: [purity_unit_2_lb]},
              'convex_estimator': {0: [], 1: [log_term_hess_1], 2: [log_term_hess_1], 3: [], 4: [psd_constraint], 5: [estimation_bound_lb]},

@@ -1,4 +1,4 @@
-# standard library imports
+"""Assemble the case-study graph: nodes, edges, constraints, costs and solvers."""
 from functools import partial
 from itertools import chain
 import jax.numpy as jnp
@@ -6,53 +6,48 @@ import numpy as np
 import pandas as pd
 
 
-from mu_F.unit_evaluators.constructor import unit_evaluation, post_process_evaluation
+from mu_F.unit_evaluators.constructor import UnitEvaluation, PostProcessEvaluation
 from mu_F.constraints.functions import COST_holder, CS_holder, post_process_visualiser
-from mu_F.graph.graph_assembly import graph_constructor, markov_graph_constructor
+from mu_F.graph.graph_assembly import GraphConstructor, MarkovGraphConstructor
 from mu_F.graph.methods import CS_edge_holder, vmap_CS_edge_holder
-from mu_F.surrogate.surrogate import surrogate
-from mu_F.constraints.constructor import constraint_evaluator
-from mu_F.post_processes.constructor import post_process_sampling_scheme, post_process_local_sip_scheme
+from mu_F.surrogate.surrogate import Surrogate
+from mu_F.constraints.constructor import ConstraintEvaluator
+from mu_F.post_processes.constructor import PostProcessSamplingScheme, PostProcessLocalSipScheme
 from mu_F.post_processes.methods import post_process_regressor_data_function
 from mu_F.unit_evaluators.utils import arrhenius_kinetics_fn, arrhenius_kinetics_fn_2
-from mu_F.visualisation.visualiser import visualiser
+from mu_F.visualisation.visualiser import Visualiser
 
 
 def case_study_constructor(cfg):
     """
-    Construct the case study graph
-    :param cfg: The configuration object
-    :return: The graph construction object
+    Build and return the assembled case-study graph from the config.
     """
-
-    # Create a sample constraint dictionary
     constraint_dictionary = CS_holder[cfg.case_study.case_study]
     cost_dictionary = COST_holder[cfg.case_study.case_study] if cfg.case_study.eval_cost else None
 
-    # create edge functions
+    # Edge functions: vmap'd variants when batched evaluation is enabled.
     if cfg.case_study.vmap_evaluations:
         dict_of_edge_fn = vmap_CS_edge_holder[cfg.case_study.case_study]
     else:
         dict_of_edge_fn = CS_edge_holder[cfg.case_study.case_study]
 
-    # Create a graph constructor object
+    # Markov-style case study: chained DAG of identical cfg-driven nodes.
     if cfg.case_study.get('make_markov', False):
-        # Markov-style case study: chain DAG of identical nodes.
-        # cfg-driven: simulator + slicers come from the case-study registries
-        # keyed on cfg.case_study.case_study.
-        G = markov_graph_constructor(cfg)
+        G = MarkovGraphConstructor(cfg)
     else:
-        G = graph_constructor(cfg, cfg.case_study.adjacency_matrix)
+        G = GraphConstructor(cfg, cfg.case_study.adjacency_matrix)
 
-    # construct dummy dataframe for initial forward pass
+    # Dummy dataframe for the initial forward pass.
     init_df_samples = pd.DataFrame({col: np.zeros((2,)) for i,col in enumerate(cfg.case_study.design_space_dimensions)})
 
-    # Call the case_study_allocation function
     G = case_study_allocation(G, cfg, dict_of_edge_fn, constraint_dictionary, solvers=solver_constructor(cfg, G), unit_params_fn=unit_params_fn(cfg, G), initial_forward_pass=init_df_samples, cost_dictionary=cost_dictionary)
 
     return G.get_graph()
 
 def _process_bounds(cfg):
+    """
+    Split the extended design-space bounds into lower/upper row vectors.
+    """
     raw_extended = cfg.case_study.extendedDS_bounds
     if raw_extended in (None, "None"):
         return "None"
@@ -63,17 +58,10 @@ def _process_bounds(cfg):
 
 def case_study_allocation(G, cfg, dict_of_edge_fn, constraint_dictionary, solvers, unit_params_fn, initial_forward_pass, cost_dictionary=None):
     """
-    Add miscellaneous information to the graph
-    :param G: The graph constructor
-    :param n_input_args: Dictionary of the number of input arguments associated with each edge
-    :param n_design_args: The number of design arguments associated with each node (Dictionary)
-    :param KS_bounds: Dictionary of box bounds for the unit KS
-    :param parameters_best_estimate: Dictionary of best estimate of parameters
-    :param parameters_samples: Dictionary of samples of parameters
-    :return: The graph construction object with the miscellaneous information added
+    Attach node, edge and graph attributes (constraints, costs, bounds,
+    solvers, post-processing) onto the graph constructor.
     """
-
-    # add nodes properties to the graph
+    # Node properties.
     G.add_arg_to_nodes('n_design_args', cfg.case_study.n_design_args)
     G.add_arg_to_nodes('n_theta', cfg.case_study.n_theta)
     G.add_arg_to_nodes('KS_bounds', cfg.case_study.KS_bounds.design_args)
@@ -87,31 +75,26 @@ def case_study_allocation(G, cfg, dict_of_edge_fn, constraint_dictionary, solver
 
     if cost_dictionary is not None:
         G.add_arg_to_nodes('node_cost', cost_dictionary)
-    
-    # The legacy `forward_coupling_solver` / `backward_coupling_solver` graph
-    # attributes carried the casadi `solver_construction` factory — no longer
-    # used after Phase 3f.  Septal is the sole backend and is imported directly
-    # by each evaluator.
+
     if cfg.method != 'decomposition_constraint_tuner':
         n_nodes = cfg.case_study.num_nodes if cfg.case_study.get('make_markov', False) else len(cfg.case_study.adjacency_matrix)
         b_off = [0 for _ in range(n_nodes)]
         G.add_arg_to_nodes('constraint_backoff', b_off)
 
-    # add miscellaneous information to the graph
+    # Input / auxiliary argument counts and indices.
     G.add_n_input_args(cfg.case_study.n_input_args)
     G.add_n_aux_args(cfg.case_study.n_aux_args)
     G.add_input_aux_indices()
 
-    # add the args to the graph 
+    # Graph-level arguments.
     G.add_arg_to_graph('aux_bounds', cfg.case_study.KS_bounds.aux_args)
     G.add_arg_to_graph('n_aux_args', cfg.case_study.global_n_aux_args)
     G.add_arg_to_graph('initial_forward_pass', initial_forward_pass)
     G.add_arg_to_graph('solve_post_processing_problem', False)
     G.add_arg_to_graph('post_process_decision_indices', cfg.reconstruction.post_process_decision_indices if hasattr(cfg, 'reconstruction') else [])
-    # Defaults so downstream evaluators always find keys even when post_process is disabled
+    # Defaults so downstream evaluators always find keys even when post_process is disabled.
     G.add_arg_to_graph('solve_post_processing_problem', False)
     G.add_arg_to_graph('post_process_decision_indices', cfg.reconstruction.post_process_decision_indices if hasattr(cfg, 'reconstruction') else [])
-    # default: no post-process solve unless reconstruction enables it later
     G.add_arg_to_graph('solve_post_processing_problem', False)
     if cfg.case_study.eval_cost:
         n_nodes_eval = cfg.case_study.num_nodes if cfg.case_study.get('make_markov', False) else len(cfg.case_study.adjacency_matrix)
@@ -122,40 +105,41 @@ def case_study_allocation(G, cfg, dict_of_edge_fn, constraint_dictionary, solver
         G.add_arg_to_graph('bounds', list(chain.from_iterable(cfg.case_study.KS_bounds.design_args + cfg.case_study.KS_bounds.aux_args)))
 
    
-    G.add_arg_to_graph('classifier_x_scalar', None) # initialisation
-    G.add_arg_to_graph('post_process_classifier', lambda x: jnp.sum(x)) # scalarise input as dummy function for jit tracing.
+    G.add_arg_to_graph('classifier_x_scalar', None)  # initialisation
+    # Dummy scalarising classifiers so jit tracing has a callable to compile.
+    G.add_arg_to_graph('post_process_classifier', lambda x: jnp.sum(x))
     G.add_arg_to_graph('post_process_lower_classifier', lambda x: jnp.sum(x))
     if cfg.reconstruction.post_process:
-        # post processing
         G.add_arg_to_nodes('post_process_constraints', post_process_visualiser[cfg.case_study.case_study])
-        G.add_arg_to_graph('post_process', post_process_sampling_scheme if cfg.reconstruction.post_process_sampler 
-                           else post_process_local_sip_scheme)
-        G.add_arg_to_graph('post_process_training_methods', surrogate)
-        # TODO: update this to allow flexibility for whether a sampling scheme or local SIP scheme is used
-        G.add_arg_to_graph('post_process_solver_methods', 
-                           {'upper_level_solver': partial(constraint_evaluator, node=None, constraint_type=cfg.reconstruction.post_process_solver.upper_level), 'lower_level_solver': partial(constraint_evaluator, node=None, constraint_type=cfg.reconstruction.post_process_solver.lower_level)} if cfg.reconstruction.post_process_sampler 
-                           else {'relaxation_a_solver': partial(constraint_evaluator, node=None, constraint_type=cfg.reconstruction.post_process_solver.relaxation_a), 'relaxation_b_solver': partial(constraint_evaluator, node=None, constraint_type=cfg.reconstruction.post_process_solver.relaxation_b)})
+        G.add_arg_to_graph('post_process', PostProcessSamplingScheme if cfg.reconstruction.post_process_sampler 
+                           else PostProcessLocalSipScheme)
+        G.add_arg_to_graph('post_process_training_methods', Surrogate)
+        # TODO: allow flexibility between sampling scheme and local SIP scheme
+        G.add_arg_to_graph('post_process_solver_methods',
+                           {'upper_level_solver': partial(ConstraintEvaluator, node=None, constraint_type=cfg.reconstruction.post_process_solver.upper_level), 'lower_level_solver': partial(ConstraintEvaluator, node=None, constraint_type=cfg.reconstruction.post_process_solver.lower_level)} if cfg.reconstruction.post_process_sampler 
+                           else {'relaxation_a_solver': partial(ConstraintEvaluator, node=None, constraint_type=cfg.reconstruction.post_process_solver.relaxation_a), 'relaxation_b_solver': partial(ConstraintEvaluator, node=None, constraint_type=cfg.reconstruction.post_process_solver.relaxation_b)})
         G.add_arg_to_graph('post_process_decision_indices', cfg.reconstruction.post_process_decision_indices)
-        G.add_arg_to_graph('solve_post_processing_problem', False) # overwritten in the post_process function
-        G.add_arg_to_graph('post_process_solution_evaluator', partial(post_process_evaluation, constraint_evaluator=constraint_evaluator))
-        G.add_arg_to_graph('post_process_solution_visualiser', visualiser) 
+        G.add_arg_to_graph('solve_post_processing_problem', False)  # overwritten in the post_process function
+        G.add_arg_to_graph('post_process_solution_evaluator', partial(PostProcessEvaluation, constraint_evaluator=ConstraintEvaluator))
+        G.add_arg_to_graph('post_process_solution_visualiser', Visualiser)
         if cfg.surrogate.post_process_lower.model_class == 'regression':
             G.add_arg_to_graph('global_regressor_function',post_process_regressor_data_function[cfg.case_study.case_study])
-    # add edge properties to the graph
+    # Edge properties and auxiliary filters.
     G.add_arg_to_edges('edge_fn', dict_of_edge_fn)
-    # add the auxiliary filters to the graph
     G.add_arg_to_edges('aux_filter', aux_filter(cfg, G))
 
     graph = G.get_graph()
 
     for node in graph.nodes:
-        G.add_node_object(node, unit_evaluation(cfg, graph, node), "forward_evaluator")
+        G.add_node_object(node, UnitEvaluation(cfg, graph, node), "forward_evaluator")
 
     return G
 
 
 def unit_params_fn(cfg, G):
-
+    """
+    Per-node unit-parameter callables (e.g. Arrhenius kinetics) for the case study.
+    """
     if cfg.case_study.case_study == 'batch_reaction_network' or (cfg.case_study.case_study == 'serial_mechanism_batch'):
         return {node: partial(arrhenius_kinetics_fn_2,Ea=jnp.array(cfg.model.arrhenius.EA[node]), R=jnp.array(cfg.model.arrhenius.R)) for node in G.G.nodes}
     elif cfg.case_study.case_study == 'serial_mechanism_batch':
@@ -169,22 +153,9 @@ def unit_params_fn(cfg, G):
     
 
 def aux_filter(cfg, G):
-    """Per-edge filter trimming `input_data_bounds` to the successor's
-    `n_input_args` columns.
-
-    `input_data_bounds` has whatever column count the edge's `edge_fn`
-    produces.  For markov-style edges (`_markov_edge_with_clip`) that's
-    already `n_input_args`.  For older edges (e.g. `data_transform_cvx`,
-    which returns the full dynamics profile) it can exceed `n_input_args`;
-    the bounds dict for the backward sub-problem still needs exactly
-    `n_input_args` columns per predecessor.
-
-    The trim uses the universal per-node `n_input_args` (set by
-    `cs_assembly.add_n_input_args`) instead of the markov-only
-    `sizes.F_SIZE`, so it's correct across all case studies regardless
-    of whether they declare the F/G/L/PHI bundle layout.
-
-    No-op when the column count already matches.
+    """
+    Per-edge filter trimming input_data_bounds to the successor's
+    n_input_args columns; a no-op when the count already matches.
     """
     def make_filter(successor):
         n_inp = int(G.G.nodes[successor]['n_input_args'])
@@ -200,7 +171,7 @@ def aux_filter(cfg, G):
 
 def solver_constructor(cfg, G):
     """
-    Legacy hook — returned a dict of `solver_construction` factories per node.
+    Legacy hook — returned a dict of `SolverConstruction` factories per node.
     Retained as a no-op stub so call sites don't break; the dict is consumed
     into a graph attribute that no evaluator reads after Phase 3f.
     """
@@ -210,6 +181,9 @@ def solver_constructor(cfg, G):
     }
 
 def make_markov(cfg):
+    """
+    Broadcast single-node case-study config across num_nodes for Markov chains.
+    """
     if cfg.case_study.get('make_markov', False):
         cfg.case_study.parameters_best_estimate = [cfg.case_study.parameters_best_estimate for _ in range(cfg.case_study.num_nodes)]
         cfg.case_study.KS_bounds.design_args = [cfg.case_study.KS_bounds.design_args for _ in range(cfg.case_study.num_nodes)]
@@ -225,6 +199,9 @@ def make_markov(cfg):
     return cfg
 
 def build_aux_args(cfg):
+    """
+    Expand per-node and per-edge auxiliary-argument counts across the chain.
+    """
     n_aux_per_node = cfg.case_study.n_aux_args['node_0']
     n_aux_per_edge = cfg.case_study.n_aux_args['(0,1)']
 

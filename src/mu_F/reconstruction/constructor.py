@@ -1,14 +1,24 @@
+"""Joint reconstruction of feasibility live sets across the graph."""
 from abc import ABC
 import jax.numpy as jnp
 import numpy as np
 from jax.random import choice, PRNGKey
 
-from mu_F.reconstruction.samplers import sobol_sampler
-from mu_F.reconstruction.objects import live_set
+from mu_F.reconstruction.samplers import SobolSampler
+from mu_F.reconstruction.objects import LiveSet
 from mu_F.reconstruction.methods import construct_cartesian_product_of_live_sets
 from mu_F.reconstruction.utils import post_process_sampling_setup, post_process_setup
 
-class reconstruct_base(ABC):
+class ReconstructBase(ABC):
+    """Abstract interface for reconstruction routines.
+
+    Declares the sampling and evaluation hooks that concrete
+    reconstruction classes implement.
+
+    """
+
+    # ---- External Methods ----
+
     def __init__(self):
         pass
 
@@ -22,76 +32,67 @@ class reconstruct_base(ABC):
         pass
 
 
-class reconstruction(reconstruct_base):
+class Reconstruction(ReconstructBase):
+    """Joint reconstruction over the product of per-node live sets.
+
+    Samples candidates from each node's live set, evaluates the joint
+    model constraints, and grows a feasible live set until complete,
+    optionally handing off to a post-process step.
+
+    """
+
+    # ---- External Methods ----
+
     def __init__(self, cfg, graph, model, iterate):
         self.cfg = cfg
         self.graph = graph
         self.model = model
         self.live_sets_nd_proj = construct_cartesian_product_of_live_sets(graph)
-        self.ls_holder = live_set(cfg, cfg.samplers.notion_of_feasibility)
+        self.ls_holder = LiveSet(cfg, cfg.samplers.notion_of_feasibility)
         self.feasible = False
         self.post_process_bool = cfg.reconstruction.post_process#[iterate]
         self.iterate = iterate
         self.desired_edge_index = list(self.graph.nodes)[-1]
-        self.desired_regressor_data = live_set(cfg, cfg.samplers.notion_of_feasibility)
+        self.desired_regressor_data = LiveSet(cfg, cfg.samplers.notion_of_feasibility)
 
     def update_live_set(self, candidates, constraint_vals):
         """
-        Check the feasibility
-        :param constraint_vals: The constraint values
-        :param live_set: The live set
-        :param cfg: The configuration
-        :return: The feasibility
+        Append the feasible candidates to the live set and report
+        whether it is now complete.
         """
-        # evaluate the feasibility and return those feasible candidates
+        # keep only the feasible candidates
         feasible_points, feasible_prob = self.ls_holder.check_live_set_membership(candidates, constraint_vals)
-        # append to live set
         self.ls_holder.append_to_live_set(feasible_points, feasible_prob)
-        # check if live set is complete
-        return self.ls_holder.check_if_live_set_complete()    
+        return self.ls_holder.check_if_live_set_complete()
 
 
     def run(self, mode='sobol'):
         """
-        Run the joint reconstruction
-        :param graph: The graph
-        :param cfg: The configuration
-        :param mode: The mode
-        :param max_devices: The maximum number of devices
-        :return: The graph
+        Run the joint reconstruction: sample, evaluate and grow the live
+        set until feasible, then optionally post-process.
         """
-        # get the livesets
         feasible = False
         ls_holder = self.ls_holder
         uncertain_params = self.get_uncertain_params()
 
         while not feasible:
-            # sample the live sets
             live_sets_nd_proj, candidates = self.sample_live_sets(scheme=mode)
-            # evaluate the joint model
             constraint_vals = self.evaluate_joint_model(candidates, uncertain_params=uncertain_params)
             constraint_vals = jnp.concatenate([g for g in constraint_vals.values()], axis=-1)
-            # check feasibility
             feasible = self.update_live_set(candidates, constraint_vals)
 
         joint_live_set, joint_live_set_prob = ls_holder.get_live_set()
 
-        # if post process is defined, run it
         if self.post_process_bool:
-            # NOTE currently no uncertain parameters are passed to the post process
+            # no uncertain parameters are currently passed to the post process
             self.graph = self.post_process_runner(cfg=self.cfg, graph=self.graph, model=self.model, ls_holder=ls_holder, iterate=self.iterate)
-            # TODO conditional return on live set from post_process? 
 
         return joint_live_set, joint_live_set_prob, self.graph
     
     def post_process_runner(self, cfg, graph, model, ls_holder, iterate):
         """
-        Define the post process
-        :param cfg: The configuration
-        :param graph: The graph
-        :param model: The model
-        :param iterate: The iteration number
-        :return: The post process object
+        Build and run the post-process step, loading the live-set
+        classification and regression data onto the graph first.
         """
         graph = ls_holder.load_classification_data_to_graph(graph, str_='post_process_lower_')
         graph = model.desired_regressor_data.load_regression_data_to_graph(graph, str_='post_process_lower_')
@@ -103,6 +104,10 @@ class reconstruction(reconstruct_base):
         return graph
 
     def get_uncertain_params(self):
+        """
+        Draw the uncertain parameter samples used by the joint model,
+        weighting by the user-specified probability mass.
+        """
         if self.cfg.formulation == 'probabilistic':
             param_dict = self.cfg.case_study.parameters_samples
             list_of_params = [jnp.array([p['c'] for p in param]) for param in param_dict]
@@ -113,41 +118,36 @@ class reconstruction(reconstruct_base):
         elif self.cfg.formulation == 'deterministic':
             selected_params = [jnp.array([param]) for param in self.cfg.case_study.parameters_best_estimate]
             
-        return selected_params # sample selected parameters from    the list of parameters according to probability mass specificed by the user
+        return selected_params
     
     def sample_live_sets(self, scheme = "sobol"):
         """
-        Sample from the live sets
-        :param live_sets_nd_proj: The live sets
-        :param cfg: The configuration
-        :return: The sampled live sets
+        Sample candidate points from each node's live set, drawing
+        indices by the requested scheme and shuffling for the next round.
         """
         sampled_live_sets = {}
         n_aux = self.graph.graph['n_aux_args']
         for node, live_set in self.live_sets_nd_proj.items():
             rng = np.random.default_rng()
-            # sample from the live set using bounds
+            # index bounds spanning the live set
             n_samples = self.cfg.samplers.ns.n_replacements
             n_l = live_set.shape[0]
             bounds = [np.zeros(1), np.ones(1)*n_l]
             if scheme == "sobol":
-                # get unrounded indices
-                unrounded_indices = sobol_sampler().sample_design_space(1, bounds, n_samples)
+                unrounded_indices = SobolSampler().sample_design_space(1, bounds, n_samples)
             elif scheme == "uniform":
-                # get unrounded indices
                 unrounded_indices = rng.uniform(bounds[0], bounds[1], (n_samples, 1))
             else:
                 raise ValueError("Invalid scheme")
-            
-            # get rounded indices
+
+            # round and clip the sampled indices into range
             rnd_ind = np.round(unrounded_indices).astype(int)
             rounded_indices = np.minimum(rnd_ind, self.cfg.samplers.ns.n_live-1)
-            # get shuffled live sets
             try:
                 sampled_live_sets[node] = np.copy(live_set[rounded_indices[:].reshape(-1), :]).reshape(-1, live_set.shape[1])
             except:
                 sampled_live_sets[node] = live_set[rounded_indices[:].reshape(-1), :].reshape(-1,n_aux)
-            # shuffle live set for next round
+            # shuffle the live set for the next round
             rng.shuffle(live_set, axis=0)
             self.live_sets_nd_proj[node] = np.copy(live_set)
             
@@ -155,13 +155,8 @@ class reconstruction(reconstruct_base):
 
     def evaluate_joint_model(self, candidates, uncertain_params):
         """
-        Evaluate the joint model
-        :param candidates: The candidates
-        :param model: The model
-        :param cfg: The configuration
-        :return: The constraint values
+        Evaluate the joint model constraints at the sampled candidates.
         """
-        # evaluate the joint model
         constraints = self.model.get_constraints(candidates,  uncertain_params)
         return constraints
     

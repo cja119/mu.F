@@ -1,23 +1,22 @@
-"""
-Compatibility shim for unpickling case-study graphs from pre-Phase-3f runs.
-
-Old pickles stored the `solver_construction` class as a node attribute
-(`forward_coupling_solver` / `backward_coupling_solver`).  After the casadi
-backend was removed in Phase 3f those attributes are no longer read anywhere
-— but `pickle.load` still needs to resolve the dotted path to complete
-unpickling.
-
-This module exposes a minimal stub `solver_construction` so those loads
-succeed.  Don't use it for anything.  It will be deleted once a round of
-"resave-all-pickles-with-solver-attrs-stripped" migration is done.
-"""
+"""Compatibility stub so old case-study pickles still resolve SolverConstruction."""
 from __future__ import annotations
 
 
-class solver_construction:  # noqa: N801 — name preserved for pickle compat
-    """No-op stub. Only exists so old pickles can be unpickled."""
+class SolverConstruction:  # noqa: N801 — name preserved for pickle compat
+    """No-op stub kept only for unpickling legacy graphs.
+
+    Old pickles stored this class as a node attribute; the attribute is no
+    longer read anywhere, but pickle.load still needs the dotted path to
+    resolve. Not used for anything else.
+
+    """
+
+    # ---- External Methods ----
+
     def __init__(self, *args, **kwargs):
+        """Accept and ignore any stored constructor arguments."""
         pass
 
     def __reduce__(self):
-        return (solver_construction, ())
+        """Reconstruct as an argument-free stub on unpickle."""
+        return (SolverConstruction, ())

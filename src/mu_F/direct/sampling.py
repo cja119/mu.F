@@ -1,16 +1,16 @@
-
+"""Direct DEUS sampling of the feasible design space and post-processing."""
 import jax.numpy as jnp
 import numpy as np
-import logging 
+import logging
 import pandas as pd
 
-from mu_F.unit_evaluators.constructor import network_simulator
-from mu_F.samplers.constructor import construct_deus_problem_network
-from mu_F.constraints.constructor import constraint_evaluator
+from mu_F.unit_evaluators.constructor import NetworkSimulator
+from mu_F.samplers.constructor import ConstructDeusProblemNetwork
+from mu_F.constraints.constructor import ConstraintEvaluator
 from mu_F.samplers.utils import create_problem_description_deus_direct
-from mu_F.visualisation.visualiser import visualiser
-from mu_F.reconstruction.constructor import reconstruction as reconstruct
-from mu_F.reconstruction.objects import live_set, dataset
+from mu_F.visualisation.visualiser import Visualiser
+from mu_F.reconstruction.constructor import Reconstruction as reconstruct
+from mu_F.reconstruction.objects import LiveSet, ReconstructionDataset
 from mu_F.reconstruction.utils import post_process_sampling_setup, post_process_setup
 from mu_F.direct.base import SolveDirect 
 
@@ -18,42 +18,55 @@ from deus import DEUS
 
 
 class DirectSampler(SolveDirect):
+    """Feasible-set explorer that samples the design space directly via DEUS.
+
+    Delegates the solve to the module-level direct method, which builds the
+    DEUS problem from the graph, samples feasible/infeasible designs and
+    optionally runs reconstruction post-processing.
+
+    """
+
+    # ---- External Methods ----
+
     def __init__(self, cfg, G):
         super().__init__(cfg, G)
-    
+
     def solve(self, problem_data, x0=None):
         """
-        Solves the problem using the loaded solver and prepared model.
+        Solve by sampling the design space with the direct DEUS method.
         """
         return apply_direct_method(self.cfg, self.G)
 
+    # ---- Private Methods ----
+
     def _load_solver(self):
         """
-        Loads in solver object
+        No standalone solver object; sampling is driven by DEUS.
         """
         return None
 
     def _prepare_model(self, graph):
         """
-        Prepares the model for solving. This is where the monolithic NLP will be built.
+        No monolithic NLP is built for the sampling route.
         """
         return None
 
     def _get_solution(self, solver_output):
         """
-        Extracts the solution from the solver output. This is where any necessary post-processing of the solution will be done.
+        Solution extraction is handled inside the direct method.
         """
         return None
 
-# -------------------------------------------------------------------------------- #
-# ------------------ This Needs Tidying and Itntegration ------------------------- #
-# -------------------------------------------------------------------------------- #
+
+# ---------------------------------------------------------------------------
+# Direct sampling method
+# ---------------------------------------------------------------------------
 
 def apply_direct_method(cfg, graph):
 
-    model = network_simulator(cfg, graph, constraint_evaluator)
+    model = NetworkSimulator(cfg, graph, ConstraintEvaluator)
     problem_description = create_problem_description_deus_direct(cfg, graph)
-    solver =  construct_deus_problem_network(DEUS, problem_description, model)
+    solver =  ConstructDeusProblemNetwork(DEUS, problem_description, model)
     solver.solve()
     feasible_set, infeasible_set = solver.get_solution()
     logging.info(f"Feasible set shape: {feasible_set[0].shape}, Infeasible set shape: {infeasible_set[0].shape}")
@@ -70,7 +83,7 @@ def apply_direct_method(cfg, graph):
         df['probability'] = feasible_set
 
     graph.graph['feasible_set'] = feasible_set
-    visualiser(cfg, graph, data=df, string='design_space', path=f'design_space_direct').run()
+    Visualiser(cfg, graph, data=df, string='design_space', path=f'design_space_direct').run()
 
     if cfg.reconstruction.post_process:
         def sampler(
@@ -119,7 +132,7 @@ def load_classifier_to_graph(feasible, infeasible, graph, str_):
     all_labels = np.vstack([live_set_labels, infeasible_set_labels])
     logging.info(str_ + f"Live set size: {live_set.shape}, Infeasible set size: {infeasible_set.shape}")
 
-    graph.graph[str_+ 'classifier_training'] = dataset(all_data, all_labels)
+    graph.graph[str_+ 'classifier_training'] = ReconstructionDataset(all_data, all_labels)
     return graph
 
 def load_regressor_to_graph(solver, graph, str_):

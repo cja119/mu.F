@@ -1,4 +1,4 @@
-
+"""Builders and helpers for the monolithic single/multiple-shooting NLPs."""
 import logging
 
 import numpy as np
@@ -8,8 +8,15 @@ import jax.numpy as jnp
 import networkx as nx
 
 
-# ---- General utils ----
+# ---------------------------------------------------------------------------
+# Model construction
+# ---------------------------------------------------------------------------
+
 def evaluate_node(node_fn, inp_slice_or_fn, des_slice, aux_slice, uncer):
+    """
+    Wrap a node forward evaluation, slicing design/aux/input args out
+    of the flat decision vector before calling it.
+    """
     des_0, des_len = des_slice
     aux_0, aux_len = aux_slice
     inp_0, inp_len = inp_slice_or_fn if isinstance(inp_slice_or_fn, tuple) else (0, 0)
@@ -29,20 +36,27 @@ def evaluate_node(node_fn, inp_slice_or_fn, des_slice, aux_slice, uncer):
     return node_eval
 
 def input_index_map(node, graph, index_map, input_slice):
-
+    """
+    Map each incoming edge to the decision-vector indices holding that
+    node's input variables (used by the multiple-shooting defects).
+    """
     inp_0, _ = input_slice
 
     index_map = index_map or {}
-    
+
     for prec in graph.predecessors(node):
-        
+
         prec_indices = graph.edges[prec, node]["input_indices"]
         index_map[(prec, node)] = [inp_0 + prec_idx for prec_idx in prec_indices]
 
     return index_map
-    
-def build_input_fn(node, graph, node_eval, fn_map):
 
+
+def build_input_fn(node, graph, node_eval, fn_map):
+    """
+    Register, per outgoing edge, the composed edge function mapping this
+    node's output to its successor's input.
+    """
     fn_map = fn_map or {}
 
     for succ in graph.successors(node):
@@ -53,12 +67,11 @@ def build_input_fn(node, graph, node_eval, fn_map):
 
 def build_equality_constraints(node, graph, fn_map, index_map, eql_cons,
                                scale_per_edge=None):
-    """Build the multiple-shooting defect constraints `edge_fn(prev) − x_input`
-    per incoming edge.  If `scale_per_edge` is provided (dict mapping
-    `(prec, node)` → per-state-dim scale array), divide the residual by it so
-    the SQP's `feasibility_tol` applies in relative units rather than
-    against physical-units residuals (which range over many orders of
-    magnitude for case studies like hydrogen_export)."""
+    """
+    Build the per-edge defect constraints edge_fn(prev) - x_input,
+    optionally dividing by scale_per_edge so feasibility_tol applies
+    in relative units.
+    """
     eql_cons = eql_cons or []
 
     def cons_fn(edge_fn, inp_indices, scale_inp):
@@ -78,7 +91,10 @@ def build_equality_constraints(node, graph, fn_map, index_map, eql_cons,
 
 
 def input_functions(node, graph, cfg, composed_eval):
-
+    """
+    Compose the input function for a node from its predecessors' edge
+    functions; root nodes take fixed inputs from config.
+    """
     input_fns = None
 
     for prec in sorted(graph.predecessors(node)):
@@ -95,7 +111,10 @@ def input_functions(node, graph, cfg, composed_eval):
 
 
 def make_reward_extractor(graph, node):
-
+    """
+    Return a function summing a node's cost terms into the scalar
+    reward contributed to the objective.
+    """
     cost_fns = list(graph.nodes[node].get("node_cost", []))
 
     def node_cost_sum(node_output):
@@ -106,6 +125,10 @@ def make_reward_extractor(graph, node):
 
 
 def process_constraints(constraints, node_outs, pos_feas, cfg):
+    """
+    Apply the feasibility sign convention and compose each node
+    constraint onto the node's output evaluation.
+    """
     fns = []
     for cons in constraints:
         f_cons = _apply_feasibility(cons, pos_feas)
@@ -119,6 +142,10 @@ def process_constraints(constraints, node_outs, pos_feas, cfg):
 
 
 def make_constraints(cons_fns):
+    """
+    Stack the individual constraint functions into one vector-valued
+    callable over the decision vector.
+    """
     def cons(ctrl):
         ctrl = jnp.ravel(ctrl)
         return jnp.concatenate([cf(ctrl) for cf in cons_fns], axis=0).reshape(-1, 1)
@@ -127,6 +154,10 @@ def make_constraints(cons_fns):
 
 
 def make_objective(reward_fns):
+    """
+    Sum the per-node reward functions into one scalar objective over
+    the decision vector.
+    """
     def obj(ctrl):
         ctrl = jnp.ravel(ctrl)
         vals = [jnp.sum(jnp.ravel(rf(ctrl))) for rf in reward_fns]
@@ -135,10 +166,14 @@ def make_objective(reward_fns):
     return obj
 
 
+# ---------------------------------------------------------------------------
+# Output and logging
+# ---------------------------------------------------------------------------
+
 def log_outputs(cfg, graph, result, solved):
     """
-    `result` is a septal `SQPResult` (no casadi DM wrapping — use numpy-style
-    indexing on `result.decision_variables` / `result.objective` directly).
+    Log the solved objective and per-node design variables, and write the
+    recovered policy to graph nodes and an Excel file.
     """
     status = 'successfully' if solved else 'unsuccessfully'
     logging.info(
@@ -179,8 +214,7 @@ def log_outputs(cfg, graph, result, solved):
         graph.nodes[node]["rollout_action_columns"] = action_cols
         graph.nodes[node]["rollout_action_named"] = named
 
-        # Assign positionally into rollout_row (process_space_names and
-        # design_space_dimensions use different naming conventions after make_markov)
+        # Assign positionally; process and design naming conventions differ after make_markov
         for idx, val in enumerate(des_vals):
             col_idx = des_0 + idx
             if col_idx < len(cols):
@@ -197,23 +231,42 @@ def log_outputs(cfg, graph, result, solved):
 
 
 def compose(outer_fn, inner_fn):
+    """
+    Functional composition helper used throughout the builders.
+    """
     return lambda *args: outer_fn(inner_fn(*args))
 
 
 def multiple_idx_check(curr_idx, graph):
+    """
+    Sanity check that the decision vector length matches aux, design
+    and input args for the multiple-shooting layout.
+    """
     total_des = sum([graph.nodes[node]["n_design_args"] for node in graph.nodes])
     total_inp = sum([len(graph.edges[prec, node]["input_indices"]) for node in graph.nodes for prec in graph.predecessors(node)])
     n_aux = graph.graph["n_aux_args"]
     return curr_idx == total_des + n_aux + total_inp
 
+
 def single_idx_check(curr_idx, graph):
+    """
+    Sanity check that the decision vector length matches aux and
+    design args for the single-shooting layout.
+    """
     total_des = sum([graph.nodes[node]["n_design_args"] for node in graph.nodes])
     n_aux = graph.graph["n_aux_args"]
     return curr_idx == total_des + n_aux
 
 
-def get_bounds(cfg):
+# ---------------------------------------------------------------------------
+# Bounds and scaling
+# ---------------------------------------------------------------------------
 
+def get_bounds(cfg):
+    """
+    Assemble the aux and design variable bounds for the single-shooting
+    decision vector from the case study config.
+    """
     design_bds = [
         bound for node in cfg.case_study["KS_bounds"]["design_args"] for bound in node
     ]
@@ -241,6 +294,10 @@ def get_bounds(cfg):
 
 
 def get_bounds_ms(cfg, graph, total_inp):
+    """
+    Extend the single-shooting bounds with per-edge input-variable
+    bounds for the multiple-shooting decision vector.
+    """
     from omegaconf import OmegaConf, ListConfig, DictConfig
 
     base = get_bounds(cfg)
@@ -273,9 +330,10 @@ def get_bounds_ms(cfg, graph, total_inp):
 
 
 def get_edge_input_scale(cfg, n_inp_per):
-    """Per-state-dim scale used to normalise the multiple-shooting defect
-    residuals.  Returns `edge_clip_hi − edge_clip_lo` when available; ones
-    otherwise (no relative-scaling — residuals stay in absolute units)."""
+    """
+    Per-state-dim scale for the defect residuals: edge_clip width when
+    available, ones otherwise (residuals stay in absolute units).
+    """
     from omegaconf import OmegaConf, ListConfig, DictConfig
     ec = getattr(cfg.case_study, "edge_clip", None)
     if ec in (None, "None"):
@@ -286,8 +344,10 @@ def get_edge_input_scale(cfg, n_inp_per):
 
 
 def _safe_scale_offset(lb, ub):
-    """Per-element (scale, offset) for the [0, 1]^n affine transform, falling
-    back to (1, 0) when a slot is unbounded or zero-width."""
+    """
+    Per-element (scale, offset) for the [0, 1]^n affine transform,
+    falling back to (1, 0) when a slot is unbounded or zero-width.
+    """
     lb_arr = jnp.asarray(lb, dtype=jnp.float64).reshape(-1)
     ub_arr = jnp.asarray(ub, dtype=jnp.float64).reshape(-1)
     width = ub_arr - lb_arr
@@ -298,12 +358,10 @@ def _safe_scale_offset(lb, ub):
 
 
 def scale_problem(objective, constraints, var_bounds, x0, eq_lhs, eq_rhs):
-    """Wrap a monolithic NLP for solve in scaled coordinates `x_s = (x − lo) / (hi − lo)`.
-
-    Returns the scaled callables + bounds + initial guess + a `to_real`
-    un-scaler the caller uses to convert the result back to physical units.
-    Slots whose bound is missing / unbounded pass through (scale=1, offset=0)
-    so the wrapper degrades gracefully.
+    """
+    Wrap a monolithic NLP in scaled coordinates x_s = (x - lo) / (hi - lo),
+    returning the scaled callables, bounds, guess and a to_real un-scaler.
+    Unbounded slots pass through (scale 1, offset 0).
     """
     lb = jnp.asarray(var_bounds[0]).reshape(-1)
     ub = jnp.asarray(var_bounds[1]).reshape(-1)
@@ -326,30 +384,54 @@ def scale_problem(objective, constraints, var_bounds, x0, eq_lhs, eq_rhs):
 
 
 def initial_guess(bounds):
+    """
+    Midpoint initial guess, falling back to zero on unbounded slots.
+    """
     midpoint = (bounds[0] + bounds[1]) / 2
     return jnp.where(jnp.isfinite(midpoint), midpoint, jnp.zeros_like(midpoint))
 
 
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
+
 def _apply_feasibility(constraint, pos_feas):
+    """
+    Flip the constraint sign unless positive feasibility is requested.
+    """
     if pos_feas:
         return constraint
     return lambda x: -constraint(x)
 
+
 def _slice_index_1d(x, indices):
+    """
+    Gather the given indices from the flattened vector.
+    """
     return jnp.take(jnp.ravel(x), jnp.array(indices))
 
+
 def _slice_1d(x, start: int, length: int):
+    """
+    Take a contiguous slice from the flattened vector.
+    """
     x = jnp.ravel(x)
     return lax.dynamic_slice(x, (start,), (length,))
 
 
 def _to_rank3(v):
+    """
+    Promote an array to rank 3 by prepending singleton axes.
+    """
     while v.ndim < 3:
         v = jnp.expand_dims(v, axis=0)
     return v
 
 
 def _extend(fn, fn_new):
+    """
+    Concatenate the outputs of two functions along the last axis.
+    """
     if fn is None:
         return fn_new
     return lambda *args: jnp.concatenate([fn(*args), fn_new(*args)], axis=-1)

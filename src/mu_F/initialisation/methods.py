@@ -1,3 +1,4 @@
+"""Initial forward pass: sample the design space and seed node training data."""
 from abc import ABC
 import jax.numpy as jnp
 import numpy as np
@@ -7,10 +8,19 @@ from jax.random import PRNGKey, choice, normal
 import logging
 
 
-
 # TODO think about ways to fit approximators to the eks data within this class.
 
-class initialisation(ABC):
+class Initialisation(ABC):
+    """Runs the initial forward pass over the network
+
+    Samples the design space, simulates the network to gather constraint and
+    coupling data, optionally refines samples evolutionarily, and writes the
+    seed training data and bounds back onto the graph.
+
+    """
+
+    # ---- External Methods ----
+
     def __init__(self, cfg, graph, network_simulator, constraint_evaluator, sampler, approximator):
         self.cfg = cfg
         self.graph = graph
@@ -19,11 +29,14 @@ class initialisation(ABC):
         self.approximator = approximator
 
     def run(self):
+        """
+        Entry point for the initial forward pass; returns the seeded graph.
+        """
         samples = self.sample_design_space()
         uncertain_params = self.get_uncertain_params()
         constraints, eks_data = self.network_simulator.get_data(samples, uncertain_params)
 
-        # Evolutionary refinement: select best samples and generate children
+        # evolutionary refinement: select best samples and generate children
         if self.cfg.init.get('evolutionary_refinement', False):
             samples, constraints, eks_data = self.evolutionary_refine(
                 samples, constraints, eks_data, uncertain_params
@@ -35,33 +48,14 @@ class initialisation(ABC):
         self.graph.graph["initial_forward_pass"] = pd.DataFrame({col:samples[:,i] for i,col in enumerate(self.cfg.case_study.design_space_dimensions)})
         return self.graph
 
-    # =========================================================================
-    # Evolutionary refinement methods
-    # =========================================================================
+    # ---------------------------------------------------------------------------
+    # Evolutionary refinement
+    # ---------------------------------------------------------------------------
 
     def evolutionary_refine(self, samples, constraints, eks_data, uncertain_params):
         """
-        Refine initial samples using evolutionary local search.
-
-        Supports multiple scoring methods - if a list is provided, each method
-        runs independently on the base samples and all results are combined.
-        This expands bounds in multiple directions (e.g., toward low cost AND
-        toward constraint boundaries).
-
-        Parameters
-        ----------
-        samples : jnp.ndarray
-            Initial Sobol samples, shape (n_samples, n_design)
-        constraints : dict
-            {node: constraint_array} where constraint_array is (n_samples, n_theta, n_g)
-        eks_data : dict
-            {edge: input_data} edge input bounds data
-        uncertain_params : list
-            Uncertain parameters for each node
-
-        Returns
-        -------
-        combined_samples, combined_constraints, combined_eks
+        Refine the initial samples with evolutionary local search, running each
+        scoring method independently and combining the resulting children.
         """
         n_best = self.cfg.init.get('n_best', 32)
         n_children = self.cfg.init.get('n_children_per_best', 4)
@@ -140,22 +134,20 @@ class initialisation(ABC):
 
         return current_samples, current_constraints, current_eks
 
+    # ---- Private Methods ----
+
     def _evaluate_costs(self, samples, uncertain_params):
         """
-        Evaluate node costs for all samples using a cost-specific network simulator.
-
-        Returns
-        -------
-        costs : dict
-            {node: cost_array} where cost_array is (n_samples, n_theta, n_cost)
+        Evaluate per-node costs for all samples via a cost-specific simulator;
+        returns {node: cost_array} with cost_array shape (n_samples, n_theta, n_cost).
         """
-        from mu_F.constraints.constructor import constraint_evaluator
-        from mu_F.unit_evaluators.constructor import network_simulator
+        from mu_F.constraints.constructor import ConstraintEvaluator
+        from mu_F.unit_evaluators.constructor import NetworkSimulator
 
-        # Create a cost-evaluating simulator
-        cost_simulator = network_simulator(
+        # build a cost-evaluating simulator
+        cost_simulator = NetworkSimulator(
             self.cfg, self.graph.copy(),
-            lambda cfg, graph, node, constraint_type='node_cost': constraint_evaluator(cfg, graph, node, constraint_type='node_cost'),
+            lambda cfg, graph, node, constraint_type='node_cost': ConstraintEvaluator(cfg, graph, node, constraint_type='node_cost'),
             type_cons='node_cost'
         )
         costs, _ = cost_simulator.get_data(samples, uncertain_params)
@@ -163,51 +155,31 @@ class initialisation(ABC):
 
     def _cost_seek(self, constraints, costs):
         """
-        Score samples by total cost across all nodes (lower cost = higher score).
-
-        Parameters
-        ----------
-        constraints : dict
-            {node: constraint_array} - not used, kept for API consistency
-        costs : dict
-            {node: cost_array} where cost_array is (n_samples, n_theta, n_cost)
-
-        Returns
-        -------
-        scores : jnp.ndarray
-            Shape (n_samples,), higher = better (lower cost)
+        Score samples by total cost summed across all nodes, negated so that
+        lower cost gives a higher score.
         """
         n_samples = None
         total_cost = None
 
-        for node, c in costs.items():
-            # c has shape (n_samples, n_theta, n_cost)
-            # Take mean over uncertain params, sum over cost dims
+        for node, c in costs.items():                       # c: (n_samples, n_theta, n_cost)
             if n_samples is None:
                 n_samples = c.shape[0]
                 total_cost = jnp.zeros(n_samples)
 
-            # Sum all cost components, mean over theta
+            # sum over cost components, mean over theta
             node_cost = jnp.mean(jnp.sum(c, axis=-1), axis=1)  # (n_samples,)
             total_cost = total_cost + node_cost
 
-        # Negate: lower cost = higher score
+        # negate so lower cost is a higher score
         return -total_cost
 
     def _boundary_seek(self, constraints):
         """
-        Score samples by L1 distance to constraint boundary.
-
-        Points closer to the boundary (g ≈ 0) are preferred for exploring
-        the feasibility frontier. We normalize constraints by their range
-        and compute L1 distance to zero.
-
-        Lower L1 distance = higher score.
+        Score samples by normalised L1 distance to the constraint boundary,
+        negated so points nearer the feasibility frontier score higher.
         """
-        # First pass: compute min/max for normalization
         all_g = []
-        for node, g in constraints.items():
-            # g: (n_samples, n_theta, n_g) -> flatten theta dimension
+        for node, g in constraints.items():                 # g: (n_samples, n_theta, n_g)
             g_flat = jnp.mean(g, axis=1)  # (n_samples, n_g)
             all_g.append(g_flat)
 
@@ -217,34 +189,18 @@ class initialisation(ABC):
         g_max = jnp.max(all_g, axis=0, keepdims=True)
         g_range = g_max - g_min + 1e-8  # avoid division by zero
 
-        # Normalize to [0, 1] range
+        # normalise to [0, 1]
         g_norm = (all_g - g_min) / g_range
 
-        # L1 distance to 0.5 (middle of normalized range, representing boundary)
         l1_distance = jnp.sum(jnp.abs(g_norm), axis=1)  # (n_samples,)
 
-        # Lower L1 distance = closer to boundary = higher score
+        # negate so lower distance is a higher score
         return -l1_distance
 
     def _generate_children(self, best_samples, n_children, perturbation_scale, bounds):
         """
-        Generate children around best samples using Gaussian perturbation.
-
-        Parameters
-        ----------
-        best_samples : jnp.ndarray
-            Shape (n_best, n_design)
-        n_children : int
-            Number of children per best sample
-        perturbation_scale : float
-            Fraction of bound range for std dev
-        bounds : tuple
-            (lower_bounds, upper_bounds) arrays
-
-        Returns
-        -------
-        children : jnp.ndarray
-            Shape (n_best * n_children, n_design)
+        Generate children around the best samples by Gaussian perturbation,
+        clipped to the design bounds.
         """
         lb, ub = bounds
         bound_range = ub - lb
@@ -252,17 +208,13 @@ class initialisation(ABC):
 
         n_best, n_design = best_samples.shape
 
-        # Generate all children at once
-        key = PRNGKey(42)  # Fixed seed for reproducibility
+        key = PRNGKey(42)  # fixed seed for reproducibility
         noise = normal(key, shape=(n_best, n_children, n_design))
 
-        # Broadcast: best_samples[:, None, :] + noise * std
         children = best_samples[:, None, :] + noise * std[None, None, :]
 
-        # Clip to bounds
         children = jnp.clip(children, lb[None, None, :], ub[None, None, :])
 
-        # Reshape to (n_best * n_children, n_design)
         children = children.reshape(-1, n_design)
 
         return children
@@ -282,25 +234,41 @@ class initialisation(ABC):
         return merged
     
     def update_eks_data(self, eks_data):
+        """
+        Fit the approximator to each edge's input data and store the bounds.
+        """
         # fit approximator to eks data
         for edge in eks_data.keys():
             self.graph.edges[edge[0], edge[1]]["input_data_bounds"] = self.approximator(eks_data[edge], self.cfg)
 
-        return 
+        return
 
     def sample_design_space(self):
+        """
+        Draw the initial Sobol samples over the expanded design bounds.
+        """
         bounds = self.get_bounds()
         n_d = len(bounds[0])
         return self.sampler.sample_design_space(n_d, bounds, self.cfg.init.sobol_samples)
-        
+
 
     def get_bounds(self):
-        bounds = self.cfg.case_study.KS_bounds
-        return self.process_bounds(self.bounds_to_dictionary(bounds))
+        """
+        Build the (expanded) design-space bounds from the case-study config.
+        """
+        from mu_F.samplers.utils import expand_bounds
+        ks = self.cfg.case_study.KS_bounds
+        bounds = self.bounds_to_dictionary(ks)
+        n_design = sum(1 for unit in ks.design_args for b in unit
+                       if b[0] != 'None' and b[1] != 'None')
+        bounds = expand_bounds(bounds, float(self.cfg.samplers.get('design_expansion', 0.0)), n_design)
+        return self.process_bounds(bounds)
     
     def get_uncertain_params(self):
-
-        
+        """
+        Sample the uncertain parameters per node according to the formulation
+        and the user-specified probability mass.
+        """
         if self.cfg.formulation == 'probabilistic':
             param_dict = self.cfg.case_study.parameters_samples
             if self.cfg.case_study.get('make_markov', False):
@@ -315,23 +283,24 @@ class initialisation(ABC):
             param_best_estimate = self.cfg.case_study.parameters_best_estimate
             
             selected_params = [jnp.array([param]) for param in param_best_estimate]
-        
 
-        return selected_params # sample selected parameters from the list according to probability mass specified by the user
+        return selected_params
 
     @staticmethod
     def process_bounds(bounds):
-        """ from dictionary to array """
+        """
+        Convert the bounds dictionary into lower/upper bound arrays.
+        """
         print(bounds)
-        # get lower and upper bounds in array form
         lower_bound = jnp.array([bounds[i][i][0] for i in bounds.keys()])
         upper_bound = jnp.array([bounds[i][i][1] for i in bounds.keys()])
         return lower_bound, upper_bound
     
     @staticmethod
     def bounds_to_dictionary(bounds):
-        """ Method to construct a list of bounds for the design space"""
-
+        """
+        Build the nested design-space bounds dictionary from the KS bounds.
+        """
         bounds_ = {}
         index = 0
         for j, unit_bounds in enumerate(bounds.design_args):

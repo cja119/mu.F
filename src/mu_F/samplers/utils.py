@@ -1,4 +1,4 @@
-
+"""Bounds construction and DEUS problem-description builders for the samplers."""
 from omegaconf import DictConfig
 import networkx as nx
 import hydra
@@ -8,28 +8,10 @@ from jax.random import PRNGKey, choice
 
 
 def _phases_setup_block(cfg: DictConfig, n_live, n_replacements):
-    """Build DEUS's `phases_setup` from cfg.samplers.ns.phases toggles.
-
-    DEUS runs four phases — INITIAL → NMVP_SEARCH → DETERMINISTIC →
-    PROBABILISTIC.  INITIAL is unconditional (seeds `n_live` Sobol
-    points).  Each of the other three has a `skip` flag controlled by
-    the cfg dict below.
-
-    Cfg shape (defaults shown):
-
-        cfg.samplers.ns.phases:
-            nmvp_search:    false   # legacy mode-vector partition
-            deterministic:  true    # boundary migration via smooth-score gradient
-            probabilistic:  true    # strict per-constraint rejection
-
-    DETERMINISTIC migrates the live set onto the feasibility boundary
-    using the smooth score's gradient; without it, PROBABILISTIC's
-    strict per-constraint rejection stalls when raw feasibility is a
-    few percent (multi-ellipsoid envelope covers mostly infeasible
-    regions, so fresh Sobol proposals rarely land inside).
-
-    PROBABILISTIC is the load-bearing rejection phase — turning it off
-    bypasses the whole DEUS scheme and is only useful for debugging.
+    """
+    Build DEUS's phases_setup from cfg.samplers.ns.phases toggles
+    (INITIAL is unconditional; NMVP_SEARCH / DETERMINISTIC /
+    PROBABILISTIC each carry a skip flag).
     """
     pcfg = cfg.samplers.ns.get('phases', None) or {}
     nmvp   = bool(pcfg.get('nmvp_search', False))
@@ -55,13 +37,10 @@ def _phases_setup_block(cfg: DictConfig, n_live, n_replacements):
 
 
 def _replacement_block(cfg: DictConfig):
-    """Build DEUS's `algorithms.replacement` sub-tree from `cfg.samplers.ns.rejector`.
-
-    'suob-ellipsoid' — single bounding ellipsoid over all live points (DEUS
-                       replacement scheme 0).
-    'sumb-xmeans'    — x-means partition of live points, one bounding
-                       ellipsoid per cluster, proposals drawn from their
-                       union (DEUS replacement scheme 1).
+    """
+    Build DEUS's algorithms.replacement sub-tree from
+    cfg.samplers.ns.rejector ('suob-ellipsoid' single ellipsoid, or
+    'sumb-xmeans' x-means clustered ellipsoids).
     """
     rejector = getattr(cfg.samplers.ns, 'rejector', 'suob-ellipsoid')
     if rejector == 'suob-ellipsoid':
@@ -78,20 +57,25 @@ def _replacement_block(cfg: DictConfig):
     raise ValueError(f"Unrecognised rejector: {rejector!r}")
 
 
+# ---------------------------------------------------------------------------
+# Bounds construction
+# ---------------------------------------------------------------------------
+
 def design_list_constructor(bounds_for_design):
-    """ Method to construct a list of bounds for the design space"""
+    """
+    Construct a dict of bounds for the design space.
+    """
 
     bounds = {}
     for i, bound in enumerate(bounds_for_design):
         if bound[0] != 'None': bounds[f'd{i+1}'] = {f'd{i+1}': [bound[0], bound[1]]}
-        
+
     return bounds
 
 def extended_design_list_constructor(bounds_for_input, bounds_for_design):
-    """ Method to construct a list of bounds for the design space
-    bounds for design is a nested list
-    bounds for input is a dictonary
-    
+    """
+    Extend the design-space bounds with the coupling-input bounds
+    (bounds_for_design is a nested list, bounds_for_input a dict).
     """
     if len(bounds_for_input) > 0:
         bounds = {}
@@ -100,43 +84,69 @@ def extended_design_list_constructor(bounds_for_input, bounds_for_design):
             n_input_shape = max(bounds_for_input[j][0].shape)
             for i in range(n_input_shape): # iterate over input variables for each stream
                 bounds[f'd{n_index+1}'] = {f'd{n_index+1}': [bounds_for_input[j][0][0,i].squeeze(), bounds_for_input[j][1][0,i].squeeze()]}
-                n_index +=1 
+                n_index +=1
         return bounds_for_design | bounds
     else:
         return bounds_for_design
-    
+
 def add_global_aux(bounds, G):
+    """
+    Append the graph's global auxiliary-argument bounds to bounds.
+    """
     if len(bounds) > 0:
         n_index = len(bounds)
-    else: 
+    else:
         n_index = 0
 
     aux_bounds = G.graph['aux_bounds']
     for j in range(len(aux_bounds)): # iterate over auxiliary args
         for n in aux_bounds[j]: # iterate over variables for each auxiliary arg
-            if n[0] != 'None': 
+            if n[0] != 'None':
                 bounds[f'd{n_index+1}'] = {f'd{n_index+1}': [n[0], n[1]]}
                 n_index +=1
     return bounds
 
 
 def get_unit_bounds(G: nx.DiGraph, unit_index: int):
-    # constructing holder for input and design parameter bounds
+    """
+    Assemble design, coupling-input and aux bounds for a single unit.
+    """
     if isinstance(G.nodes[unit_index]['extendedDS_bounds'], str) or unit_index == 0:
         design_var = design_list_constructor(G.nodes[unit_index]['KS_bounds'])
-        if G.in_degree()[unit_index] > 0: 
+        if G.in_degree()[unit_index] > 0:
             bounds_for_input = [G.edges[predec,unit_index]['aux_filter'](G.edges[predec,unit_index]["input_data_bounds"]) for predec in G.predecessors(unit_index)]
-            bounds =  extended_design_list_constructor(bounds_for_input, design_var) # this should just operate on data in the graph.
+            bounds =  extended_design_list_constructor(bounds_for_input, design_var) # operates on data already in the graph
         else:
             bounds = design_var
         bounds = add_global_aux(bounds, G)
-    else: 
+    else:
         bounds = { f'd{index+1}': {f'd{index+1}': [ G.nodes[unit_index]['extendedDS_bounds'][0][0,index],  G.nodes[unit_index]['extendedDS_bounds'][1][0,index]]} for index in range(len(G.nodes[unit_index]['extendedDS_bounds'][0].squeeze()))}
-    
+
     return bounds
 
 
+def expand_bounds(bounds, frac, n_design):
+    """
+    Widen the first n_design decision intervals by frac of their range
+    (frac/2 per side) so corner-living designs gain surrounding volume;
+    coupling-input and aux dims are left unchanged.
+    """
+    if frac <= 0.0:
+        return bounds
+    widened = {}
+    for i, (key, spec) in enumerate(bounds.items()):
+        (inner, (lo, hi)), = spec.items()
+        if i < n_design:
+            delta = frac / 2.0 * (hi - lo)
+            lo, hi = lo - delta, hi + delta
+        widened[key] = {inner: [lo, hi]}
+    return widened
+
+
 def get_network_bounds(G: nx.DiGraph):
+    """
+    Concatenate every node's design bounds into a single network box.
+    """
 
     bounds = []
     for node in G.nodes():
@@ -148,26 +158,54 @@ def get_network_bounds(G: nx.DiGraph):
     return dict_bounds
 
 
-def create_problem_description_deus(cfg: DictConfig, the_model: object, G:nx.DiGraph, unit_index:float, forward_mode:bool = False):
-    
+# ---------------------------------------------------------------------------
+# DEUS problem-description builders
+# ---------------------------------------------------------------------------
 
-    # This is a problem description generation method specific to DEUS
+def create_problem_description_deus(cfg: DictConfig, the_model: object, G:nx.DiGraph, unit_index:float, forward_mode:bool = False):
+    """
+    Build the per-unit DEUS activity form (bounds, parameter scenarios,
+    solver and sampling settings) for a single graph node.
+    """
+
     bounds = get_unit_bounds(G, unit_index)
+    bounds = expand_bounds(bounds, float(cfg.samplers.get('design_expansion', 0.0)),
+                           int(G.nodes[unit_index]['n_design_args']))
 
     logging.info(f"Bounds: {bounds}")
     logging.info(f'EXTENDED DS DIM.: {len(bounds)}')
 
-    if cfg.formulation == 'deterministic': 
+    if cfg.formulation == 'deterministic':
         parameter_samples = [{'c': jnp.array(G.nodes[unit_index]['parameters_best_estimate']).reshape(-1,), 'w': 1.0}]
     elif cfg.formulation == 'probabilistic':
-        parameter_samples = [{key: value for key,value in dict_.items()} for i,dict_ in enumerate(G.nodes[unit_index]['parameters_samples']) if i < cfg.max_uncertain_samples]
-        sum_weights = jnp.sum(jnp.array([param['w'] for param in parameter_samples ])) # normalise weights to sum to 1
+        from omegaconf import OmegaConf
+        raw_samples = OmegaConf.to_container(
+            G.nodes[unit_index]['parameters_samples'], resolve=True,
+        )
+        # accepts standard (list of {'c','w'} scenarios) or compact (single dict
+        # of parallel 'c'/'w' arrays) layouts
+        parameter_samples = []
+        for dict_ in raw_samples:
+            w = dict_['w']
+            if isinstance(w, (list, tuple)):
+                for ci, wi in zip(dict_['c'], w):
+                    parameter_samples.append({'c': [ci], 'w': float(wi)})
+            else:
+                parameter_samples.append({'c': dict_['c'], 'w': float(w)})
+        parameter_samples = parameter_samples[:cfg.max_uncertain_samples]
+        sum_weights = sum(param['w'] for param in parameter_samples)  # normalise to sum to 1
         for param in parameter_samples:
-            param['w'] = param['w']/sum_weights
-    else: 
+            param['w'] = param['w'] / sum_weights
+    else:
         raise ValueError('Formulation not recognised')
 
-        
+    # probabilistic-surrogate path: model hands DEUS P_feas(d) directly instead
+    # of per-scenario constraints (probabilistic formulation only)
+    direct_probability = bool(
+        cfg.samplers.deus.get('direct_probability', False)
+        and cfg.formulation == 'probabilistic'
+    )
+
     the_activity_form = {
         "activity_type": cfg.samplers.deus.activity_type,
         "activity_settings": {
@@ -177,7 +215,7 @@ def create_problem_description_deus(cfg: DictConfig, the_model: object, G:nx.DiG
             "save_period": 1
         },
 
-        
+
         "problem": {
             "user_script_filename": "none",
             "constraints_func_name": "none",
@@ -196,7 +234,7 @@ def create_problem_description_deus(cfg: DictConfig, the_model: object, G:nx.DiG
                 "score_type": "sigmoid",  # "indicator",
                 #"constraints_func_ptr": the_model.g,
                 # "constraints_func_ptr": None,
-                "store_constraints": False
+                "store_constraints": False,
             },
             # "score_evaluation": {
             #     "method": "mppool",
@@ -209,6 +247,7 @@ def create_problem_description_deus(cfg: DictConfig, the_model: object, G:nx.DiG
                 #"constraints_func_ptr": the_model.g,
                 # "constraints_func_ptr": None,
                 "store_constraints": False,
+                "direct_probability": direct_probability,
             },
             #"efp_evaluation": {
             #    "method": "mppool",
@@ -246,12 +285,16 @@ def create_problem_description_deus(cfg: DictConfig, the_model: object, G:nx.DiG
 
 
 def get_network_uncertain_params(cfg):
+    """
+    Build the joint uncertain-parameter scenarios (and nominal point)
+    for the whole network from the per-unit case-study samples.
+    """
     param_dict = cfg.case_study.parameters_samples
 
-    # getting uncertain parameters
+    # uncertain parameters
     max_parameter_samples = min(cfg.max_uncertain_samples, min([len(param) for param in param_dict]))
     list_of_params, list_of_weights = {i: {} for i in range(len(param_dict)) }, {i: {} for i in range(len(param_dict)) }
-    
+
     for i, param in enumerate(param_dict):
         for k in range(max_parameter_samples):
             list_of_params[i][k] = param[k]['c']
@@ -261,13 +304,13 @@ def get_network_uncertain_params(cfg):
     prod_weights = [jnp.prod(jnp.hstack([jnp.array(list_of_weights[i][k]).reshape(1,1) for i in range(len(param_dict))])) for k in range(max_parameter_samples)]
     sum_prod_weights = jnp.sum(jnp.array(prod_weights))
     prod_weights = [prod_weights[i]/sum_prod_weights for i in range(max_parameter_samples)]
-    
+
     list_ = []
 
     for i in range(max_parameter_samples):
         list_.append({'c': concat_params[i].squeeze(), 'w': prod_weights[i]})
 
-    # getting nominal parameters
+    # nominal parameters
     nom_params = jnp.hstack([jnp.array(p).reshape(1,-1) for p in cfg.case_study.parameters_best_estimate]).squeeze()
 
     nom_p = [{'c': nom_params.squeeze(), 'w': 1.0}]
@@ -276,14 +319,15 @@ def get_network_uncertain_params(cfg):
 
 
 def create_problem_description_deus_direct(cfg: DictConfig, G:nx.DiGraph):
-    
+    """
+    Build the whole-network DEUS activity form (direct mode) over the
+    concatenated network bounds and joint uncertain parameters.
+    """
 
-    # This is a problem description generation method specific to DEUS
     bounds = get_network_bounds(G)
     uncertain_params, nom_params, n_p_samples = get_network_uncertain_params(cfg)
 
-
-    if cfg.formulation == 'deterministic': 
+    if cfg.formulation == 'deterministic':
         parameter_samples = n_p_samples
     elif cfg.formulation == 'probabilistic':
         parameter_samples = uncertain_params
@@ -293,7 +337,7 @@ def create_problem_description_deus_direct(cfg: DictConfig, G:nx.DiGraph):
     logging.info(f"Bounds: {bounds}")
     logging.info(f'DS DIM.: {len(bounds)}')
 
-        
+
     the_activity_form = {
         "activity_type": cfg.samplers.deus.activity_type,
         "activity_settings": {
@@ -315,7 +359,7 @@ def create_problem_description_deus_direct(cfg: DictConfig, G:nx.DiGraph):
         "solver": {
             "name": "dsc-ns",
             "settings": {
-            "log_evidence_estimation": {"enabled": cfg.samplers.ns.log_evidence_estimation}, 
+            "log_evidence_estimation": {"enabled": cfg.samplers.ns.log_evidence_estimation},
             "score_evaluation": {
                 "method": "serial",
                 "score_type": "sigmoid",  # "indicator",

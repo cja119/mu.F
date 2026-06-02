@@ -10,6 +10,7 @@ deus:
 notion_of_feasibility: 'positive'
 ku_approximation: 'box'
 vol_scale: 0.05
+design_expansion: 0.0   # decision-dim sampling-box expansion (fraction of range; 0 = off)
 
 ns:
   n_live: 5000

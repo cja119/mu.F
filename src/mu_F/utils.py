@@ -1,3 +1,4 @@
+"""General-purpose utilities: figure saving, graph serialisation and dataset containers."""
 import cloudpickle as pickle
 from pathlib import Path
 
@@ -72,38 +73,32 @@ def savefig_with_svg_limit(save_callable, path, *args, max_svg_bytes=SVG_MAX_BYT
 
 def save_graph(G, mode):
     """
-    Save the graph to a file
-    :param G: The graph
-    :param cfg: The configuration
-    :return: None
+    Serialise the graph to a pickle, first dropping all
+    non-serializable evaluators, surrogates and classifiers.
     """
-    # dump everything not needed 
+    # drop everything not needed for serialisation
     for node in G.nodes:
-        G.nodes[node]["forward_evaluator"] = None # drop forward evaluators
+        G.nodes[node]["forward_evaluator"] = None  # drop forward evaluators
         for predec in G.predecessors(node):
-            G.edges[predec, node]["edge_fn"] = None # drop edge functions
-            G.edges[predec, node]["forward_surrogate"] = None # drop forward surrogates
-            G.edges[predec, node]["aux_filter"] = None # drop backward surrogates
-        G.nodes[node]["constraints"] = None   # drop constraint functions (all of these are non-serializable.)
-        G.nodes[node]["constraints_vmap"] = None # drop backward evaluators
-        G.nodes[node]['classifier'] = None 
+            G.edges[predec, node]["edge_fn"] = None  # drop edge functions
+            G.edges[predec, node]["forward_surrogate"] = None  # drop forward surrogates
+            G.edges[predec, node]["aux_filter"] = None  # drop backward surrogates
+        G.nodes[node]["constraints"] = None  # drop constraint functions (non-serializable)
+        G.nodes[node]["constraints_vmap"] = None  # drop backward evaluators
+        G.nodes[node]['classifier'] = None
         G.nodes[node]['unit_params_fn'] = None
         G.nodes[node]['post_process_constraints'] = None
 
-    G.graph['post_process_classifier'] = None # drop post process classifier
-    G.graph['post_process_lower_classifier'] = None # drop post process lower classifier
-    G.graph['post_process_upper_classifier'] = None # drop post process upper classifier
-    G.graph['post_process_lower_regressor'] = None # drop post process lower classifier
-    G.graph['post_process_upper_regressor'] = None # drop post process upper classifier
-    G.graph['post_process_training_methods'] = None # drop post process training methods
-    G.graph['post_process_solver_methods'] = None # drop post process solver methods
-    G.graph['post_process_solution_evaluator'] = None # drop post process solution evaluator
-    G.graph['post_process_solution_visualiser'] = None # drop post process solution visualiser
-    
-    # need to delete the post process training methods 
+    G.graph['post_process_classifier'] = None  # drop post process classifier
+    G.graph['post_process_lower_classifier'] = None  # drop post process lower classifier
+    G.graph['post_process_upper_classifier'] = None  # drop post process upper classifier
+    G.graph['post_process_lower_regressor'] = None  # drop post process lower regressor
+    G.graph['post_process_upper_regressor'] = None  # drop post process upper regressor
+    G.graph['post_process_training_methods'] = None  # drop post process training methods
+    G.graph['post_process_solver_methods'] = None  # drop post process solver methods
+    G.graph['post_process_solution_evaluator'] = None  # drop post process solution evaluator
+    G.graph['post_process_solution_visualiser'] = None  # drop post process solution visualiser
 
-    # and functions
-    # Save the graph to a file
     filename = f"graph_{mode}.pickle"
     with open(filename, 'wb') as f:
         protocol = getattr(pickle, "HIGHEST_PROTOCOL", getattr(pickle, "DEFAULT_PROTOCOL", 4))
@@ -111,7 +106,16 @@ def save_graph(G, mode):
     return
 
 
-class dataset_object(ABC):
+class DatasetObject(ABC):
+    """Growable design/parameter/output dataset of rank-3 batches.
+
+    Stores each added (d, p, y) triple as a list of expanded arrays so the
+    accumulated samples can be consumed batch-wise by the data processors.
+
+    """
+
+    # ---- External Methods ----
+
     def __init__(self, d, p, y):
         self.input_rank = len(d.shape)
         self.p_rank = len(p.shape)
@@ -126,11 +130,15 @@ class dataset_object(ABC):
         self.output_rank = len(y.shape)
 
         self.d = [d if self.input_rank > 2 else jnp.expand_dims(d, axis=-1)]
-        self.p = [p if self.p_rank > 2 else jnp.expand_dims(p,axis=-1)] 
+        self.p = [p if self.p_rank > 2 else jnp.expand_dims(p,axis=-1)]
         self.y = [y if self.output_rank >2 else jnp.expand_dims(y,axis=-1)]
-        
+
 
     def add(self, d_in, p_in, y_in):
+        """
+        Append a new design/parameter/output batch, expanding
+        each to the stored rank-3 shape.
+        """
         input_rank = len(d_in.shape)
         p_rank = len(p_in.shape)
         output_rank = len(y_in.shape)
@@ -142,23 +150,41 @@ class dataset_object(ABC):
         input_rank = len(d_in.shape)
         p_rank = len(p_in.shape)
         output_rank = len(y_in.shape)
-        
+
 
         self.d.append(d_in if input_rank > 2 else jnp.expand_dims(d_in,axis=-1))
         self.p.append(p_in if input_rank > 2 else jnp.expand_dims(p_in,axis=-1))
         self.y.append(y_in if output_rank >2 else jnp.expand_dims(y_in,axis=-1))
-        return 
-    
+        return
 
-class dataset(ABC):
+
+class TrainingDataset(ABC):
+    """Minimal input/output container that ensures at least 2-D arrays.
+
+    Wraps the supplied X and y, expanding their last axis where needed so
+    downstream consumers always receive rank-2 matrices.
+
+    """
+
+    # ---- External Methods ----
+
     def __init__(self, X, y):
         self.input_rank = len(X.shape)
         self.output_rank = len(y.shape)
         self.X = X if self.input_rank >= 2 else jnp.expand_dims(X,axis=-1)
         self.y = y if self.output_rank >=2 else jnp.expand_dims(y, axis=-1)
-            
-        
-class data_processing(ABC):
+
+
+class DataProcessing(ABC):
+    """Iterates and reshapes a DatasetObject into model-ready matrices.
+
+    Optionally slices the stored batches from an index and exposes them either
+    as a generator or flattened into stacked input-output matrices for training.
+
+    """
+
+    # ---- External Methods ----
+
     def __init__(self, dataset_object, index_on=None):
         self.dataset_object = dataset_object
         self.index_on = index_on
@@ -166,41 +192,46 @@ class data_processing(ABC):
             self.d = dataset_object.d
             self.p = dataset_object.p
             self.y = dataset_object.y
-        else: 
+        else:
             self.d = dataset_object.d[index_on:]
             self.p = dataset_object.p[index_on:]
             self.y = dataset_object.y[index_on:]
-        
+
         self.check_data()
 
     def check_data(self):
+        """
+        Assert the design, parameter and output batch lists are equal length.
+        """
         n_d = len(self.d)
         assert n_d == len(self.p) == len(self.y), "The number of design, parameters and outputs objects within the data object should be the same, currently {} n_d, {} n_p and {} n_o".format(n_d, len(self.p), len(self.y))
 
     def get_data(self):
+        """
+        Yield each stored (d, p, y) batch in turn.
+        """
         for i in range(len(self.d)):
             yield self.d[i], self.p[i], self.y[i]
 
     def transform_data_to_matrix(self, edge_fn, feasible_indices=None, index_on=None):
         """
-        Dealing with the data in a matrix format
-         - This is useful for training neural networks / any other input-output model
+        Flatten the stored batches into stacked input-output matrices,
+        useful for training neural networks or other input-output models.
         """
         data = self.get_data()
         data_store_X, data_store_Y, data_store_Z = [], [], []
         if feasible_indices is not None: data = zip(data, feasible_indices)
         else: data = zip(data)
-        for index, data_zip in enumerate(data): 
+        for index, data_zip in enumerate(data):
             # skip the data collected in sampling iterations until index_on
             if index_on is not None:
                 if index<index_on:
                     pass
-            # if feasible_indices is not None, then we have feasible indices to unpack
+            # unpack feasible indices if provided
             if feasible_indices is not None:
                 (d, p, y), fe_ind = data_zip
             else:
                 d, p, y = data_zip[0]
-            # preparation
             X, Y, Z = [], [], []
             if p.ndim<2: p=p.reshape(1,-1)
             if d.ndim<2: d=d.reshape(1,-1)
@@ -210,12 +241,12 @@ class data_processing(ABC):
             y_edge = edge_fn(y)
             if y_edge.ndim < 3: y_edge = jnp.expand_dims(y_edge, axis=-1)
 
-            # loop over the number of uncertain parameters to create input-output data (handling vectorization of the model evaluations)
+            # build input-output data per uncertain parameter (vectorised model evaluations)
             for i in range(p.shape[0]):
                 X.append(jnp.hstack([d.reshape((d.shape[0], d.shape[1])), jnp.repeat(p[i].reshape(1,-1),d.shape[0], axis=0)]))
                 Y.append(y_edge[:,i,:].reshape(d.shape[0],-1))
                 if feasible_indices is not None:
-                    # This is useful for updating KS or fitting models to feasible region only.
+                    # restrict to the feasible region for KS updates / feasible-only fits
                     Z.append(y_edge[:,i,:].reshape(d.shape[0],-1)[fe_ind.squeeze()])
 
             X = jnp.vstack(X)
@@ -229,9 +260,18 @@ class data_processing(ABC):
             return jnp.vstack(data_store_X), jnp.vstack(data_store_Y), jnp.vstack(data_store_Z)
         else:
             return jnp.vstack(data_store_X), jnp.vstack(data_store_Y), None
-    
 
-class feasibility_base(ABC):
+
+class FeasibilityBase(ABC):
+    """Base class binding a feasibility rule to a dataset.
+
+    Selects either the probabilistic or deterministic feasibility method based
+    on the requested formulation; subclasses implement the concrete evaluation.
+
+    """
+
+    # ---- External Methods ----
+
     def __init__(self, dataset_X, dataset_Y, cfg, node, feasibility):
         self.dataset_X = dataset_X
         self.dataset_Y = dataset_Y
@@ -243,41 +283,42 @@ class feasibility_base(ABC):
             self.feasible_function = self.deterministic_feasibility
         else:
             raise ValueError(f"Formulation {self.cfg.formulation} not recognised. Please use 'probabilistic' or 'deterministic'.")
-    
+
     def probabilistic_feasibility(self, X, Y):
         """
-        Method to evaluate the probabilistic feasibility of the data
+        Stub for probabilistic feasibility, overridden by subclasses.
         """
         pass
 
     def deterministic_feasibility(self, X, Y):
         """
-        Method to evaluate the deterministic feasibility of the data
+        Stub for deterministic feasibility, overridden by subclasses.
         """
         pass
 
-class feasibility_function:
-    """
-    Per-design weighted joint-feasibility probability under a discrete uncertainty set.
+class FeasibilityFunction:
+    """Per-design weighted joint-feasibility probability over a discrete uncertainty set.
 
-    For each design row, computes
-        sum_theta w_theta * 1[g_i(d, theta) feasible for all i]
-    over the supplied constraint tensor and scenario weights.
+    For each design row it sums the scenario weights over the scenarios where
+    every constraint is satisfied. Deliberately not inheriting FeasibilityBase,
+    whose __init__ would shadow the method defined here.
 
-    Note: deliberately *not* inheriting from `feasibility_base` — that class's
-    __init__ binds `self.feasible_function` to a stub method, which would
-    shadow the method defined here.
     """
+
+    # ---- External Methods ----
+
     def __init__(self, dataset_X, dataset_Y, cfg, node, feasibility=None):
-        # `dataset_Y` carries the constraint tensor, shape (N_batch, n_theta, n_g);
-        # `dataset_X` and `feasibility` accepted for call-site signature parity
-        # with the rest of `feasibility_base`'s subclasses but are unused here.
+        # dataset_Y carries the constraint tensor (N_batch, n_theta, n_g);
+        # dataset_X and feasibility kept for signature parity but unused here.
         self.dataset_X = dataset_X
         self.dataset_Y = dataset_Y
         self.cfg = cfg
         self.node = node
 
     def feasible_function(self, probabilities):
+        """
+        Weighted joint-feasibility probability per design row.
+        """
         Y = self.dataset_Y  # (N_batch, n_theta, n_g)
 
         if self.cfg.samplers.notion_of_feasibility == 'positive':
@@ -296,22 +337,29 @@ class feasibility_function:
         return (all_feasible * probabilities[jnp.newaxis, :]).sum(axis=-1)  # (N_batch,)
 
 
-class apply_feasibility(feasibility_base):
+class ApplyFeasibility(FeasibilityBase):
+    """Concrete feasibility evaluator over stored constraint batches.
+
+    Implements the probabilistic and deterministic feasibility methods bound by
+    FeasibilityBase, returning stacked inputs, labels and per-batch indicators.
+
+    """
+
+    # ---- External Methods ----
+
     def __init__(self, dataset_X, dataset_Y, cfg, node, feasibility):
         super().__init__(dataset_X, dataset_Y, cfg, node, feasibility)
 
     def get_feasible(self, return_indices=True):
-        # Both `probabilistic_feasibility` and `deterministic_feasibility`
-        # already read X, Y off `self` — pass only `return_indices`.
+        """
+        Dispatch to the bound feasibility method, which already reads X, Y off self.
+        """
         return self.feasible_function(return_indices=return_indices)
 
     def probabilistic_feasibility(self, return_indices=True):
         """
-        Method to evaluate the probabilistic feasibility of the data
-
-        X : N x n_d + n_u matrix
-        Y : N x n_p x n_g matrix
-
+        Probabilistic feasibility: fraction of scenarios feasible per design.
+        X is N x (n_d + n_u); Y is N x n_p x n_g.
         """
         X, Y = self.dataset_X, self.dataset_Y
 
@@ -336,7 +384,7 @@ class apply_feasibility(feasibility_base):
 
     def deterministic_feasibility(self, return_indices=True):
         """
-        Method to evaluate the deterministic feasibility of the data
+        Deterministic feasibility: worst-case constraint label per design.
         """
         X, Y = self.dataset_X, self.dataset_Y
         cond = []
@@ -344,14 +392,14 @@ class apply_feasibility(feasibility_base):
         for x, y in zip(X, Y):
             if self.cfg.samplers.notion_of_feasibility == 'positive':
                 lab = jnp.min(y, axis=-1)
-                select_cond = lab  >= 0 
+                select_cond = lab  >= 0
             else:
-                lab = jnp.max(y, axis=-1) 
-                select_cond = lab  <= 0  
+                lab = jnp.max(y, axis=-1)
+                select_cond = lab  <= 0
 
             cond.append(select_cond)
             labels.append(lab)
-            
+
 
         if not return_indices:
             return jnp.vstack(X), jnp.vstack(labels)
@@ -367,5 +415,5 @@ def check_requires(fn, param_name: str) -> bool:
     if param_name in params:
         return True
 
-    # If it has **kwargs, it can accept it too
+    # accepts the param if it has **kwargs
     return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())

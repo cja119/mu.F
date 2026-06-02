@@ -1,3 +1,4 @@
+"""Pair-grid and contour plotting routines for design-space visualisation."""
 import pandas as pd
 import os
 import numpy as np
@@ -74,6 +75,7 @@ def init_plot(cfg, G, pp= None, init=True, save=True):
 def add_policy(pp, policy_data, cfg=None, color="r", marker="o", size=60):
     """
     Overlay policy points on an existing PairGrid.
+    Called by the reconstruction and rollout plotters.
     """
 
     cols = list(cfg.case_study.design_space_dimensions)
@@ -94,7 +96,7 @@ def add_policy(pp, policy_data, cfg=None, color="r", marker="o", size=60):
             rows.append(row_vec)
         policy_df = pd.DataFrame(rows, columns=cols)
 
-    # Materialize indices so they can be reused for every policy row.
+    # materialize indices so they can be reused for every policy row
     indices = list(zip(*np.tril_indices_from(pp.axes, -1)))
     for _, row in policy_df.iterrows():
         for i, j in indices:
@@ -123,23 +125,23 @@ def decompose_call(cfg, G, path, init=True):
 
 
 def decomposition_plot(cfg, G, pp, save=True, path='decomposed_pair_grid_plot'):
-    # load live sets for each subproblem from the graph 
+    # load live sets for each subproblem from the graph
     inside_samples_decom = [pd.DataFrame({col:G.nodes[node]['live_set_inner'][:,i] for i, col in enumerate(cfg.case_study.process_space_names[node])}) for node in G.nodes]
     print('cols', [{i: col for i, col in enumerate(cfg.case_study.process_space_names[node])} for node in G.nodes])
 
     print("inside_samples_decom", inside_samples_decom)
-    # just keep those variables with Ui in the column name # TODO update this to also receive the live set probabilities 
+    # keep only variables whose column name carries the node tag
     inside_samples_decom = [in_[[col for col in in_.columns if f"N{i+1}" in col]] for (i,in_) in enumerate(inside_samples_decom)]
-    
+
     print("inside_samples_decom", inside_samples_decom)
     if cfg.reconstruction.plot_reconstruction == 'probability_map':
         for i, is_ in enumerate(inside_samples_decom):
-            is_['probability'] = G.nodes[i]['live_set_inner_prob'] # TODO update this to also receive the live set probabilities
+            is_['probability'] = G.nodes[i]['live_set_inner_prob']
 
-    # Get the indices of the lower triangle of the pair grid plot
+    # lower-triangle indices of the pair grid
     indices = zip(*np.tril_indices_from(pp.axes, -1))
 
-    for i, j in indices: 
+    for i, j in indices:
         x_var = pp.x_vars[j]
         y_var = pp.y_vars[i]
         ax = pp.axes[i, j]
@@ -247,7 +249,7 @@ def _rollout_policy_from_graph(cfg, G):
 def rollout_with_policy_plot(cfg, G, policy_data=None, save=True, path='rollout_with_policy'):
     reconstructed_df, source = _load_latest_inside_samples()
     if reconstructed_df is None:
-        logging.warning("No inside-samples file found. Falling back to blank reconstruction canvas.")
+        logging.warning("No inside-samples file found. Falling back to blank Reconstruction canvas.")
         reconstructed_df = _blank_reconstruction_df(cfg)
     else:
         logging.info(f"Loaded latest inside samples from {source}")
@@ -264,7 +266,7 @@ def rollout_with_policy_plot(cfg, G, policy_data=None, save=True, path='rollout_
     try:
         pp = decomposition_plot(cfg, G, pp, save=False)
     except Exception as exc:
-        logging.warning(f"Could not overlay decomposition live sets on rollout plot: {exc}")
+        logging.warning(f"Could not overlay Decomposition live sets on rollout plot: {exc}")
 
     if not reconstructed_df.isna().all().all():
         pp.map_lower(sns.scatterplot, data=reconstructed_df, edgecolor="k", c="b", linewidth=0.5)
@@ -391,19 +393,14 @@ def hide_current_axis(*args, **kwds):
 def post_process_upper_solution(cfg, G, args):
     """
     Visualise the solution of the post-processing upper-level problem.
-    :param cfg: Configuration object
-    :param G: Graph object
-    :param solution: Solution to be visualised
-    :param path: Path to save the visualisation
+    Dispatched by the Visualiser for the post_process_upper mode.
     """
     solution, value_fn = args
     plotting_format()
     fig, ax = plt.subplots(figsize=(10, 10))
-    
-    # Assuming solution is a DataFrame with columns: 'x', 'y', 'z'
-    # where 'x' and 'y' are the 2D input variables and 'z' is the mapped 1D output
+
+    # solution carries 2D inputs 'x', 'y' and mapped 1D output 'z'
     xi, yi, zi = solution['x'], solution['y'], solution['z']
-    # Plot the contour
     contour = ax.contourf(xi, yi, zi, vmin=0, vmax=np.max(zi), levels=20, cmap='viridis')
     fig.colorbar(contour, ax=ax, label='Point-wise error')
 
@@ -420,67 +417,41 @@ def post_process_upper_solution(cfg, G, args):
 
 def plot_contour(func, x_range, y_range, value_fn, path, num_points=200, levels=10):
     """
-    Generates a contour plot for a given 2D function over a specified box domain.
-    This version is designed for functions that can only be evaluated on a batch
-    of points where the batch is the zeroth axis (e.g., func(x_coords, y_coords)
-    where x_coords and y_coords are 1D arrays).
-
-    Args:
-        func (callable): The function to plot. It should accept two 1D arrays,
-                        x and y, and return a single 1D array of results.
-        x_range (tuple): A tuple (x_min, x_max) defining the range for the x-axis.
-        y_range (tuple): A tuple (y_min, y_max) defining the range for the y-axis.
-        num_points (int, optional): The number of points to use for the grid along
-                                    each axis. A higher number results in a smoother
-                                    plot. Defaults to 200.
-        levels (int, optional): The number of contour lines or filled regions to display.
-                                Defaults to 10.
+    Contour plot of a 2D function over a box domain, where func is
+    evaluated on a batch of coordinate pairs along the zeroth axis.
     """
-    # Create a grid of points for the x and y axes
+    # grid of points for the x and y axes
     x = np.linspace(x_range[0], x_range[1], num_points)
     y = np.linspace(y_range[0], y_range[1], num_points)
-    
-    # Use numpy.meshgrid to create the 2D grid from the 1D arrays
+
     X, Y = np.meshgrid(x, y)
 
-    # Flatten the X and Y grids into 1D arrays for the batch evaluation
-    # This creates a "batch" of all coordinate pairs to be evaluated
+    # flatten into a batch of all coordinate pairs
     x_coords_batch = X.ravel()
     y_coords_batch = Y.ravel()
 
-    # Evaluate the input function on the batch of points
-    # The function is expected to return a 1D array of results
     z_values_batch = func(x_coords_batch, y_coords_batch)
 
-    # Reshape the 1D result back into a 2D array with the original grid shape
+    # reshape the batch result back onto the grid
     Z = z_values_batch.reshape(X.shape)
 
-    # Create the plot figure and axes
     fig, ax = plt.subplots(figsize=(15, 10))
 
-    # --- Generate the contour plot ---
-    # The 'contourf' function creates filled contour regions.
-    # The 'cmap' parameter sets the colormap.
     cf = ax.contourf(X, Y, Z, levels=levels, cmap='viridis')
-    
-    # The 'contour' function creates the contour lines on top of the filled regions.
-    # We use 'colors='k'' to make the lines black.
+
+    # black contour lines over the filled regions
     ax.contour(X, Y, Z, levels=levels, colors='k', linewidths=0.5)
 
-    # --- Customize the plot ---
-    # Add a color bar to show the mapping from color to Z-value
     fig.colorbar(cf, ax=ax, vmin=np.min(Z), vmax=np.max(Z), label='Point-wise error')
 
-    # Add titles and labels
     #ax.set_title(f'Contour Plot of {func.__name__}', fontsize=16)
     ax.set_xlabel(f'r$x_1$', fontsize=12)
     ax.set_ylabel(f'r$x_2$', fontsize=12)
-    ax.set_aspect('equal', adjustable='box') # Ensure the plot is not stretched
+    ax.set_aspect('equal', adjustable='box')
 
     logging.info("Difference between predicted max point wise error and actual max point wise error: %s",
                  np.max(Z) - value_fn)
 
-    # Display the plot
     savefig_with_svg_limit(
         plt.savefig,
         os.path.join(path, "post_process_upper_solution.svg"),

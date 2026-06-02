@@ -1,22 +1,4 @@
-"""
-Cost-to-go (CTG) evaluator.
-
-For each successor of `node`, builds an `IntegerNLPSpec` that wraps:
-
-  • objective : the successor's CTG surrogate, wrapped by `mask_surrogate`
-    with `aggregator='scalar'` (CTG is always single-output).
-  • constraint: the successor's classifier, wrapped by `mask_surrogate` with
-    `aggregator='scalar'` (single-head) or `'onehot_sum'` (K-head SOS1).
-  • integer problem: from `cfg.case_study.design_domain` plus K-head SOS1.
-  • Sobol pool, screener: standard per-successor warm-start machinery.
-
-At evaluate-time the theta axis is handled by an outer `vmap` over the
-per-scenario upstream input `ys`. JAX collapses this with the inner
-(assignment × start) vmaps inside `solve_integer_nlp` — which itself
-calls septal's JAX-pure single-instance core directly — into one fused
-XLA program. First call per node compiles once; subsequent calls hit
-the cache.
-"""
+"""Cost-to-go (CTG) evaluator: per-successor constrained CTG minimisation."""
 from __future__ import annotations
 
 import jax
@@ -49,22 +31,22 @@ from mu_F.solvers.mixed_integer import resolve_integer_spec
 __all__ = ["CTGEvaluator", "cost_to_go_evaluator"]
 
 
-# =============================================================================
+# ---------------------------------------------------------------------------
 # CTG evaluator — one instance per (cfg, graph, node)
-# =============================================================================
+# ---------------------------------------------------------------------------
 
 class CTGEvaluator(BaseEvaluator):
     """Stateful CTG evaluator.
 
-    Holds an `IntegerNLPSpec` per successor. The per-call hot loop runs:
+    Holds one IntegerNLPSpec per successor; the per-call hot loop solves
+    each spec across the per-theta upstream inputs, with JAX collapsing the
+    outer theta vmap and the inner assignment/start vmaps into one trace.
 
-        per_theta = vmap(solve_integer_nlp, in_axes=(None, 0))(spec, ys)
-
-    where `ys` is the per-theta upstream input vector for this successor.
-    JAX collapses the outer theta vmap with the (assignment × start)
-    vmaps inside `solve_integer_nlp` into one trace.
     """
+
     _eval_name = 'cost_to_go'
+
+    # ---- External Methods ----
 
     def __init__(self, cfg, graph, node):
         self.specs: dict          = {}
@@ -73,11 +55,15 @@ class CTGEvaluator(BaseEvaluator):
         super().__init__(cfg, graph, node)
         self._thread = self.evaluate
 
+    # ---- Private Methods ----
+
     def _keys(self) -> list:
+        """Sub-problem keys: the successors of this node."""
         return list(self.graph.successors(self.node))
 
     def _build_for_key(self, succ: int) -> None:
-        # ── Geometry: successor's full NLP shape + which slots are fix / aux / int ──
+        """Build the per-successor constrained-CTG IntegerNLPSpec."""
+        # Geometry: successor NLP shape and which slots are fix / aux / int.
         n_d_succ = int(self.graph.nodes[succ]['n_design_args'])
         input_indices = np.array(
             [n_d_succ + inp for inp in self.graph.edges[self.node, succ]['input_indices']],
@@ -101,43 +87,32 @@ class CTGEvaluator(BaseEvaluator):
         int_indices = np.array(int_dims, dtype=int)
         n_int = int(int_indices.size)
 
-        # ── Multi-head resolution ──
-        n_heads, classifier = _resolve_classifier(self.cfg, self.graph, succ)
-
-        # ── Continuous-only bounds: drop fix/aux/int slots ──
+        # Continuous-only bounds: drop fix/aux/int slots.
         decision_bounds = self.graph.nodes[succ]['extendedDS_bounds'].copy()
         drop = np.concatenate([fix_indices, int_indices]).astype(int)
         lb = jnp.delete(jnp.asarray(decision_bounds[0]), drop, axis=1).reshape(-1)
         ub = jnp.delete(jnp.asarray(decision_bounds[1]), drop, axis=1).reshape(-1)
         bounds = [lb, ub]
         n_d_cont = int(lb.size)
-        n_params = n_fix + n_int + n_heads
 
-        # ── Surrogates wrapped via mask_surrogate ──
-        ctg_surrogate = self.graph.nodes[succ]['ctg_surrogate']
+        # Objective: successor's CTG Surrogate (always scalar regression).
         objective = mask_surrogate(
-            ctg_surrogate,
+            self.graph.nodes[succ]['ctg_surrogate'],
             ndim=ndim,
             fix_ind=input_indices,
             aux_ind=aux_indices,
             int_ind=int_indices,
-            n_heads=0,                              # CTG always scalar regression
+            n_heads=0,
             aggregator='scalar',
         )
-        masked_clf = mask_surrogate(
-            classifier,
-            ndim=ndim,
-            fix_ind=input_indices,
-            aux_ind=aux_indices,
-            int_ind=int_indices,
-            n_heads=n_heads,
-            # aggregator inferred from n_heads
+
+        # Feasible region: classifier, or chance constraint under direct-probability.
+        constraint, n_heads = self._feasibility_constraint(
+            succ, ndim, input_indices, aux_indices, int_indices,
         )
+        n_params = n_fix + n_int + n_heads
 
-        def constraint(x_red, p_aug):
-            return jnp.atleast_1d(masked_clf(x_red, p_aug))
-
-        # ── Septal factory + screener + Sobol pool ──
+        # Septal factory + screener + Sobol pool.
         factory = build_factory(
             objective, constraint, bounds,
             n_decision=n_d_cont,
@@ -150,7 +125,7 @@ class CTGEvaluator(BaseEvaluator):
         screener = build_penalty_screener(objective, constraint, self.screen_penalty)
         sobol_pool = precompute_sobol_pool(bounds, n_d_cont, self.n_sobol_screen)
 
-        # ── Integer problem (SOS1 head selector when n_heads > 0) ──
+        # Integer problem (SOS1 head selector when n_heads > 0).
         integer_problem = IntegerProblem.from_cfg(
             design_domain=self.cfg.case_study.get('design_domain', None),
             n_heads=n_heads,
@@ -167,26 +142,50 @@ class CTGEvaluator(BaseEvaluator):
         self.input_indices[succ] = input_indices
         self.aux_indices[succ]   = aux_indices
 
-    # ------------------------------------------------------------------
-    # Shard entry point — pmap target
-    # ------------------------------------------------------------------
+    def _feasibility_constraint(self, succ, ndim, input_indices, aux_indices, int_indices):
+        """Feasible-region constraint for the successor's CTG optimisation."""
+        direct_prob = (bool(self.cfg.samplers.deus.get('direct_probability', False))
+                       and self.cfg.formulation == 'probabilistic')
+        if direct_prob:
+            return self._chance_constraint(succ, ndim, input_indices, aux_indices, int_indices)
+        return self._classifier_constraint(succ, ndim, input_indices, aux_indices, int_indices)
 
+    def _chance_constraint(self, succ, ndim, input_indices, aux_indices, int_indices):
+        """Chance constraint `P_feas_succ(x) >= p_target` from the successor's
+        probability_map.  The factory enforces `g <= 0`, so this is encoded as
+        `g = p_target - P`.
+        """
+        uw = self.cfg.samplers.unit_wise_target_reliability
+        try:
+            p_target = float(uw[succ])
+        except (TypeError, KeyError, IndexError):
+            p_target = float(uw)
+        masked = mask_surrogate(
+            self.graph.nodes[succ]['probability_map'],
+            ndim=ndim, fix_ind=input_indices, aux_ind=aux_indices,
+            int_ind=int_indices, n_heads=0, aggregator='scalar',
+        )
+        def constraint(x_red, p_aug):
+            return jnp.atleast_1d(p_target - masked(x_red, p_aug))
+        return constraint, 0
+
+    def _classifier_constraint(self, succ, ndim, input_indices, aux_indices, int_indices):
+        """Successor feasibility classifier (multi-head aware)."""
+        n_heads, classifier = _resolve_classifier(self.cfg, self.graph, succ)
+        masked = mask_surrogate(
+            classifier, ndim=ndim, fix_ind=input_indices, aux_ind=aux_indices,
+            int_ind=int_indices, n_heads=n_heads,
+        )
+        def constraint(x_red, p_aug):
+            return jnp.atleast_1d(masked(x_red, p_aug))
+        return constraint, n_heads
+
+    # Shard entry point — pmap target.
     def evaluate(self, outputs_s, aux_s, mask_s):
-        """Shard body — per-scenario CTG via outer-theta vmap + integer-NLP solve.
-
-        Parameters
-        ----------
-        outputs_s : (N_uncertainty, N_output_dim)
-        aux_s     : (N_uncertainty, N_aux)
-        mask_s    : scalar bool — True on real lanes, False on padded lanes
-
-        Returns
-        -------
-        (evals, viable, converged) : each shape (N_uncertainty, N_successors).
-                                     `viable` is returned to the caller for
-                                     the CTG Bellman NaN-mask; `converged`
-                                     feeds the base-class diagnostic counter
-                                     at the entry function only.
+        """
+        Shard body: per-scenario CTG via outer-theta vmap and integer-NLP
+        solve.  Returns per-successor evals, viability (for the Bellman
+        NaN-mask) and KKT-convergence flags.
         """
         def real():
             succ_inputs = get_successor_inputs(self.graph, self.node, outputs_s)
@@ -195,8 +194,7 @@ class CTGEvaluator(BaseEvaluator):
                 ys = succ_inputs[succ]
                 if aux_s is not None and aux_s.size > 0:
                     ys = jnp.concatenate([ys, aux_s], axis=-1)
-                # ys : (n_theta, n_y) — module-level batched solver, one
-                # cached compiled program per spec.
+                # ys is (n_theta, n_y); module-level solver caches one program per spec.
                 per_theta = solve_integer_nlp_batched(self.specs[succ], ys)
                 evals.append(per_theta.objective.reshape(-1, 1))
                 viable.append(per_theta.success.reshape(-1, 1))
@@ -206,8 +204,7 @@ class CTGEvaluator(BaseEvaluator):
         return skip_if_masked(mask_s, real)
 
 
-# Local copy of the resolver — see current.py for the canonical version.
-# Duplicated to avoid an import cycle between current.py and cost_to_go.py.
+# Local copy of the resolver (canonical in current.py) — duplicated to avoid an import cycle.
 def _resolve_classifier(cfg, graph, key):
     is_multihead = (
         cfg.samplers.ns.get('rejector', '') == 'sumb-xmeans'
@@ -219,14 +216,15 @@ def _resolve_classifier(cfg, graph, key):
     return (0, graph.nodes[key]['classifier'])
 
 
-# =============================================================================
+# ---------------------------------------------------------------------------
 # Evaluator cache — one CTGEvaluator per (id(graph), node)
-# =============================================================================
+# ---------------------------------------------------------------------------
 
 _CTG_EVALUATOR_CACHE: dict = {}
 
 
 def _get_evaluator(cfg, graph, node) -> CTGEvaluator:
+    """Return the cached CTGEvaluator for this (graph, node)."""
     key = (id(graph), node)
     evaluator = _CTG_EVALUATOR_CACHE.get(key)
     if evaluator is None:
@@ -235,9 +233,9 @@ def _get_evaluator(cfg, graph, node) -> CTGEvaluator:
     return evaluator
 
 
-# =============================================================================
+# ---------------------------------------------------------------------------
 # Public entry point — called by constraints/constructor.py
-# =============================================================================
+# ---------------------------------------------------------------------------
 
 def cost_to_go_evaluator(outputs, aux, cfg, graph, node):
     """Top-level CTG evaluator with fixed-width pmap sharding."""
@@ -265,7 +263,5 @@ def cost_to_go_evaluator(outputs, aux, cfg, graph, node):
         converged_flags=full_conv[:n_real],
         node_label=f"CTG node={node}",
     )
-    # Caller (integration.py) uses the viable flag to NaN-mask the Bellman
-    # input.  KKT-convergence is recorded for the diagnostic but not
-    # surfaced — an unconverged-but-feasible CTG value is still usable.
+    # Caller uses the viable flag to NaN-mask the Bellman input; convergence is diagnostic only.
     return full_evals[:n_real], full_viable[:n_real]

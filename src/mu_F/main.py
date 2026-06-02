@@ -1,7 +1,8 @@
+"""Entry point: build the case study graph and dispatch to the chosen solver method."""
 import os
 import multiprocessing
 
-# Force spawn immediately, BEFORE any other imports run
+# Force spawn before any other imports run.
 if __name__ == "__main__":
     try:
         multiprocessing.set_start_method('spawn', force=True)
@@ -52,8 +53,10 @@ _MONO_METHODS   = {'direct', 'single_shooting', 'multiple_shooting'}
 
 
 def _select_solver_block(cfg: DictConfig) -> DictConfig:
-    """Promote `cfg.solvers.<decomposition|monolithic>` to `cfg.solvers` based
-    on `cfg.method`.  Downstream consumers read `cfg.solvers.*` flat."""
+    """
+    Promote the method-specific solver block to cfg.solvers so downstream
+    consumers read cfg.solvers.* flat.
+    """
     if cfg.method in _DECOMP_METHODS:
         cfg.solvers = cfg.solvers.decomposition
     elif cfg.method in _MONO_METHODS:
@@ -68,7 +71,6 @@ def _select_solver_block(cfg: DictConfig) -> DictConfig:
 
 @hydra.main(config_path="config", config_name="integrator")
 def main(cfg: DictConfig) -> None:
-    # Configure logging level from config
     import multiprocessing
 
     total_devices = multiprocessing.cpu_count()
@@ -80,30 +82,24 @@ def main(cfg: DictConfig) -> None:
     max_devices = _set_jax(cfg.max_devices)
 
     from mu_F.direct.constructor import apply_direct_method
-    from mu_F.decomposition import decomposition, decomposition_constraint_tuner
-    from mu_F.constraints.constructor import constraint_evaluator
+    from mu_F.decomposition import Decomposition, decomposition_constraint_tuner
+    from mu_F.constraints.constructor import ConstraintEvaluator
     from mu_F.cs_assembly import case_study_constructor, make_markov
     from mu_F.utils import save_graph
     
 
-    # Construct the case study graph
+    # Construct the case study graph.
     G = case_study_constructor(cfg)
     cfg = make_markov(cfg)
 
-    # Save the graph to a file
     save_graph(G.copy(), "initial")
 
-    # identify constraint sets
+    # Dispatch to the solver method named in the config.
     if cfg.method == 'decomposition':
-        # iterate over the modes defined in the config file
         mode = cfg.case_study.mode
-        # getting precedence order
         precedence_order = list(nx.topological_sort(G))
-        # run the decomposition
-        G = decomposition(cfg, G, precedence_order, mode, max_devices).run()
-        # finished decomposition                    
+        G = Decomposition(cfg, G, precedence_order, mode, max_devices).run()
     elif cfg.method in ['direct', 'single_shooting', 'multiple_shooting']:
-        # run the decomposition
         outs = apply_direct_method(cfg, G, method=cfg.method)
         logging.info(f"Direct method {cfg.method} completed with outputs: {outs}")
         save_graph(G.copy(), f'{cfg.method}_complete')
@@ -111,7 +107,6 @@ def main(cfg: DictConfig) -> None:
         decomposition_constraint_tuner(cfg, G, max_devices)
 
     else:
-        # raise an error
         raise ValueError("Method not recognised")
 
     # Log the function evaluations for each node in the graph.
@@ -124,9 +119,8 @@ def main(cfg: DictConfig) -> None:
 if __name__ == "__main__":
     
     
-    import sys  
+    import sys
 
-    # Enable 64 bit floating point precision
     #jax.config.update("jax_enable_x64", True)
     sys.path.append(os.path.join(os.getcwd(),'src'))
     # run the program

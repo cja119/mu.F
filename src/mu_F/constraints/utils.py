@@ -1,20 +1,4 @@
-"""
-Utility functions for constraints.
-
-Two groups in this file:
-
-1. **Generic helpers** — standardisation, classifier masking, successor-input
-   extraction, likelihood-bound computations.  Read by every evaluator.
-
-2. **Evaluator scaffolding** — config glue (`shaping_function`), cfg-driven
-   Sobol starts (`initial_guess`), per-direction bounds extraction
-   (`get_backward_bounds`, `get_forward_bounds`).  Plus re-exports of
-   `generate_initial_guess`, `determine_batches`, `create_batches` from
-   `mu_F.solvers.utilities` so evaluator code has a single import site.
-
-The evaluator scaffolding lived in `constraints/pmap_scaffolding.py` until
-this file absorbed it.
-"""
+"""Constraint utilities: generic helpers plus evaluator scaffolding."""
 from typing import Callable
 import jax.numpy as jnp
 import numpy as np
@@ -35,17 +19,8 @@ from mu_F.solvers.utilities import (
 
 def pad_to_multiple(arr, W: int, axis: int = 0):
     """
-    Pad `arr` along `axis` up to the next multiple of `W`, using replicas
-    of the row at index 0 along `axis`.
-
-    Padding with first-row replicas (rather than zeros) means any shard
-    body that's correct on real inputs cannot crash on a padded lane —
-    the padded lane sees a genuine sample.  The `lax.cond` gate inside
-    the shard throws the output away anyway; the replicas exist purely
-    so intermediate ops (standardise, surrogate evaluation, constraint
-    probes) don't trip over zero/NaN inputs during tracing.
-
-    Returns `(padded, n_real, n_pad)`.
+    Pad arr along axis up to the next multiple of W using replicas of row 0,
+    so padded lanes carry a genuine sample and never trip tracing.
     """
     n_real = arr.shape[axis]
     remainder = n_real % W
@@ -70,32 +45,17 @@ def batch_mask(n_real: int, total: int) -> jnp.ndarray:
 
 def poison_padded(arr: jnp.ndarray, mask: jnp.ndarray, fill=jnp.nan) -> jnp.ndarray:
     """
-    Set `arr[i, ...] = fill` wherever `mask[i]` is False.
-
-    `mask` must be 1D and match `arr.shape[0]`.  The mask is reshaped to
-    `(N, 1, 1, ...)` so it broadcasts cleanly over the trailing dims of
-    `arr` regardless of rank — writing `arr[:, None]` hard-codes 2D input
-    and silently blows up on 3D arrays (the broadcast picks up the
-    trailing singleton from the mask and the leading singleton from the
-    array, giving `(N, N, ...)`).
+    Set arr[i, ...] = fill wherever mask[i] is False, reshaping the 1D mask
+    to broadcast over the trailing dims of arr at any rank.
     """
     bcast = mask.reshape((mask.shape[0],) + (1,) * (arr.ndim - 1))
     return jnp.where(bcast, arr, fill)
 
 
 # ---------------------------------------------------------------------------
-# Scaling helpers (DEPRECATED) — identity no-ops under the new contract.
+# Scaling helpers (deprecated)
 # ---------------------------------------------------------------------------
-#
-# Under the "surrogate self-scaling" contract (every callable stored on the
-# graph already takes real-world inputs and standardises internally with its
-# own trained scaler), the evaluator path never needs to apply or invert
-# scaling.  These functions stay as identity passthroughs so older call
-# sites don't crash while the migration ripples through, but their real
-# work has moved inside the surrogate closures.
-#
-# Planned cleanup: once every evaluator has stopped calling these (tracked
-# elsewhere in this refactor), delete them outright.
+# Identity passthroughs retained for call-site parity; surrogates self-scale.
 
 def standardise_inputs(graph, succ_inputs, out_node, input_indices):
     """Deprecated — identity passthrough.  Surrogates self-scale now."""
@@ -116,21 +76,20 @@ def destandardise_model_decisions(decisions, graph, node, cfg):
 def _cached_masked_surrogate(callable_, n_heads, ndim,
                              fix_ind_tuple, aux_ind_tuple, int_ind_tuple,
                              aggregator, n_y):
+    """
+    Cached factory building the jit'd masked-surrogate closure for septal.
+    """
     fix_ind = np.array(fix_ind_tuple, dtype=int)
     aux_ind = np.array(aux_ind_tuple, dtype=int)
     int_ind = np.array(int_ind_tuple, dtype=int)
     n_fix_aux = int(fix_ind.size + aux_ind.size)
     n_int     = int(int_ind.size)
-    # Size of the y slot in p_aug.
-    # Default: fix/aux count for scalar/onehot_sum aggregators (y fills
-    # construct_input). For vector_diff, callers pass an explicit n_y =
-    # surrogate output dim (y is the equality target).
+    # Size of the y slot in p_aug: fix/aux count by default, explicit n_y
+    # (surrogate output dim) for the vector_diff equality target.
     n_y_eff = int(n_y) if n_y is not None else n_fix_aux
 
-    # Positions in the full ndim space that are NOT fix/aux — these are the
-    # "design slots" the SQP nominally optimises over.  We further split them
-    # into continuous slots (still optimised by septal) and integer slots
-    # (whose values come from the parametric tail of p_aug at solve time).
+    # Full-space slots that are not fix/aux, split into continuous (optimised
+    # by septal) and integer (read from the parametric tail at solve time).
     opt_ind_full = np.delete(
         np.arange(ndim),
         np.concatenate([fix_ind, aux_ind]).astype(int),
@@ -145,14 +104,9 @@ def _cached_masked_surrogate(callable_, n_heads, ndim,
 
     @jit
     def masked_surrogate(x_red, p_aug):
-        # Parametric tail layout:
-        #   p_aug[:, :n_y_eff]                          — y (input+aux for scalar/onehot;
-        #                                                  equality target for vector_diff)
-        #   p_aug[0, n_y_eff : n_y_eff + n_int]         — design-integer values
-        #   p_aug[0, n_y_eff + n_int :                  — structural binaries
-        #          n_y_eff + n_int + n_heads]              (one-hot under SOS1)
-        # Tolerate 1-D p_aug (as passed by the screener / one-call paths) by
-        # promoting to (1, n_p_total).
+        # Parametric tail layout: [ y (n_y_eff) | integers (n_int) |
+        # structural binaries (n_heads, one-hot under SOS1) ].
+        # Promote 1-D p_aug (screener / one-call paths) to (1, n_p_total).
         p_aug = jnp.asarray(p_aug)
         if p_aug.ndim == 1:
             p_aug = p_aug.reshape(1, -1)
@@ -168,8 +122,7 @@ def _cached_masked_surrogate(callable_, n_heads, ndim,
 
         out = jnp.asarray(callable_(input_.reshape(1, -1))).reshape(-1)
 
-        # Aggregator dispatch.  Branches are picked at construction time (Python
-        # comparison on the string captured by closure); no traced control flow.
+        # Aggregator dispatch resolved at construction time (no traced control flow).
         if aggregator == 'scalar':
             return out.reshape(())
         if aggregator == 'onehot_sum':
@@ -188,37 +141,9 @@ def mask_surrogate(callable_: Callable, ndim,
                    n_heads: int = 0,
                    aggregator: str = None,
                    n_y: int = None) -> Callable:
-    """Unified mask for any surrogate, septal's (x_red, p_aug) signature.
-
-    Aggregators
-    -----------
-    'scalar'      — single-head scalar classifier.  Returns out.reshape(()).
-                     Used by current / cost_to_go / backward / probability.
-
-    'onehot_sum'  — K-head with SOS1 one-hot in p_aug.
-                     Returns Σ_k y_struct[k] · out[k].
-                     Used when n_heads > 0.
-
-    'vector_diff' — vector-output surrogate as equality constraint.
-                     Returns surrogate(x_full) − y_target.
-                     Used by forward.py.  Caller sets
-                     constraint_lhs = constraint_rhs = 0 on the factory.
-
-    Parametric tail layout (read from `p_aug`):
-
-        [ y (n_y) | integer values (n_int) | structural binaries (n_heads) ]
-
-    `n_y` is the size of the leading y slot:
-      • default (None) infers `len(fix_ind) + len(aux_ind)` — correct for
-        scalar / onehot_sum where y feeds construct_input's fix/aux fill.
-      • pass explicitly for 'vector_diff' (y is the equality target sized to
-        the surrogate's output dim, not to fix/aux).
-
-    `aggregator` default: `'scalar'` when n_heads == 0, `'onehot_sum'` when
-    n_heads > 0.  These match the legacy behaviour of this helper before the
-    aggregator arg was added — existing callers don't need updating.
-
-    Returns a `jit`-compiled callable `f(x_red, p_aug) → scalar | vector`.
+    """
+    Wrap any Surrogate into septal's (x_red, p_aug) signature, dispatching on
+    the aggregator (scalar, onehot_sum, vector_diff) and parametric tail layout.
     """
     if aggregator is None:
         aggregator = 'scalar' if int(n_heads) == 0 else 'onehot_sum'
@@ -235,46 +160,35 @@ def mask_surrogate(callable_: Callable, ndim,
 
 
 def construct_input(
-        x: jnp.ndarray, 
-        y: jnp.ndarray, 
-        fix_ind: jnp.ndarray, 
-        aux_ind: jnp.ndarray, 
+        x: jnp.ndarray,
+        y: jnp.ndarray,
+        fix_ind: jnp.ndarray,
+        aux_ind: jnp.ndarray,
         ndim: int
     ) -> jnp.ndarray:
 
     """
-    Constructs the input to the classifier
-    - y corresponds to those indices that are fixed
-        assumed to be of shape (1, len(fix_ind) + len(aux_ind))
-    - x corresponds to those indices that are optimised
-        assumed to be of shape (len(decision_vars), ), such that 
-        len(x) + len(y) = ndim
-    - fix_ind are the indices of the fixed (design or input) variables
-    - aux_ind are the indices of the fixed auxiliary variables 
-    - ndim is the total number of dimensions 
-      assumed to be len(x) + len(y)
-    :return: the constructed input of shape (ndim, )
+    Build the ndim classifier input, placing optimised values x at the free
+    slots and fixed values y at the fix/aux slots.
     """
-    # Initialize input_ with zeros or any placeholder value
     input_ = jnp.zeros(ndim)
-    
-    # Create a mask for positions not in fix_ind and aux_ind
+
+    # Free (optimised) slots are everything not held by fix_ind / aux_ind.
     total_indices = np.arange(ndim)
     opt_ind = np.delete(total_indices, np.concatenate([fix_ind, aux_ind]).astype(int))
-    
-    # Assign values from x to input_ at positions not in fix_ind and aux_ind
-    input_ = input_.at[opt_ind].set(x.squeeze()) 
-    
-    # Assign values from y to input_ at positions in fix_ind and aux_ind
-    if (y.shape[1] >= len(fix_ind)): # note that this will not be the case if graph_wide_problem is solved at a Node
+
+    input_ = input_.at[opt_ind].set(x.squeeze())
+
+    # y only present when not solving a graph-wide problem at the node.
+    if (y.shape[1] >= len(fix_ind)):
         if (fix_ind.size != 0): input_ = input_.at[fix_ind].set(y[0,:len(fix_ind)])
         if aux_ind.size != 0: input_ = input_.at[aux_ind].set(y[0,len(fix_ind):])
-        
+
     return input_
 
 def get_successor_inputs(graph, node, outputs):
     """
-    Gets the inputs from the predecessors
+    Extract each successor's inputs from this node's outputs via the edge map.
     """
     succ_inputs = {}
     for succ in graph.successors(node):
@@ -290,22 +204,18 @@ def get_successor_inputs(graph, node, outputs):
 def lower_bound_fn(
     constraint_evals: jnp.ndarray, samples: int, confidence: float
 ) -> jnp.ndarray:
-    # compute the lower bound of the likelihood
-    # constraint_evals: the constraint evaluations
-    # samples: the number of samples we used
-    # confidence: the desired confidence level
-
+    """
+    Beta-distribution lower confidence bound on the satisfaction likelihood.
+    """
     assert confidence <= 1, "Confidence level must be equal to or less than 1"
     assert confidence >= 0, "Confidence level must be equal to or greater than 0"
 
-    # compute the average constraint evaluation
     F_vioSA = jnp.mean(constraint_evals)
 
-    # compute alpha and beta for the beta distribution
+    # Beta distribution shape parameters.
     alpha = samples + 1 - samples * F_vioSA
     b_ta = samples * F_vioSA + 1e-8
 
-    # compute the lower bound of the likelihood as the inverse of the CDF of the beta distribution
     conf = confidence
     betaDist = beta(alpha, b_ta)
     F_LB = betaDist.ppf(conf)
@@ -316,22 +226,18 @@ def lower_bound_fn(
 def upper_bound_fn(
     constraint_evals: jnp.ndarray, samples: int, confidence: float
 ) -> jnp.ndarray:
-    # compute the lower bound of the likelihood
-    # constraint_evals: the constraint evaluations
-    # samples: the number of samples we used
-    # confidence: the desired confidence level
-
+    """
+    Beta-distribution upper confidence bound on the satisfaction likelihood.
+    """
     assert confidence <= 1, "Confidence level must be equal to or less than 1"
     assert confidence >= 0, "Confidence level must be equal to or greater than 0"
 
-    # compute the average constraint evaluation
     F_vioSA = jnp.mean(constraint_evals)
 
-    # compute alpha and beta for the beta distribution
+    # Beta distribution shape parameters.
     alpha = samples - samples * F_vioSA
     b_ta = samples * F_vioSA + 1
 
-    # compute the upper bound of the likelihood as the inverse of the CDF of the beta distribution
     conf = confidence
     betaDist = beta(alpha, b_ta)
     F_LB = betaDist.ppf(1 - conf)
@@ -342,10 +248,8 @@ def upper_bound_fn(
 
 def shaping_function(x, cfg):
     """
-    Sign-flip the objective according to `cfg.samplers.notion_of_feasibility`.
-
-    "positive = feasible" negates so that minimisation drives towards the
-    feasible region; "negative = feasible" leaves the sign alone.
+    Sign-flip the objective per cfg.samplers.notion_of_feasibility so that
+    minimisation drives towards the feasible region.
     """
     if cfg.samplers.notion_of_feasibility == 'positive':
         return -x
@@ -364,12 +268,8 @@ def initial_guess(cfg_solvers, bounds):
 
 def get_backward_bounds(graph, node, cfg):
     """
-    Per-successor reduced-space decision bounds.
-
-    Drops the indices held fixed by the (node -> succ) edge (inputs + aux)
-    from `extendedDS_bounds`, optionally applying `classifier_x_scalar`
-    standardisation first.  Safe to hoist outside pmap (static w.r.t. sample
-    data).
+    Per-successor reduced-space decision bounds, dropping the indices the
+    (node -> succ) edge holds fixed. Static w.r.t. sample data.
     """
     if node is None:
         return None
@@ -383,8 +283,7 @@ def get_backward_bounds(graph, node, cfg):
             [inp for inp in graph.edges[node, succ]['auxiliary_indices']]
         ))
         decision_bounds = graph.nodes[succ]["extendedDS_bounds"].copy()
-        # Bounds stay in real-world units; the classifier callable
-        # self-scales.  (`cfg` retained in the signature for API parity.)
+        # Bounds stay in real-world units; the classifier callable self-scales.
         decision_bounds = [
             jnp.delete(bound, np.hstack([input_indices, aux_indices]).astype(int), axis=1)
             for bound in decision_bounds
@@ -395,17 +294,15 @@ def get_backward_bounds(graph, node, cfg):
 
 def get_forward_bounds(graph, node, cfg):
     """
-    Per-predecessor decision bounds (pred's full NLP space — no reduction).
-
-    Static w.r.t. the inputs flowing through the edge; same role as
-    `get_backward_bounds` but for the forward direction.
+    Per-predecessor decision bounds in the predecessor's full NLP space.
+    The forward-direction counterpart to get_backward_bounds.
     """
     if node is None:
         return None
     forward_bounds = {}
     for pred in graph.predecessors(node):
         decision_bounds = graph.nodes[pred]["extendedDS_bounds"].copy()
-        # Real-world units; forward surrogate self-scales.
+        # Real-world units; forward Surrogate self-scales.
         lb = jnp.asarray(decision_bounds[0]).reshape(-1)
         ub = jnp.asarray(decision_bounds[1]).reshape(-1)
         forward_bounds[pred] = [lb, ub]
