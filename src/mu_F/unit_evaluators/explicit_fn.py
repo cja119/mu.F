@@ -44,7 +44,7 @@ def mean_residence_time_u1(cfg, design_args, input_args, *args):
 
 @partial(jit, static_argnums=(0,))
 def unit_1_dynamics(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, *args
 ):
     """
     Conical mill (unit 1) dynamics: returns hold-up mass and volume, mass
@@ -112,7 +112,7 @@ def bulk_density_u2(cfg, design_args, input_args, *args):
 
 @partial(jit, static_argnums=(0,))
 def porosity_estimate_u2(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, *args
 ):
     """
     Porosity estimate for the convective blender (unit 2).
@@ -146,7 +146,7 @@ def porosity_estimate_u2(
 
 @partial(jit, static_argnums=(0,))
 def unit_2_dynamics(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, *args
 ):
     """
     Convective blender (unit 2) dynamics: returns hold-up mass and volume,
@@ -174,7 +174,7 @@ def unit_2_dynamics(
 
 @partial(jit, static_argnums=(0,))
 def main_comp_volume_unit_3(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, *args
 ):
     """
     Main-compression volume for the tablet press (unit 3).
@@ -189,7 +189,7 @@ def main_comp_volume_unit_3(
 
 @partial(jit, static_argnums=(0,))
 def pre_comp_volume_unit_3(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, *args
 ):
     """
     Pre-compression volume for the tablet press (unit 3).
@@ -204,7 +204,7 @@ def pre_comp_volume_unit_3(
 
 @partial(jit, static_argnums=(0,))
 def porosity_update_u3(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, *args
 ):
     """
     Porosity update for the tablet press (unit 3).
@@ -216,7 +216,7 @@ def porosity_update_u3(
 
 
 def hardness_estimate_u3(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, *args
 ):
     """
     Hardness estimate for the tablet press (unit 3).
@@ -233,7 +233,7 @@ def hardness_estimate_u3(
 
 @partial(jit, static_argnums=(0,))
 def unit_3_dynamics(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, *args
 ):
     """
     Tablet press (unit 3) dynamics: returns tablet hardness, pre-compression
@@ -256,7 +256,7 @@ def unit_3_dynamics(
 
 @partial(jit, static_argnums=(0,))
 def sub_fn_2_eval(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, aux, *args
 ):
     """
     Block 1 evaluation for the convex estimator.
@@ -270,7 +270,7 @@ jax_hessian_sub_fn_2 = hessian(sub_fn_2_eval, argnums=3, has_aux=False)
 
 @partial(jit, static_argnums=(0,))
 def sub_fn_2(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, aux, *args
     ):
     """
     Block 2 for the convex estimator (value with convexity property).
@@ -285,7 +285,7 @@ def sub_fn_2(
 
 @partial(jit, static_argnums=(0,))
 def sub_fn_3_eval(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, aux, *args
     ):
     """
     Block 3 evaluation for the convex estimator.
@@ -300,7 +300,7 @@ jax_hessian_sub_fn_3 = hessian(sub_fn_3_eval, argnums=3, has_aux=False)
 
 @partial(jit, static_argnums=(0,))
 def sub_fn_3(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, aux, *args
 ):
     """
     Block 3 for the convex estimator (value with convexity property).
@@ -315,7 +315,7 @@ def sub_fn_3(
 
 @partial(jit, static_argnums=(0,))
 def sub_fn_1(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, aux, *args
 ):
     """
     Block 1 passthrough for the convex estimator.
@@ -324,7 +324,7 @@ def sub_fn_1(
 
 @partial(jit, static_argnums=(0,))
 def sub_fn_4(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, aux, *args
 ):
     """
     Block 4 for the convex estimator (linear form in the aux variables).
@@ -333,7 +333,7 @@ def sub_fn_4(
 
 @partial(jit, static_argnums=(0,))
 def sub_fn_5(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, aux, *args
 ):
     """
     Block 5 for the convex estimator (quadratic form in the aux variables).
@@ -346,7 +346,7 @@ def sub_fn_5(
     
 
 @partial(jit, static_argnums=(0,))
-def sub_fn_6(cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None):
+def sub_fn_6(cfg: DictConfig, design_args: jnp.ndarray, input_args, aux, *args):
     """
     Block 6 for the convex estimator (sum of upstream inputs).
     """
@@ -358,7 +358,7 @@ def sub_fn_6(cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:No
 
 @partial(jit, static_argnums=(0,))
 def esub_fn_2_eval(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, aux, *args
 ):
     """
     Block 1 evaluation for the estimator.
@@ -372,7 +372,7 @@ jax_hessian_sub_fn_2 = hessian(esub_fn_2_eval, argnums=3, has_aux=False)
 
 @partial(jit, static_argnums=(0,))
 def esub_fn_2(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, aux, *args
     ):
     """
     Block 2 for the estimator.
@@ -385,7 +385,7 @@ def esub_fn_2(
 
 @partial(jit, static_argnums=(0,))
 def esub_fn_3_eval(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, aux, *args
     ):
     """
     Block 3 evaluation for the estimator.
@@ -400,7 +400,7 @@ jax_hessian_sub_fn_3 = hessian(esub_fn_3_eval, argnums=3, has_aux=False)
 
 @partial(jit, static_argnums=(0,))
 def esub_fn_3(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, aux, *args
 ):
     """
     Block 3 for the estimator.
@@ -413,7 +413,7 @@ def esub_fn_3(
 
 @partial(jit, static_argnums=(0,))
 def esub_fn_1(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, aux, *args
 ):
     """
     Block 1 passthrough for the estimator.
@@ -422,7 +422,7 @@ def esub_fn_1(
 
 @partial(jit, static_argnums=(0,))
 def esub_fn_4(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, aux, *args
 ):
     """
     Block 4 for the estimator (linear form in the aux variables).
@@ -432,7 +432,7 @@ def esub_fn_4(
 
 @partial(jit, static_argnums=(0,))
 def esub_fn_5(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, aux, *args
 ):
     """
     Block 5 for the estimator (quadratic form in the aux variables).
@@ -446,7 +446,7 @@ def esub_fn_5(
     
 
 @partial(jit, static_argnums=(0,))
-def esub_fn_6(cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None):
+def esub_fn_6(cfg: DictConfig, design_args: jnp.ndarray, input_args, aux, *args):
     """
     Block 6 for the estimator (sum of upstream inputs).
     """
@@ -458,7 +458,7 @@ def esub_fn_6(cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:N
 
 @partial(jit, static_argnums=(0,))
 def affine_case_study_1(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, aux, *args
 ):
     """
     Affine map for the illustration case study (block 1-3).
@@ -471,7 +471,7 @@ def affine_case_study_1(
 
 @partial(jit, static_argnums=(0,))
 def affine_case_study_2(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, aux, *args
 ):
     """
     Affine map for the illustration case study (block 2-3).
@@ -486,7 +486,7 @@ def affine_case_study_2(
 
 @partial(jit, static_argnums=(0,))
 def affine_case_study_3(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, aux, *args
 ):
     """
     Affine map for the illustration case study (block 3-[4,5]).
@@ -500,7 +500,7 @@ def affine_case_study_3(
 
 @partial(jit, static_argnums=(0,))
 def affine_case_study_4(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, aux, *args
 ):
     """
     Affine map for the illustration case study (block 4).
@@ -514,7 +514,7 @@ def affine_case_study_4(
 
 @partial(jit, static_argnums=(0,))
 def affine_case_study_5(
-    cfg: DictConfig, design_args: jnp.ndarray, input_args: None, aux:None, *args: None
+    cfg: DictConfig, design_args: jnp.ndarray, input_args, aux, *args
 ):
     """
     Affine map for the illustration case study (block 5).
@@ -550,6 +550,9 @@ def _make_cstr_step(cfg: DictConfig):
     t_upper = float(cfg.model.t_upper)
     sp_ca = jnp.asarray(list(cfg.model.sp_ca))
 
+    # Smoothness for the constraint-violation softmax (beta -> inf recovers the hard max).
+    beta = _resolve_beta(cfg, 'softmax_beta', 50.0)
+
     mod = importlib.import_module("pcgym.model_classes")
     model = getattr(mod, str(cfg.model.pcgym_model_class))(int_method="jax")
 
@@ -562,7 +565,7 @@ def _make_cstr_step(cfg: DictConfig):
         g_lower = jnp.atleast_1d((t_lower - x[1]) / t_upper)
         g_upper = jnp.atleast_1d((x[1] - t_upper) / t_upper)
 
-        dgdt = - jnp.maximum(jnp.array([g_lower, g_upper]), 0.0)
+        dgdt = - _softplus(jnp.array([g_lower, g_upper]), beta)
         rwd = _smooth_log(jnp.abs(jnp.take(sp_ca, node) - x[0]))
 
         return jnp.concatenate([jnp.ravel(dxdt), jnp.ravel(dgdt), jnp.ravel(rwd)], axis=0)
@@ -594,6 +597,9 @@ def _make_waste_water_step(cfg: DictConfig):
     derivatives, five feasibility margins and the -q_m / Q_M_REF stage cost.
     cfg-dependent constants are resolved eagerly at factory time.
     """
+    # Smoothness for the constraint-violation softmax (beta -> inf recovers the hard max).
+    beta = _resolve_beta(cfg, 'softmax_beta', 50.0)
+
     # Kinetics
     mu_1_max = float(cfg.model.mu_1_max)
     k_s1     = float(cfg.model.k_s1)
@@ -710,8 +716,8 @@ def _make_waste_water_step(cfg: DictConfig):
         g_s2    = (S2 - S2_MAX) / S2_MAX
         g_ph_hi = (pH - PH_MAX) / PH_MAX
         g_ph_lo = (PH_MIN - pH) / PH_MIN
-        g_zs2   = (S2 + EPS_Z_S2 - Z) / (jnp.abs(Z)+ jnp.abs(S2))
-        dgdt = -jnp.maximum(jnp.array([g_cod, g_s2, g_ph_hi, g_ph_lo, g_zs2]), 0.0)
+        g_zs2   = (S2 + EPS_Z_S2 - Z) / (_smooth_abs(Z) + _smooth_abs(S2))
+        dgdt = -_softplus(jnp.array([g_cod, g_s2, g_ph_hi, g_ph_lo, g_zs2]), beta)
 
         # Stage cost
         q_m = k_6 * mu_2 * X2
@@ -752,6 +758,24 @@ def _smooth_min(x, y, beta):
 def _softplus(x, beta):
     """Softplus function with smoothness parameter beta.  beta -> inf recovers relu."""
     return jnp.logaddexp(x * beta, 0.0) / beta
+
+
+_MONO_METHODS = {'direct', 'single_shooting', 'multiple_shooting'}
+
+def _resolve_beta(cfg, key, default):
+    """
+    Smoothing beta for the active method: a {decomposition, monolithic} mapping
+    picks per pass, a scalar applies to both (decomposition runs near-hard).
+    """
+    value = cfg.model.get(key, default)
+    if isinstance(value, (dict, DictConfig)):
+        bucket = 'monolithic' if cfg.get('method', '') in _MONO_METHODS else 'decomposition'
+        return float(value.get(bucket, default))
+    return float(value)
+
+def _smooth_abs(x, eps=1e-6):
+    """Smooth |x| = sqrt(x^2 + eps^2); eps -> 0 recovers jnp.abs."""
+    return jnp.sqrt(x * x + eps * eps)
 
 
 # ---------------------------------------------------------------------------
@@ -861,6 +885,9 @@ def _make_biohydrogen_step(cfg: DictConfig):
     Controls feed nitrate concentration and log feed flow; the per-trajectory
     aux caps the feed rate. Emits [F | G | R | Phi]; integration is in hours.
     """
+    # Smoothness for the constraint-violation softmax (beta -> inf recovers the hard max).
+    beta = _resolve_beta(cfg, 'softmax_beta', 50.0)
+
     mu_max = float(cfg.model.mu_max)
     k_q    = float(cfg.model.k_q)
     K_c    = float(cfg.model.k_c)
@@ -919,7 +946,7 @@ def _make_biohydrogen_step(cfg: DictConfig):
         g_F = (F - F_max) / F_max
         g_rate = (F_in - f_in_cap) / (F_max / TF)
 
-        dgdt = -jnp.maximum(jnp.array([g_N, g_O, g_F, g_rate]), 0.0)
+        dgdt = -_softplus(jnp.array([g_N, g_O, g_F, g_rate]), beta)
 
         # Cost
         rwd = -Y_HX * X * gate * f_N

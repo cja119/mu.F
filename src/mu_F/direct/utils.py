@@ -22,13 +22,13 @@ def evaluate_node(node_fn, inp_slice_or_fn, des_slice, aux_slice, uncer):
     inp_0, inp_len = inp_slice_or_fn if isinstance(inp_slice_or_fn, tuple) else (0, 0)
 
     def node_eval(ctrl):
-        des = _to_rank3(_slice_1d(ctrl, des_0, des_len))
-        aux = _to_rank3(_slice_1d(ctrl, aux_0, aux_len))
-        unc = _to_rank3(uncer)
+        des = _slice_1d(ctrl, des_0, des_len).reshape(1, -1)   # (N=1, U)
+        aux = _slice_1d(ctrl, aux_0, aux_len).reshape(1, -1)   # (N=1, A)
+        unc = jnp.reshape(uncer, (1, -1))                      # (S=1, Z)
         if isinstance(inp_slice_or_fn, tuple):
-            ins = _to_rank3(_slice_1d(ctrl, inp_0, inp_len))
+            ins = _to_rank3(_slice_1d(ctrl, inp_0, inp_len))   # (N=1, S=1, F)
         elif callable(inp_slice_or_fn):
-            ins = inp_slice_or_fn(ctrl)
+            ins = inp_slice_or_fn(ctrl)                        # (N=1, S=1, F)
         else:
             ins = None
         return node_fn(des, ins, aux, unc)

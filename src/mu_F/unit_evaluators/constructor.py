@@ -61,56 +61,22 @@ class UnitEvaluation(BaseUnit):
 
     def evaluate(self, design_args, input_args, aux_args, uncertain_params=None):
         """
-        Evaluate the unit over the design / input / aux / uncertainty batch.
-        Falls back to a row-by-row pass to isolate a failing case on error.
+        Evaluate the unit over the design x scenario grid; every argument is
+        laid out (N, S, .) before the vmap, falling back to a row-by-row pass
+        to surface a failing design on error.
         """
+        n, s = design_args.shape[0], input_args.shape[1]
+        assert uncertain_params.shape[0] in (1, s), "scenario axis mismatch: inputs vs uncertain params"
 
-        dd_params = self.get_decision_dependent_params(design_args, uncertain_params)
-        dd_params = expand_dims(dd_params, axis=-1)
-        input_args = expand_dims(input_args, axis=1)
-        design_args = expand_dims(design_args, axis=1)
-        aux_args = expand_dims(aux_args, axis=1)
+        dd_args = self.get_decision_dependent_params(design_args, uncertain_params)               # (N, S, D)
+        design_args = _spread(design_args, s)                                                     # (N, S, U)
+        aux_args = _spread(aux_args, s)                                                           # (N, S, A)
+        unc = jnp.broadcast_to(uncertain_params[None, :, :], (n, s, uncertain_params.shape[-1]))  # (N, S, Z)
 
         try:
-            return self.unit_cfg.evaluator(
-                design_args, input_args, aux_args, dd_params, uncertain_params,
-            )
+            return self.unit_cfg.evaluator(design_args, input_args, aux_args, dd_args, unc)
         except Exception as outer_exc:
-
-            n_batch = int(design_args.shape[0])
-            logging.error(
-                "[unit_eval] vmapped evaluator failed; isolating offender "
-                "row-by-row over %d rows.  Outer error: %r",
-                n_batch, outer_exc,
-            )
-            for i in range(n_batch):
-                d_i   = design_args[i:i+1]
-                u_i   = input_args[i:i+1]
-                a_i   = aux_args[i:i+1]
-                dd_i  = dd_params[i:i+1]
-                try:
-                    self.unit_cfg.evaluator(d_i, u_i, a_i, dd_i, uncertain_params)
-                except Exception as row_exc:
-                    np.set_printoptions(suppress=True, precision=6, linewidth=200)
-                    logging.error(
-                        "[unit_eval] FAILING ROW %d / %d\n"
-                        "  design_args      = %s\n"
-                        "  input_args       = %s\n"
-                        "  aux_args         = %s\n"
-                        "  dd_params        = %s\n"
-                        "  uncertain_params = %s\n"
-                        "  row exception    = %r",
-                        i, n_batch,
-                        np.asarray(d_i).squeeze(),
-                        np.asarray(u_i).squeeze(),
-                        np.asarray(a_i).squeeze(),
-                        np.asarray(dd_i).squeeze(),
-                        np.asarray(uncertain_params).squeeze(),
-                        row_exc,
-                    )
-                    raise
-            # no single row reproduced the failure; re-raise the outer error
-            raise
+            return self._isolate_failure(design_args, input_args, aux_args, dd_args, unc, outer_exc)
 
     def evaluate_diagonal(self, design_args, input_args, aux_args, uncertain_params):
         """
@@ -123,12 +89,37 @@ class UnitEvaluation(BaseUnit):
         )
         return jnp.expand_dims(outputs, axis=1)
 
+    # ---- Private Methods ----
 
-def expand_dims(array, axis):
-    """Promote an array to at least 3 dims for the batched evaluators."""
-    if array.ndim < 3:
-        array = jnp.expand_dims(array, axis=axis)
-    return array
+    def _isolate_failure(self, design_args, input_args, aux_args, dd_args, unc, outer_exc):
+        """Re-run the vmap row by row to surface the offending design on failure."""
+        n_batch = int(design_args.shape[0])
+        logging.error(
+            "[unit_eval] vmapped evaluator failed; isolating offender row-by-row "
+            "over %d rows.  Outer error: %r", n_batch, outer_exc,
+        )
+        for i in range(n_batch):
+            try:
+                self.unit_cfg.evaluator(
+                    design_args[i:i+1], input_args[i:i+1], aux_args[i:i+1],
+                    dd_args[i:i+1], unc[i:i+1],
+                )
+            except Exception as row_exc:
+                np.set_printoptions(suppress=True, precision=6, linewidth=200)
+                logging.error(
+                    "[unit_eval] FAILING ROW %d / %d  design=%s input=%s aux=%s dd=%s unc=%s\n  %r",
+                    i, n_batch,
+                    np.asarray(design_args[i:i+1]).squeeze(), np.asarray(input_args[i:i+1]).squeeze(),
+                    np.asarray(aux_args[i:i+1]).squeeze(), np.asarray(dd_args[i:i+1]).squeeze(),
+                    np.asarray(unc[i:i+1]).squeeze(), row_exc,
+                )
+                raise
+        raise outer_exc
+
+
+def _spread(array, scenarios):
+    """Broadcast a per-design array across the uncertainty scenarios: (N, F) -> (N, S, F)."""
+    return jnp.broadcast_to(array[:, None, :], (array.shape[0], scenarios, array.shape[-1]))
 
 
 class SubproblemUnitWrapper(UnitEvaluation):
@@ -170,8 +161,7 @@ class SubproblemUnitWrapper(UnitEvaluation):
             else:
                 aux_args = jnp.empty((design_args.shape[0], 0))
             
-        input_args = expand_input_args(input_args, uncertain_params)
-        #aux_args = expand_input_args(aux_args, uncertain_params)
+        input_args = _spread(input_args, uncertain_params.shape[0])
 
         return self.evaluate(design_args, input_args, aux_args, uncertain_params)
 
@@ -204,17 +194,6 @@ class SubproblemUnitWrapper(UnitEvaluation):
         design_args, input_args, auxiliary_args = decisions[:,:n_d], decisions[:,n_d:n_d+n_u], decisions[:,n_d+n_u:]
         return design_args, input_args, auxiliary_args
 
-def expand_input_args(array, template):
-    """Broadcast input args across the uncertainty scenarios in template."""
-    if array.ndim == 1:
-        array = jnp.expand_dims(array, axis=1)
-    if array.ndim < 3:
-        array = jnp.expand_dims(array, axis=1)
-
-    if array.shape[1] != template.shape[0]:
-        array = jnp.concatenate([array for _ in range(template.shape[0])], axis=1) # repeat input_args for each uncertain param
-
-    return array
 
 class UnitCfg:
     """Builds the (optionally vmapped) evaluators for a single node.
@@ -248,10 +227,10 @@ class UnitCfg:
                 base = jit(partial(unit_steady_state, cfg=cfg, node=node, graph=graph))
             else:
                 raise NotImplementedError(f'Unit corresponding to node {node} is a {graph.nodes[node]["unit_op"]} operation, which is not yet implemented.')
-            # grid (search): one weather list shared across the design batch
-            self.evaluator = vmap(vmap(base, in_axes=(0, 0, 0, 0, None), out_axes=0), in_axes=(None, 1, None, 1, 0), out_axes=1) # inputs are design args, input args, deicsion_and_uncertainty_dependent_params, uncertain params
-            # diagonal (rollout): weather paired one-per-trajectory along the batch
-            self.evaluator_diag = vmap(base, in_axes=(0, 0, 0, 0, 0), out_axes=0)
+            # grid (search): every arg laid out (N, S, .); inner sweep = scenarios, outer = designs
+            self.evaluator = vmap(vmap(base, in_axes=0, out_axes=0), in_axes=0, out_axes=0)
+            # diagonal (rollout): realisation paired one-per-trajectory along the batch
+            self.evaluator_diag = vmap(base, in_axes=0, out_axes=0)
 
             # --- set the decision dependent evaluation
             fn = graph.nodes[node]['unit_params_fn']

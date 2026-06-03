@@ -82,6 +82,26 @@ def vmap_markov_edge_cfg(cfg):
 # Per-case-study edge factories
 # ---------------------------------------------------------------------------
 
+_MONO_METHODS = {'direct', 'single_shooting', 'multiple_shooting'}
+
+def _resolve_beta(cfg, key, default):
+    """Per-method smoothing beta (duplicated to avoid a sibling import)."""
+    value = cfg.model.get(key, default)
+    if isinstance(value, (dict, DictConfig)):
+        bucket = 'monolithic' if cfg.get('method', '') in _MONO_METHODS else 'decomposition'
+        return float(value.get(bucket, default))
+    return float(value)
+
+def _soft_clip(x, lo, hi, beta):
+    """
+    Smooth clip to [lo, hi]; beta is dimensionless (smoothing width = range/beta
+    per dim), beta -> inf recovers jnp.clip. Interior values pass through.
+    """
+    scale = jnp.maximum(hi - lo, 1e-12)
+    sm = lo + jnp.logaddexp(beta * (x - lo) / scale, 0.0) * scale / beta
+    return hi - jnp.logaddexp(beta * (hi - sm) / scale, 0.0) * scale / beta
+
+
 def _markov_edge_with_clip(cfg):
     """
     Edge factory for case studies with bounds: slices the F block and, when
@@ -111,12 +131,11 @@ def _markov_edge_with_clip(cfg):
     lo = bounds[:, 0]
     hi = bounds[:, 1]
 
-    eps = float(getattr(cfg.case_study, "edge_clip_eps", 1.0e-6))
+    beta = _resolve_beta(cfg, 'edge_clip_beta', 50.0)
 
     def _clip(rollout):
         x = rollout[..., :F_size]
-        c = jnp.clip(x, lo, hi)
-        return c + eps * (x - c)
+        return _soft_clip(x, lo, hi, beta)
     
     return _clip
 

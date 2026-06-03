@@ -20,7 +20,6 @@ import hydra
 from omegaconf import DictConfig, ListConfig
 import networkx as nx
 
-
 """
 TODO :
 - visualisation of probability maps

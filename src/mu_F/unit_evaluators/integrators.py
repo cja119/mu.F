@@ -25,18 +25,8 @@ def unit_dynamics(design_params, u, aux, decision_dependent, uncertainty_params,
     Design, decision-dependent and uncertainty params are passed to the field;
     redefine per case study if these assumptions do not hold.
     """
-
-    if design_params.ndim < 2:
-        design_params = jnp.expand_dims(design_params, axis=0)
-
-    if decision_dependent.ndim < 2:
-        decision_dependent = jnp.expand_dims(decision_dependent, axis=0)
-
-    if aux.ndim < 2:
-        aux = jnp.expand_dims(aux, axis=0)
-
-    # defining the params to pass to the vector field
-    params = jnp.hstack([design_params, decision_dependent, aux, uncertainty_params.reshape(1,-1)])
+    # one (design, scenario) point: glue the per-element vectors into the field's param row
+    params = jnp.concatenate([design_params, decision_dependent, aux, uncertainty_params])[None, :]  # (1, U+D+A+Z)
 
     # defining the dynamics
     if cfg.case_study.eval_cost:

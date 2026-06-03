@@ -45,3 +45,8 @@ integration:
   dt0: Null
   max_steps: 50000
   vmap_chunk_size: 0
+
+# Smoothness for the edge clip (per method; higher -> closer to hard clip).
+edge_clip_beta:
+  decomposition: 1000
+  monolithic: 50
