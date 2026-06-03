@@ -65,11 +65,11 @@ def _upper_level_bounds(graph, cfg) -> list:
 
     lb = jnp.hstack([
         jnp.array(bound[0]).reshape(-1)
-        for bound in graph.graph['bounds'] if bound[0] != 'None'
+        for bound in graph.graph['bounds'] if bound[0] not in (None, 'None')
     ])
     ub = jnp.hstack([
         jnp.array(bound[1]).reshape(-1)
-        for bound in graph.graph['bounds'] if bound[1] != 'None'
+        for bound in graph.graph['bounds'] if bound[1] not in (None, 'None')
     ])
     return [lb[dec_ind], ub[dec_ind]]
 

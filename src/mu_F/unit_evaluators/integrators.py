@@ -32,6 +32,9 @@ def unit_dynamics(design_params, u, aux, decision_dependent, uncertainty_params,
     if decision_dependent.ndim < 2:
         decision_dependent = jnp.expand_dims(decision_dependent, axis=0)
 
+    if aux.ndim < 2:
+        aux = jnp.expand_dims(aux, axis=0)
+
     # defining the params to pass to the vector field
     params = jnp.hstack([design_params, decision_dependent, aux, uncertainty_params.reshape(1,-1)])
 

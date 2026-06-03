@@ -159,13 +159,13 @@ class SubproblemUnitWrapper(UnitEvaluation):
         
         # if no inputs to the unit, use the root node inputs or add empty array
         if input_args.shape[1] == 0: 
-            if not (self.cfg.model.root_node_inputs[self.node] == 'None'):
+            if self.cfg.model.root_node_inputs[self.node] not in (None, 'None'):
                 input_args = jnp.array([self.cfg.model.root_node_inputs[self.node]]*design_args.shape[0])
             else:
                 input_args = jnp.empty((design_args.shape[0], 0))
         # if no aux to the unit, use the root node aux or add empty array
         if aux_args.shape[1] == 0:
-            if not (self.cfg.model.node_aux[self.node] == 'None'):
+            if self.cfg.model.node_aux[self.node] not in (None, 'None'):
                 aux_args = jnp.array([self.cfg.model.root_node_aux[self.node]]*design_args.shape[0])
             else:
                 aux_args = jnp.empty((design_args.shape[0], 0))
@@ -184,12 +184,12 @@ class SubproblemUnitWrapper(UnitEvaluation):
         design_args, input_args, aux_args = self.get_auxilliary_input_decision_split(decisions)
         n = design_args.shape[0]
         if input_args.shape[1] == 0:
-            if not (self.cfg.model.root_node_inputs[self.node] == 'None'):
+            if self.cfg.model.root_node_inputs[self.node] not in (None, 'None'):
                 input_args = jnp.array([self.cfg.model.root_node_inputs[self.node]] * n)
             else:
                 input_args = jnp.empty((n, 0))
         if aux_args.shape[1] == 0:
-            if not (self.cfg.model.node_aux[self.node] == 'None'):
+            if self.cfg.model.node_aux[self.node] not in (None, 'None'):
                 aux_args = jnp.array([self.cfg.model.root_node_aux[self.node]] * n)
             else:
                 aux_args = jnp.empty((n, 0))
@@ -309,7 +309,7 @@ class NetworkSimulator(ABC):
             
 
             if self.graph.in_degree()[node] == 0:
-                if not (self.cfg.model.root_node_inputs[node] == 'None'):
+                if self.cfg.model.root_node_inputs[node] not in (None, 'None'):
                     inputs = jnp.tile(jnp.expand_dims(jnp.array([self.cfg.model.root_node_inputs[node]]).reshape(1,-1), axis=1), (decisions.shape[0], u_p.shape[0], 1))
                 else:
                     inputs = jnp.empty((decisions.shape[0], u_p.shape[0], 0))
@@ -384,7 +384,7 @@ class NetworkSimulator(ABC):
 
 
             if self.graph.in_degree()[node] == 0:
-                if not (self.cfg.model.root_node_inputs[node] == 'None'):
+                if self.cfg.model.root_node_inputs[node] not in (None, 'None'):
                     inputs = jnp.array([self.cfg.model.root_node_inputs[node]]*decisions.shape[0])
                 else:
                     inputs = jnp.empty((decisions.shape[0], u_p.shape[0], 0))

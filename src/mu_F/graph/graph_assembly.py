@@ -126,7 +126,7 @@ class GraphConstructor(GraphConstructorBase):
                     aux_ids = self.G.edges[pred, node]["aux_ids"]
                     self.G.edges[pred, node]["auxiliary_indices"] = [n_d + a for a in aux_ids]
                     n_d += self.G.edges[pred, node]["n_auxiliary_args"]
-            elif mode == 'None':
+            elif mode in (None, 'None'):
                 for pred in self.G.predecessors(node):
                     self.G.edges[pred, node]["auxiliary_indices"] = []
             else:

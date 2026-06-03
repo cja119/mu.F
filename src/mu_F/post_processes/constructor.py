@@ -228,7 +228,7 @@ class PostProcessLocalSipScheme(PostProcessBase):
         """
         self.relaxation_b_decisions = self.graph.graph['post_process_decision_indices']
         list_of_bounds = list(OmegaConf.to_container(self.cfg.case_study.KS_bounds).values())
-        list_of_bounds = [[v for v in value if 'None' not in v[0]] for value in list_of_bounds]
+        list_of_bounds = [[v for v in value if None not in v[0] and 'None' not in v[0]] for value in list_of_bounds]
         self.bounds_list = jnp.vstack(list_of_bounds[0] + list_of_bounds[1])
         self.relaxation_a_decisions = list(range(len(self.bounds_list)))
         for index in self.relaxation_b_decisions: self.relaxation_a_decisions.remove(index)

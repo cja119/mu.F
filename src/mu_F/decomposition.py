@@ -22,7 +22,7 @@ from mu_F.utils import *
 def _extended_bounds_are_set(cfg) -> bool:
     """
     True iff cfg.case_study.extendedDS_bounds declares usable bounds, so the
-    init phase can be skipped. False for None / "None" / all-None entries.
+    init phase can be skipped. False for None / all-None entries.
     """
     raw = cfg.case_study.get('extendedDS_bounds', None)
     if raw is None or raw == "None":

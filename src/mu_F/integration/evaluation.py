@@ -99,7 +99,7 @@ class RolloutEvaluator:
         logging.info(
             f"Rollout node {self.node} per-constraint feasible-frac={np.round(per_con_frac, 3).tolist()} "
             f"worst-margin={np.round(worst_margin, 3).tolist()}")
-        return outputs, n_cost, decision, feasible
+        return outputs, n_cost, decision, feasible, p_cons
 
     def get_uncertain_params(self, key=None, n_samples=None):
         """

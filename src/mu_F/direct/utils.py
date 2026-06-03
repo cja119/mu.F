@@ -274,14 +274,14 @@ def get_bounds(cfg):
         bound for node in cfg.case_study["KS_bounds"]["aux_args"] for bound in node
     ]
 
-    if any(["None" in b for b in design_bds]):
+    if any([(None in b or "None" in b) for b in design_bds]):
         des_lbs = []
         des_ubs = []
     else:
         des_lbs = [i[0] for i in design_bds]
         des_ubs = [i[1] for i in design_bds]
 
-    if any(["None" in b for b in aux_bds]):
+    if any([(None in b or "None" in b) for b in aux_bds]):
         aux_lbs = []
         aux_ubs = []
     else:

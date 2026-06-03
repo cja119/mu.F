@@ -260,7 +260,7 @@ class Initialisation(ABC):
         ks = self.cfg.case_study.KS_bounds
         bounds = self.bounds_to_dictionary(ks)
         n_design = sum(1 for unit in ks.design_args for b in unit
-                       if b[0] != 'None' and b[1] != 'None')
+                       if b[0] not in (None, 'None') and b[1] not in (None, 'None'))
         bounds = expand_bounds(bounds, float(self.cfg.samplers.get('design_expansion', 0.0)), n_design)
         return self.process_bounds(bounds)
     
@@ -305,13 +305,13 @@ class Initialisation(ABC):
         index = 0
         for j, unit_bounds in enumerate(bounds.design_args):
             for i, bound in enumerate(unit_bounds):
-                if bound[0] != 'None' and bound[1] != 'None':
+                if bound[0] not in (None, 'None') and bound[1] not in (None, 'None'):
                     bounds_[f'd{index}'] = {f'd{index}': [bound[0], bound[1]]}
                     index += 1
     
         for j, unit_bounds in enumerate(bounds.aux_args):
             for i, bound in enumerate(unit_bounds):
-                if bound[0] != 'None' and bound[1] != 'None':
+                if bound[0] not in (None, 'None') and bound[1] not in (None, 'None'):
                     # global auxiliary varibles
                     bounds_[f'd{index}'] = {f'd{index}': [bound[0], bound[1]]}
                     index += 1

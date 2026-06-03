@@ -68,7 +68,7 @@ def design_list_constructor(bounds_for_design):
 
     bounds = {}
     for i, bound in enumerate(bounds_for_design):
-        if bound[0] != 'None': bounds[f'd{i+1}'] = {f'd{i+1}': [bound[0], bound[1]]}
+        if bound[0] not in (None, 'None'): bounds[f'd{i+1}'] = {f'd{i+1}': [bound[0], bound[1]]}
 
     return bounds
 
@@ -101,7 +101,7 @@ def add_global_aux(bounds, G):
     aux_bounds = G.graph['aux_bounds']
     for j in range(len(aux_bounds)): # iterate over auxiliary args
         for n in aux_bounds[j]: # iterate over variables for each auxiliary arg
-            if n[0] != 'None':
+            if n[0] not in (None, 'None'):
                 bounds[f'd{n_index+1}'] = {f'd{n_index+1}': [n[0], n[1]]}
                 n_index +=1
     return bounds

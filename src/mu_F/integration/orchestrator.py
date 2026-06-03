@@ -152,6 +152,7 @@ class ApplyDecomposition:
         feasible = jnp.ones(n, dtype=bool)
         node_input = self._rollout_seed(nodes[0], n)
 
+        steps = []
         for node in nodes:
             model = SubproblemModel(node, cfg, self.graph, mode='rollout', max_devices=self.max_devices)
             if node_input is not None:
@@ -161,11 +162,12 @@ class ApplyDecomposition:
 
             state_in = ('root' if node_input is None
                         else np.round(np.asarray(node_input[0]).reshape(-1), 2).tolist())
-            outputs, n_cost, decision, node_feasible = model.rollout(
+            outputs, n_cost, decision, node_feasible, p_cons = model.rollout(
                 node_input, key=fold_in(key, int(node)), n_samples=n)
             logging.info(f"Rollout node {node} state-in(traj0)={state_in} "
                          f"decision(traj0)={np.round(np.asarray(decision[0]).reshape(-1), 2).tolist()}")
             self._record_rollout_action(node, decision)
+            steps.append(self._trajectory_step(node_input, decision, p_cons, n_cost, n))
 
             feasible = feasible & node_feasible
             if self.graph.out_degree(node) > 0:
@@ -175,6 +177,7 @@ class ApplyDecomposition:
             logging.info(f"Rollout through node {node}: mean cost-so-far {float(jnp.mean(cost)):.4g}, "
                          f"feasible paths {int(jnp.sum(feasible))}/{n}")
 
+        self._save_rollout_trajectories(steps)
         self._rollout_summary(cost, feasible, n)
         return self.graph
 
@@ -182,7 +185,7 @@ class ApplyDecomposition:
         """Seed the chain with the true initial state so the root node decides from
         root_node_inputs (not zeros); downstream nodes inherit it via edge_fn."""
         root_in = self.cfg.model.root_node_inputs[first_node]
-        if isinstance(root_in, str) and root_in == 'None':
+        if root_in in (None, 'None'):
             return None
         rs = jnp.asarray(root_in, dtype=jnp.float64).reshape(1, 1, -1)
         return jnp.broadcast_to(rs, (n, 1, rs.shape[-1]))
@@ -195,6 +198,28 @@ class ApplyDecomposition:
         self.graph.nodes[node]["rollout_action_columns"] = cols
         self.graph.nodes[node]["rollout_action_named"] = {c: float(v) for c, v in zip(cols, vec)}
 
+    def _trajectory_step(self, node_input, decision, p_cons, n_cost, n):
+        """Per-node, per-trajectory (state, decision, constraints, cost) for the rollout plot."""
+        state = (np.zeros((n, int(self.cfg.case_study.sizes.F_SIZE))) if node_input is None
+                 else np.asarray(node_input))
+        return {'state': state, 'decision': np.asarray(decision),
+                'constraint': np.asarray(p_cons[:, 0, :]), 'cost': np.asarray(n_cost).reshape(-1)}
+
+    def _save_rollout_trajectories(self, steps):
+        """Stack the per-node steps into (N, n_nodes, .) tensors and save for the trajectory plot."""
+        for key in ('state', 'decision', 'constraint'):
+            if len({step[key].shape[1] for step in steps}) > 1:
+                logging.info("Rollout trajectories not saved: per-node variable dimensions differ.")
+                return
+        np.savez(
+            f'rollout_trajectories_iterate_{self.iterate}.npz',
+            states=np.stack([step['state'] for step in steps], axis=1),            # (N, n_nodes, F_SIZE)
+            decisions=np.stack([step['decision'] for step in steps], axis=1),      # (N, n_nodes, n_design)
+            constraints=np.stack([step['constraint'] for step in steps], axis=1),  # (N, n_nodes, n_g)
+            costs=np.stack([step['cost'] for step in steps], axis=1),              # (N, n_nodes)
+        )
+        logging.info("Saved %d rollout trajectories over %d nodes.", steps[0]['cost'].shape[0], len(steps))
+
     def _rollout_summary(self, cost, feasible, n):
         """Save the recovered policy and log the Monte-Carlo cost / feasibility."""
         cfg, graph = self.cfg, self.graph
@@ -206,6 +231,7 @@ class ApplyDecomposition:
 
         costs = np.asarray(cost).reshape(-1)
         feas = np.asarray(feasible).reshape(-1)
+        logging.info("Average cost-to-go (rollout, root to terminal): %.4g", float(costs.mean()))
         logging.info(
             "Rollout MC summary (N=%d): realised cost mean=%.4g std=%.4g "
             "[p10=%.4g median=%.4g p90=%.4g]; feasible paths=%d/%d (%.1f%%)",

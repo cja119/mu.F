@@ -14,9 +14,10 @@ os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count={}".format(
     multiprocessing.cpu_count()
 )
 
+import copy
 import logging
 import hydra
-from omegaconf import DictConfig
+from omegaconf import DictConfig, ListConfig
 import networkx as nx
 
 
@@ -69,51 +70,107 @@ def _select_solver_block(cfg: DictConfig) -> DictConfig:
     return cfg
 
 
+def _as_methods(method):
+    """
+    Normalise the configured method into a list so a single solve and a
+    chained multi-method solve share one driver loop.
+    """
+    if isinstance(method, (list, ListConfig)):
+        return [str(m) for m in method]
+    return [str(method)]
+
+
+def _prepare_cfg(pristine, method):
+    """
+    Copy the pristine config, fix the scalar method, and promote that
+    method's solver block for the downstream consumers.
+    """
+    cfg = copy.deepcopy(pristine)
+    cfg.method = method
+    return _select_solver_block(cfg)
+
+
+def _log_fn_evals(G):
+    """Log the per-node function-evaluation tally after a solve."""
+    for node in G.nodes():
+        logging.info(f"Function evaluations for node {node}: {G.nodes[node]['fn_evals']}")
+
+
+def _dispatch(cfg, G, max_devices):
+    """
+    Run the single solver named by cfg.method on the prepared graph and
+    return the solved graph.
+    """
+    from mu_F.direct.constructor import apply_direct_method
+    from mu_F.decomposition import Decomposition, decomposition_constraint_tuner
+    from mu_F.utils import save_graph
+
+    if cfg.method == 'decomposition':
+        precedence_order = list(nx.topological_sort(G))
+        return Decomposition(cfg, G, precedence_order, cfg.case_study.mode, max_devices).run()
+
+    if cfg.method in ('direct', 'single_shooting', 'multiple_shooting'):
+        outs = apply_direct_method(cfg, G, method=cfg.method)
+        logging.info(f"Direct method {cfg.method} completed with outputs: {outs}")
+        save_graph(G.copy(), f'{cfg.method}_complete')
+        return G
+
+    if cfg.method == 'decomposition_constraint_tuner':
+        decomposition_constraint_tuner(cfg, G, max_devices)
+        return G
+
+    raise ValueError(f"Method not recognised: {cfg.method!r}")
+
+
+def _run_method(pristine, method, max_devices):
+    """
+    Build a fresh graph from the pristine config and solve it with one
+    method; returns the (config, solved graph) pair.
+    """
+    from mu_F.cs_assembly import case_study_constructor, make_markov
+    from mu_F.utils import save_graph
+
+    cfg = _prepare_cfg(pristine, method)
+    G = case_study_constructor(cfg)
+    cfg = make_markov(cfg)
+    save_graph(G.copy(), f'initial_{method}')
+
+    G = _dispatch(cfg, G, max_devices)
+    _log_fn_evals(G)
+    return cfg, G
+
+
+def _plot_trajectories(solved):
+    """
+    Re-simulate the saved policies and plot the rollout (and monolithic)
+    node-wise trajectories; a no-op when no policy was written.
+    """
+    from mu_F.visualisation.rollout_trajectory import plot_rollout_trajectory
+    cfg, G = solved[0]
+    plot_rollout_trajectory(cfg, G)
+
+
 @hydra.main(config_path="config", config_name="integrator")
 def main(cfg: DictConfig) -> None:
     import multiprocessing
 
     total_devices = multiprocessing.cpu_count()
     cfg.max_devices = min(cfg.max_devices, total_devices)
-    
 
     _set_log(cfg.log_level)
-    cfg = _select_solver_block(cfg)
+    methods = _as_methods(cfg.method)
+    pristine = copy.deepcopy(cfg)
     max_devices = _set_jax(cfg.max_devices)
 
-    from mu_F.direct.constructor import apply_direct_method
-    from mu_F.decomposition import Decomposition, decomposition_constraint_tuner
-    from mu_F.constraints.constructor import ConstraintEvaluator
-    from mu_F.cs_assembly import case_study_constructor, make_markov
-    from mu_F.utils import save_graph
-    
+    solved = []
+    for method in methods:
+        try:
+            solved.append(_run_method(pristine, method, max_devices))
+        except Exception:
+            logging.exception(f"Method {method!r} failed; continuing with the remaining methods.")
 
-    # Construct the case study graph.
-    G = case_study_constructor(cfg)
-    cfg = make_markov(cfg)
-
-    save_graph(G.copy(), "initial")
-
-    # Dispatch to the solver method named in the config.
-    if cfg.method == 'decomposition':
-        mode = cfg.case_study.mode
-        precedence_order = list(nx.topological_sort(G))
-        G = Decomposition(cfg, G, precedence_order, mode, max_devices).run()
-    elif cfg.method in ['direct', 'single_shooting', 'multiple_shooting']:
-        outs = apply_direct_method(cfg, G, method=cfg.method)
-        logging.info(f"Direct method {cfg.method} completed with outputs: {outs}")
-        save_graph(G.copy(), f'{cfg.method}_complete')
-    elif cfg.method == 'decomposition_constraint_tuner':
-        decomposition_constraint_tuner(cfg, G, max_devices)
-
-    else:
-        raise ValueError("Method not recognised")
-
-    # Log the function evaluations for each node in the graph.
-    for node in G.nodes():
-        logging.info(f"Function evaluations for node {node}: {G.nodes[node]['fn_evals']}")
-
-    return G
+    if solved:
+        _plot_trajectories(solved)
 
 
 if __name__ == "__main__":

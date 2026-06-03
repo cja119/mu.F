@@ -186,9 +186,9 @@ class BackwardEvaluator(BaseEvaluator):
         fix_ind = np.delete(total_ind, dec_ind).astype(int)
 
         lb = jnp.hstack([jnp.array(b[0]).reshape(-1)
-                         for b in self.graph.graph['bounds'] if b[0] != 'None'])
+                         for b in self.graph.graph['bounds'] if b[0] not in (None, 'None')])
         ub = jnp.hstack([jnp.array(b[1]).reshape(-1)
-                         for b in self.graph.graph['bounds'] if b[1] != 'None'])
+                         for b in self.graph.graph['bounds'] if b[1] not in (None, 'None')])
         lb_red = jnp.delete(lb, fix_ind)
         ub_red = jnp.delete(ub, fix_ind)
         bounds = [lb_red, ub_red]
