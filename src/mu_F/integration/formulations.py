@@ -13,6 +13,7 @@ from omegaconf import OmegaConf
 from mu_F.constraints.constructor import ConstraintEvaluator
 from mu_F.utils import ApplyFeasibility
 
+from mu_F._types import typecheck, ConstraintScen, ProbScen
 from mu_F.integration.context import EvalContext, TrainingStore
 
 
@@ -51,7 +52,8 @@ def _p_target(cfg, node):
     return max(float(val), 1e-8)
 
 
-def _replicate_over_scenarios(g, n_theta):
+@typecheck
+def _replicate_over_scenarios(g, n_theta) -> ConstraintScen:
     """
     Replicate a theta-invariant coupling constraint across the scenario axis.
     Markov: a feasible predecessor producing this input is the same in every
@@ -160,7 +162,7 @@ class ProbabilisticFormulation(Formulation):
             ctx.downstream = p_down
 
         # P_feas is now exact; the CTG is solved only for the reliable (feasible-passing) designs.
-        ctx.p_feas = jnp.sum(w[None, :] * own * ctx.downstream, axis=-1)                 # (n_d,)
+        ctx.p_feas = self._p_feas(w, own, ctx.downstream)                               # (n_d,)
         ctx.keep = jnp.where(ctx.p_feas >= self.target)[0]                               # feasible-passing
         ctx.ctg = (bellman_target(ctx, ctx.keep, self.ctg_value, self.weights, self.gamma, self.node)
                    if (ctx.keep.size > 0 and ctx.node_cost is not None) else None)
@@ -177,6 +179,14 @@ class ProbabilisticFormulation(Formulation):
                 store.add('ctg', ctx.d[ctx.keep], ctx.outputs[ctx.keep],
                           np.asarray(ctx.ctg).reshape(-1, 1))
         return ctx
+
+    # ---- Private Methods ----
+
+    @staticmethod
+    @typecheck
+    def _p_feas(w, own: ProbScen, downstream: ProbScen):
+        """θ-weighted product of own and successor feasibility -> P_feas per design."""
+        return jnp.sum(w[None, :] * own * downstream, axis=-1)
 
 
 class DeterministicFormulation(Formulation):

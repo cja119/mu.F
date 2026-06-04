@@ -4,6 +4,7 @@ from abc import ABC
 import numpy as np
 import logging
 
+from mu_F._types import typecheck, DecisionBatch
 from mu_F.integration.evaluation import SubproblemEvaluator
 from mu_F.integration.utils import _sqp_evaluators_for_node
 
@@ -27,7 +28,8 @@ class SubproblemModel(ABC):
         self.max_devices = max_devices
         self.evaluator = SubproblemEvaluator(cfg, G, unit_index, mode)
 
-    def s(self, d, p):
+    @typecheck
+    def s(self, d: DecisionBatch, p):
         """
         Native DEUS callback: concatenated per-design constraints, with a
         per-call SQP feasibility / convergence log.
@@ -61,7 +63,8 @@ class SubproblemModel(ABC):
         """
         return self.s(d, p)
 
-    def get_probability(self, d, p):
+    @typecheck
+    def get_probability(self, d: DecisionBatch, p):
         """
         EFP (probabilistic) phase callback, delegated to the evaluator.
         """
@@ -69,7 +72,8 @@ class SubproblemModel(ABC):
         self.function_evaluations += len(out)
         return out
 
-    def get_score_constraint(self, d, p):
+    @typecheck
+    def get_score_constraint(self, d: DecisionBatch, p):
         """
         Score (deterministic) phase callback, delegated to the evaluator.
         """

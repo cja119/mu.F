@@ -1,7 +1,9 @@
 """Shared jaxtyping array-shape vocabulary for self-checking annotations across muF."""
 
 import os
+from typing import Union
 
+import numpy as np
 from jaxtyping import Array, Bool, Float, Int
 
 
@@ -40,7 +42,18 @@ else:
 
 
 # ---------------------------------------------------------------------------
-# Per-element (one sample)
+# Host/device boundary helper
+# ---------------------------------------------------------------------------
+def _host(shape: str):
+    """
+    A boundary array that may be host (numpy) or device (jax): the batched and
+    scenario seam types cross between the samplers (numpy) and the jax core.
+    """
+    return Union[Float[Array, shape], Float[np.ndarray, shape]]
+
+
+# ---------------------------------------------------------------------------
+# Per-element (one sample) — strict jax; these live inside the vmap
 # ---------------------------------------------------------------------------
 State        = Float[Array, "F"]
 Design       = Float[Array, "U"]
@@ -53,21 +66,24 @@ DDParams     = Float[Array, "P"]
 
 
 # ---------------------------------------------------------------------------
-# Batched (N samples)
+# Batched (N samples) — host or device at the sampling/jax seam
 # ---------------------------------------------------------------------------
-DesignBatch      = Float[Array, "N U"]
-InputBatch       = Float[Array, "N I"]
-StateBatch       = Float[Array, "N F"]
-ConstraintBatch  = Float[Array, "N G"]
-UncertainBatch   = Float[Array, "N Z"]
-AuxBatch         = Float[Array, "N A"]
+DecisionBatch    = _host("N D")        # full per-node decision: design + input + aux
+DesignBatch      = _host("N U")
+InputBatch       = _host("N I")
+StateBatch       = _host("N F")
+ConstraintBatch  = _host("N G")
+UncertainBatch   = _host("N Z")
+AuxBatch         = _host("N A")
 
 
 # ---------------------------------------------------------------------------
 # Batched with scenario axis (N samples x S scenarios)
 # ---------------------------------------------------------------------------
-StateScen        = Float[Array, "N S F"]
-ConstraintScen   = Float[Array, "N S G"]
-UncertainScen    = Float[Array, "S Z"]
-OutputScen       = Float[Array, "N S O"]
-OutputDiag       = Float[Array, "N 1 O"]
+StateScen        = _host("N S F")
+ConstraintScen   = _host("N S G")
+UncertainScen    = _host("S Z")
+OutputScen       = _host("N S O")
+OutputDiag       = _host("N 1 O")
+ProbScen         = _host("N S")
+CostScen         = _host("N S 1")

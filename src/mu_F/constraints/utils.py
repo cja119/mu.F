@@ -159,6 +159,73 @@ def mask_surrogate(callable_: Callable, ndim,
     )
 
 
+# ---------------------------------------------------------------------------
+# Forward aux masking — match coupling inputs at the output, pin shared aux
+# ---------------------------------------------------------------------------
+
+def mask_aux(callable_: Callable, ndim,
+             aux_ind, int_ind=(),
+             n_heads: int = 0,
+             aggregator: str = None,
+             n_g: int = None) -> Callable:
+    """
+    Forward masker built per predecessor by ForwardEvaluator: the coupling
+    inputs are matched at the surrogate output, the shared aux is pinned at its
+    input slots. Leaves the backward mask_surrogate path untouched.
+    """
+    if aggregator is None:
+        aggregator = 'scalar' if int(n_heads) == 0 else 'onehot_sum'
+    return _cached_masked_aux(
+        callable_,
+        int(ndim),
+        tuple(int(a) for a in aux_ind),
+        tuple(int(i) for i in int_ind),
+        int(n_heads),
+        str(aggregator),
+        int(n_g),
+    )
+
+
+@lru_cache(maxsize=None)
+def _cached_masked_aux(callable_, ndim, aux_ind_tuple, int_ind_tuple,
+                       n_heads, aggregator, n_g):
+    """
+    Cached factory for the forward masker; aux is pinned from its own block of
+    the parametric tail, so it never collides with the match target.
+    """
+    aux_ind = np.array(aux_ind_tuple, dtype=int)
+    int_ind = np.array(int_ind_tuple, dtype=int)
+    n_aux, n_int = int(aux_ind.size), int(int_ind.size)
+
+    # Free slots: design + pred's own inputs (neither pinned nor tail-valued).
+    opt_ind = np.delete(np.arange(ndim), np.concatenate([aux_ind, int_ind]).astype(int))
+
+    @jit
+    def masked_aux(x_red, p_aug):
+        # Tail layout: [ target (n_g) | aux (n_aux) | integers (n_int) | heads (n_heads) ].
+        p_aug = jnp.atleast_2d(jnp.asarray(p_aug))
+        assert p_aug.shape[-1] == n_g + n_aux + n_int + n_heads, "forward tail width mismatch"
+        a, b = n_g, n_g + n_aux
+        target = p_aug[0, :a]
+
+        x_full = jnp.zeros(ndim).at[opt_ind].set(x_red.squeeze())
+        if n_aux: x_full = x_full.at[aux_ind].set(p_aug[0, a:b])              # pin shared aux
+        if n_int: x_full = x_full.at[int_ind].set(p_aug[0, b:b + n_int])      # integers from tail
+
+        out = jnp.asarray(callable_(x_full.reshape(1, -1))).reshape(-1)
+
+        if aggregator == 'scalar':
+            return out.reshape(())
+        if aggregator == 'vector_diff':
+            return out - target                                              # match inputs at output
+        if aggregator == 'onehot_sum':
+            heads = p_aug[0, b + n_int:b + n_int + n_heads]
+            return jnp.sum(heads * out)
+        raise ValueError(f"Unknown aggregator: {aggregator!r}")
+
+    return masked_aux
+
+
 def construct_input(
         x: jnp.ndarray,
         y: jnp.ndarray,

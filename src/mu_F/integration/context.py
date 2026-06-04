@@ -8,6 +8,8 @@ from typing import Optional
 import numpy as np
 import jax.numpy as jnp
 
+from mu_F._types import typecheck, OutputScen
+
 
 @dataclass
 class EvalContext:
@@ -52,7 +54,8 @@ class TrainingStore:
     def __init__(self):
         self._data: dict = {}
 
-    def add(self, key: str, designs, outputs, values) -> None:
+    @typecheck
+    def add(self, key: str, designs, outputs: OutputScen, values) -> None:
         """Append a chunk of training data under the given target key."""
         chunk = self._data.setdefault(key, {'designs': [], 'outputs': [], 'values': []})
         chunk['designs'].append(np.asarray(designs))

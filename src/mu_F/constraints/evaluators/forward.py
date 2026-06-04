@@ -5,6 +5,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from mu_F._types import typecheck, InputBatch, AuxBatch
 from mu_F.constraints.evaluators.base import (
     BaseEvaluator,
     build_factory,
@@ -14,7 +15,7 @@ from mu_F.constraints.evaluators.base import (
     skip_if_masked,
 )
 from mu_F.constraints.utils import (
-    mask_surrogate,
+    mask_aux,
     pad_to_multiple,
     batch_mask,
     poison_padded,
@@ -100,39 +101,38 @@ class ForwardEvaluator(BaseEvaluator):
         fwd_probe = forward_surrogate(x_probe.reshape(1, -1)).reshape(-1)
         n_g = int(fwd_probe.size)
 
-        # Continuous-only bounds: drop integer slots, keep input + aux.
-        lb = jnp.delete(jnp.asarray(decision_bounds[0]), int_indices, axis=1).reshape(-1)
-        ub = jnp.delete(jnp.asarray(decision_bounds[1]), int_indices, axis=1).reshape(-1)
+        # Pred's shared aux occupies the trailing block of its decision vector.
+        aux_indices = np.arange(n_design + n_input, n_design + n_input + n_aux).astype(int)
+
+        # Free continuous bounds: drop integer slots and the pinned aux slots.
+        drop = np.concatenate([int_indices, aux_indices]).astype(int)
+        lb = jnp.delete(jnp.asarray(decision_bounds[0]), drop, axis=1).reshape(-1)
+        ub = jnp.delete(jnp.asarray(decision_bounds[1]), drop, axis=1).reshape(-1)
         bounds = [lb, ub]
         n_d_cont = int(lb.size)
-        n_params = n_g + n_int + n_heads
+        n_params = n_g + n_aux + n_int + n_heads
 
-        # Build masks — both callables share `p_aug`, both pass n_y=n_g.
-        empty_ind = np.empty((0,), dtype=int)
         backoff = jnp.sum(jnp.asarray(self.graph.nodes[pred]['constraint_backoff']))
 
-        masked_clf = mask_surrogate(
+        masked_clf = mask_aux(
             classifier,
             ndim=ndim,
-            fix_ind=empty_ind,
-            aux_ind=empty_ind,
+            aux_ind=aux_indices,
             int_ind=int_indices,
             n_heads=n_heads,
-            n_y=n_g,                                    # align with vector_diff layout
-            # aggregator inferred from n_heads
+            n_g=n_g,                                    # aggregator inferred from n_heads
         )
         def objective(x_red, p_aug):
             return masked_clf(x_red, p_aug) + backoff
 
-        masked_fwd = mask_surrogate(
+        masked_fwd = mask_aux(
             forward_surrogate,
             ndim=ndim,
-            fix_ind=empty_ind,
-            aux_ind=empty_ind,
+            aux_ind=aux_indices,
             int_ind=int_indices,
             n_heads=n_heads,
             aggregator='vector_diff',
-            n_y=n_g,
+            n_g=n_g,
         )
         def constraint(x_red, p_aug):
             return masked_fwd(x_red, p_aug)
@@ -181,21 +181,11 @@ class ForwardEvaluator(BaseEvaluator):
         def real():
             evals, viable, converged = [], [], []
             for pred in self._keys():
-                n_y = self.n_y[pred]
-                # Per-theta target: pred's input slice from inputs_s, plus aux.
-                pred_inputs = inputs_s[:, self.input_indices[pred]]   # (n_theta, len(idx))
-                target_raw  = jnp.concatenate([pred_inputs, aux_s], axis=-1)
-                n_raw = target_raw.shape[-1]
+                # Per-theta tail: inputs matched at the output, aux pinned at the input.
+                pred_inputs = inputs_s[:, self.input_indices[pred]]   # (n_theta, n_g)
+                ys = jnp.concatenate([pred_inputs, aux_s], axis=-1)   # (n_theta, n_g + n_aux)
 
-                # Pad / truncate to n_y per theta (Surrogate output dim may
-                # differ from input_slice + aux width).
-                if n_raw >= n_y:
-                    ys = target_raw[:, :n_y]
-                else:
-                    ys = jnp.zeros((target_raw.shape[0], n_y)).at[:, :n_raw].set(target_raw)
-
-                # Batched solver, one cached compiled program per spec.
-                per_theta = solve_integer_nlp_batched(self.specs[pred], ys)  # ys (n_theta, n_y)
+                per_theta = solve_integer_nlp_batched(self.specs[pred], ys)
                 evals.append(per_theta.objective.reshape(-1, 1))
                 viable.append(per_theta.success.reshape(-1, 1))
                 converged.append(per_theta.kkt_converged.reshape(-1, 1))
@@ -221,7 +211,8 @@ def _get_evaluator(cfg, graph, node) -> ForwardEvaluator:
     return evaluator
 
 
-def forward_constraint_evaluator(inputs, aux, cfg, graph, node):
+@typecheck
+def forward_constraint_evaluator(inputs: InputBatch, aux: AuxBatch, cfg, graph, node):
     """
     Top-level forward evaluator: fixed-width pmap with padding + mask.
     Returns per-(design, scenario, predecessor) evaluations, NaN on padded rows.
@@ -233,11 +224,8 @@ def forward_constraint_evaluator(inputs, aux, cfg, graph, node):
     W, pmap_fn = evaluator._build_dispatch_fn(evaluator._thread, in_axes=(0, 0, 0))
     n_real = inputs.shape[0]
 
-    aux_expanded = jnp.repeat(
-        jnp.expand_dims(aux, axis=1), inputs.shape[1], axis=1,
-    )
     padded_in,  _, _ = pad_to_multiple(inputs, W, axis=0)
-    padded_aux, _, _ = pad_to_multiple(aux_expanded, W, axis=0)
+    padded_aux, _, _ = pad_to_multiple(aux, W, axis=0)   # (N, A); one aux set per design
     total = padded_in.shape[0]
     mask = batch_mask(n_real, total)
 
