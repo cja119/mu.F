@@ -34,6 +34,9 @@ else:
 #   Z   uncertain parameters                        (sizes.Z_SIZE)
 #   L   stage cost / reward                         (sizes.L_SIZE)
 #   D   flat joint decision vector (monolithic)
+#   A   per-node auxiliary input
+#   P   decision-dependent parameters (unit_params_fn output)
+#   O   per-node forward-model output (integrated profile)
 
 
 # ---------------------------------------------------------------------------
@@ -45,6 +48,8 @@ Inputs       = Float[Array, "I"]
 Constraints  = Float[Array, "G"]
 Uncertain    = Float[Array, "Z"]
 Decision     = Float[Array, "D"]
+Aux          = Float[Array, "A"]
+DDParams     = Float[Array, "P"]
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +60,7 @@ InputBatch       = Float[Array, "N I"]
 StateBatch       = Float[Array, "N F"]
 ConstraintBatch  = Float[Array, "N G"]
 UncertainBatch   = Float[Array, "N Z"]
+AuxBatch         = Float[Array, "N A"]
 
 
 # ---------------------------------------------------------------------------
@@ -62,3 +68,6 @@ UncertainBatch   = Float[Array, "N Z"]
 # ---------------------------------------------------------------------------
 StateScen        = Float[Array, "N S F"]
 ConstraintScen   = Float[Array, "N S G"]
+UncertainScen    = Float[Array, "S Z"]
+OutputScen       = Float[Array, "N S O"]
+OutputDiag       = Float[Array, "N 1 O"]

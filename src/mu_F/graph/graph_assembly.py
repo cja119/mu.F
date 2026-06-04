@@ -131,12 +131,40 @@ class GraphConstructor(GraphConstructorBase):
                     self.G.edges[pred, node]["auxiliary_indices"] = []
             else:
                 raise ValueError(f"Invalid auxiliary variable structure: {mode!r}")
+
+        self._validate_aux_wiring()
         return
     
     def add_arg_to_edges(self, arg_name, arg_value):
         for (i, j) in self.G.edges:
             self.G.edges[i,j][arg_name] = arg_value
         return
+
+    # ---- Private Methods ----
+
+    def _validate_aux_wiring(self):
+        """
+        Fail loudly at build if an edge or node routes an aux id outside the
+        declared global aux set; guards the index map this class builds.
+        """
+        n_global = int(self.cfg.case_study.global_n_aux_args)
+        for (pred, node) in self.G.edges:
+            self._check_aux_ids(self.G.edges[pred, node]["aux_ids"], n_global, f"edge ({pred}, {node})")
+        for node in self.G.nodes:
+            self._check_aux_ids(self.G.nodes[node]["aux_ids"], n_global, f"node {node}")
+
+    @staticmethod
+    def _check_aux_ids(aux_ids, n_global, where):
+        """
+        Raise if any routed aux id falls outside the global slot range.
+        """
+        out_of_range = [a for a in aux_ids if not 0 <= a < n_global]
+        if out_of_range:
+            raise ValueError(
+                f"{where} routes aux ids {out_of_range} outside the global aux "
+                f"set [0, {n_global})."
+            )
+
 
 class MarkovGraphConstructor(GraphConstructor):
     """Constructor for the linear Markov-chain graph topology.

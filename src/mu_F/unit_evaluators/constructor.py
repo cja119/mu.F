@@ -12,6 +12,9 @@ import logging
 from mu_F.unit_evaluators.integrators import unit_dynamics
 from mu_F.unit_evaluators.steady_state import unit_steady_state
 from mu_F.unit_evaluators.utils import arrhenius_kinetics_fn as arrhenius, RegressorData
+from mu_F._types import (typecheck, DesignBatch, StateScen, AuxBatch,
+                         UncertainScen, StateBatch, UncertainBatch,
+                         OutputScen, OutputDiag)
 
 
 class BaseUnit(ABC):
@@ -59,14 +62,15 @@ class UnitEvaluation(BaseUnit):
         """
         return self.unit_cfg.decision_dependent_params(decisions, uncertain_params)
 
-    def evaluate(self, design_args, input_args, aux_args, uncertain_params=None):
+    @typecheck
+    def evaluate(self, design_args: DesignBatch, input_args: StateScen,
+                 aux_args: AuxBatch, uncertain_params: UncertainScen) -> OutputScen:
         """
-        Evaluate the unit over the design x scenario grid; every argument is
-        laid out (N, S, .) before the vmap, falling back to a row-by-row pass
-        to surface a failing design on error.
+        Evaluate the unit over the design x scenario grid; every arg is laid out
+        (N, S, .) before the vmap, with shared N / S axes enforced by the
+        annotations and a row-by-row fallback to surface a failing design.
         """
         n, s = design_args.shape[0], input_args.shape[1]
-        assert uncertain_params.shape[0] in (1, s), "scenario axis mismatch: inputs vs uncertain params"
 
         dd_args = self.get_decision_dependent_params(design_args, uncertain_params)               # (N, S, D)
         design_args = _spread(design_args, s)                                                     # (N, S, U)
@@ -78,7 +82,9 @@ class UnitEvaluation(BaseUnit):
         except Exception as outer_exc:
             return self._isolate_failure(design_args, input_args, aux_args, dd_args, unc, outer_exc)
 
-    def evaluate_diagonal(self, design_args, input_args, aux_args, uncertain_params):
+    @typecheck
+    def evaluate_diagonal(self, design_args: DesignBatch, input_args: StateBatch,
+                          aux_args: AuxBatch, uncertain_params: UncertainBatch) -> OutputDiag:
         """
         Diagonal evaluation: row i uses realisation i, scenario axis collapsed.
         uncertain_params is (N, param_dim); returns (N, 1, n_out).

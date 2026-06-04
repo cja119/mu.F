@@ -190,12 +190,16 @@ def get_successor_inputs(graph, node, outputs):
     """
     Extract each successor's inputs from this node's outputs via the edge map.
     """
+    lead = outputs.shape[:-1]  # real leading axes, captured before any promotion
+    if outputs.ndim < 2:
+        outputs = outputs.reshape(-1, 1)
+    if outputs.ndim < 3:
+        outputs = jnp.expand_dims(outputs, axis=0)  # the doubly-vmapped edge_fn needs (N, S, F)
+
     succ_inputs = {}
     for succ in graph.successors(node):
-        output_indices = graph.edges[node, succ]['edge_fn']
-        if outputs.ndim < 2: outputs = outputs.reshape(-1, 1)
-        if outputs.ndim < 3: outputs = jnp.expand_dims(outputs, axis=0)
-        succ_inputs[succ]= output_indices(outputs).reshape(outputs.shape[1],-1)
+        edge_fn = graph.edges[node, succ]['edge_fn']
+        succ_inputs[succ] = edge_fn(outputs).reshape(*lead, -1)  # restore real leading axes; flatten features
     return succ_inputs
 
 

@@ -7,6 +7,8 @@ from functools import partial
 import jax.numpy as jnp
 from jax import vmap, jit
 
+from mu_F._types import typecheck, OutputScen
+
 
 __all__ = [
     "ConstraintEvaluatorBase",
@@ -79,7 +81,8 @@ class ProcessConstraintEvaluator(ConstraintEvaluatorBase):
         """
         return self.evaluate(design, inputs, aux, dynamics_profile)
 
-    def evaluate(self, design_args, input_args, aux_args, dynamics_profile):
+    @typecheck
+    def evaluate(self, design_args, input_args, aux_args, dynamics_profile: OutputScen):
         """
         Apply each loaded constraint to the profile and stack the results.
         """

@@ -17,9 +17,13 @@ from diffrax import ODETerm, SaveAt, diffeqsolve, DirectAdjoint
 from diffrax import Tsit5
 
 from mu_F.unit_evaluators.ode import case_studies
+from mu_F._types import typecheck, Design, State, Aux, DDParams, Uncertain
 
 
-def unit_dynamics(design_params, u, aux, decision_dependent, uncertainty_params, cfg, node, graph=None):
+@typecheck
+def unit_dynamics(design_params: Design, u: State, aux: Aux,
+                  decision_dependent: DDParams, uncertainty_params: Uncertain,
+                  cfg, node, graph=None):
     """
     Integrate a system of ODEs whose initial conditions are the input args.
     Design, decision-dependent and uncertainty params are passed to the field;

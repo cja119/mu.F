@@ -51,17 +51,18 @@ def _p_target(cfg, node):
     return max(float(val), 1e-8)
 
 
-def _broadcast_theta(c, n_theta, repeat):
-    """Rank-3-ify a coupling constraint.  Input-side families (forward/root) are
-    θ-independent and repeat across the scenario axis; the per-θ backward does not."""
-    c = jnp.asarray(c)
-    if c.ndim == 1:
-        c = c.reshape(-1, 1)
-    if c.ndim == 2:
-        c = jnp.expand_dims(c, axis=1)
-    if repeat and c.shape[1] == 1 and n_theta > 1:
-        c = jnp.repeat(c, n_theta, axis=1)
-    return c
+def _replicate_over_scenarios(g, n_theta):
+    """
+    Replicate a theta-invariant coupling constraint across the scenario axis.
+    Markov: a feasible predecessor producing this input is the same in every
+    scenario, so the constraint is replicated, not recomputed per theta.
+    """
+    g = jnp.asarray(g)
+    if g.ndim == 1:
+        g = g[:, None]                                       # (N,)   -> (N, 1)
+    if g.ndim == 2:
+        g = g[:, None, :]                                    # (N, G) -> (N, 1, G)
+    return jnp.broadcast_to(g, (g.shape[0], n_theta, g.shape[-1]))
 
 
 def bellman_target(ctx, keep, ctg_value, weights, gamma, node):
@@ -209,11 +210,11 @@ class DeterministicFormulation(Formulation):
         n_theta = ctx.outputs.shape[1]
         cons = []
         if self.forward is not None and self.graph.in_degree(self.node) > 0:
-            cons.append(_broadcast_theta(self.forward.evaluate(ctx.inputs, ctx.aux), n_theta, True))
+            cons.append(_replicate_over_scenarios(self.forward.evaluate(ctx.inputs, ctx.aux), n_theta))
         if self.decentralised is not None and self.graph.in_degree(self.node) > 0:
-            cons.append(_broadcast_theta(self.decentralised.evaluate(ctx.design, ctx.aux), n_theta, True))
+            cons.append(_replicate_over_scenarios(self.decentralised.evaluate(ctx.design, ctx.aux), n_theta))
         if self.root is not None and self.graph.in_degree(self.node) == 0:
-            cons.append(_broadcast_theta(self.root.evaluate(ctx.design, ctx.aux), n_theta, True))
+            cons.append(_replicate_over_scenarios(self.root.evaluate(ctx.design, ctx.aux), n_theta))
         ctx.upstream = jnp.concatenate(cons, axis=-1) if cons else None
         return ctx
 
@@ -225,7 +226,7 @@ class DeterministicFormulation(Formulation):
             t = time.time()
             evals, _ = self.backward.evaluate(ctx.outputs, ctx.aux)
             logging.info(f"Backward constraint evaluation time for node {self.node}: {time.time() - t:.4f} seconds")
-            ctx.downstream = _broadcast_theta(evals, ctx.outputs.shape[1], False)
+            ctx.downstream = evals   # already (N, S, G) out of the backward pmap — no broadcast needed
         else:
             ctx.downstream = None
         # CTG over the feasible designs (shared bellman); gate = ApplyFeasibility.
