@@ -95,6 +95,7 @@ class RolloutEvaluator:
         logging.info(
             f"Rollout node {self.node}: feasible {int(jnp.sum(feasible))}/{feasible.shape[0]}, "
             f"mean node-cost {float(jnp.mean(n_cost)):.4g}, "
+            f"mean cost-to-go (optimiser objective) {float(jnp.mean(jnp.asarray(opt_ctg))):.4g}, "
             f"optimiser viable {int(jnp.sum(opt_status))}/{int(opt_status.shape[0])}")
         logging.info(
             f"Rollout node {self.node} per-constraint feasible-frac={np.round(per_con_frac, 3).tolist()} "

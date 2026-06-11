@@ -201,6 +201,27 @@ class SubproblemUnitWrapper(UnitEvaluation):
         return design_args, input_args, auxiliary_args
 
 
+def _aux_expanded_base(base, cfg, node, graph):
+    """
+    Wrap a unit base so a node carrying a strict aux subset has its compact block
+    scattered into the full global vector (defaults for gaps) before evaluation;
+    returns base untouched when the node already holds the full set.
+    """
+    n_global = int(cfg.case_study.global_n_aux_args)
+    ids = tuple(graph.nodes[node]['aux_ids'])
+    if n_global == 0 or len(ids) == 0 or ids == tuple(range(n_global)):
+        return base
+
+    seats = jnp.asarray(ids)
+    defaults = cfg.case_study.get('aux_default', None)
+    full = jnp.asarray(defaults) if defaults is not None else jnp.zeros(n_global)
+
+    def base_full_aux(design_args, input_args, aux, dd_args, unc):
+        return base(design_args, input_args, full.astype(aux.dtype).at[seats].set(aux), dd_args, unc)
+
+    return base_full_aux
+
+
 class UnitCfg:
     """Builds the (optionally vmapped) evaluators for a single node.
 
@@ -233,6 +254,7 @@ class UnitCfg:
                 base = jit(partial(unit_steady_state, cfg=cfg, node=node, graph=graph))
             else:
                 raise NotImplementedError(f'Unit corresponding to node {node} is a {graph.nodes[node]["unit_op"]} operation, which is not yet implemented.')
+            base = _aux_expanded_base(base, cfg, node, graph)   # node aux subset -> full global vector
             # grid (search): every arg laid out (N, S, .); inner sweep = scenarios, outer = designs
             self.evaluator = vmap(vmap(base, in_axes=0, out_axes=0), in_axes=0, out_axes=0)
             # diagonal (rollout): realisation paired one-per-trajectory along the batch

@@ -38,7 +38,7 @@ class MultipleShooting(SolveDirect):
 
         problem_data = self._prepare_model(self.G)
         solver = self._load_solver()
-        x0 = initial_guess(problem_data["var_bounds"])
+        x0 = self._initial_point(problem_data)
 
         if bool(getattr(self.cfg.solvers, "scale_variables", False)):
             s_obj, s_cons, s_bounds, s_x0, s_lhs, s_rhs, to_real = scale_problem(
@@ -68,6 +68,20 @@ class MultipleShooting(SolveDirect):
         return result
 
     # ---- Private Methods ----
+
+    def _initial_point(self, problem_data):
+        """
+        Pick the SQP start: midpoint, a single forward rollout, or an
+        L1-screened Sobol-rollout multi-start (n_sobol_screen > 1).
+        """
+        s = self.cfg.solvers
+        if str(getattr(s, "warm_start", "rollout")) != "rollout":
+            return initial_guess(problem_data["var_bounds"])
+        n_screen = int(getattr(s, "n_sobol_screen", 1))
+        if n_screen > 1:
+            return best_rollout_start(self.cfg, self.G, problem_data, n_screen,
+                                      float(getattr(s, "screen_penalty", 1.0e3)))
+        return forward_rollout_guess(self.cfg, self.G, problem_data["var_bounds"])
 
     def _prepare_model(self, graph):
         """

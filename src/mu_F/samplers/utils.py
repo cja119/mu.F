@@ -89,17 +89,16 @@ def extended_design_list_constructor(bounds_for_input, bounds_for_design):
     else:
         return bounds_for_design
 
-def add_global_aux(bounds, G):
+def add_global_aux(bounds, G, node=None):
     """
-    Append the graph's global auxiliary-argument bounds to bounds.
+    Append the global aux bounds a node carries (its aux_ids slots); the full
+    global set when node is None (the whole-network box).
     """
-    if len(bounds) > 0:
-        n_index = len(bounds)
-    else:
-        n_index = 0
+    n_index = len(bounds) if len(bounds) > 0 else 0
 
     aux_bounds = G.graph['aux_bounds']
-    for j in range(len(aux_bounds)): # iterate over auxiliary args
+    slots = G.nodes[node]['aux_ids'] if node is not None else range(len(aux_bounds))
+    for j in slots: # only the global aux slots this node carries
         for n in aux_bounds[j]: # iterate over variables for each auxiliary arg
             if n[0] not in (None, 'None'):
                 bounds[f'd{n_index+1}'] = {f'd{n_index+1}': [n[0], n[1]]}
@@ -118,7 +117,7 @@ def get_unit_bounds(G: nx.DiGraph, unit_index: int):
             bounds =  extended_design_list_constructor(bounds_for_input, design_var) # operates on data already in the graph
         else:
             bounds = design_var
-        bounds = add_global_aux(bounds, G)
+        bounds = add_global_aux(bounds, G, unit_index)
     else:
         bounds = { f'd{index+1}': {f'd{index+1}': [ G.nodes[unit_index]['extendedDS_bounds'][0][0,index],  G.nodes[unit_index]['extendedDS_bounds'][1][0,index]]} for index in range(len(G.nodes[unit_index]['extendedDS_bounds'][0].squeeze()))}
 

@@ -391,6 +391,89 @@ def initial_guess(bounds):
     return jnp.where(jnp.isfinite(midpoint), midpoint, jnp.zeros_like(midpoint))
 
 
+def forward_rollout_guess(cfg, graph, var_bounds, seed=None):
+    """
+    Physically-consistent warm start for multiple shooting: roll the chain
+    forward from the root under the `seed` controls (mid-box by default) so each
+    node's real output seeds the next node's shooting state, leaving the defects
+    near zero.  Only aux/design slots of `seed` are read; inputs come from the roll.
+    """
+    lb = jnp.asarray(var_bounds[0]).reshape(-1)
+    ub = jnp.asarray(var_bounds[1]).reshape(-1)
+    base = initial_guess(var_bounds) if seed is None else jnp.asarray(seed).reshape(-1)
+    aux = base[:graph.graph["n_aux_args"]].reshape(1, -1)
+
+    total_des = sum(graph.nodes[n]["n_design_args"] for n in graph.nodes)
+    des_curr, inp_curr = graph.graph["n_aux_args"], graph.graph["n_aux_args"] + total_des
+
+    x0, outputs = base, {}
+    for node in nx.topological_sort(graph):
+        n_des = graph.nodes[node]["n_design_args"]
+        des = _slice_1d(base, des_curr, n_des).reshape(1, -1)
+        des_curr += n_des
+        unc = jnp.reshape(jnp.asarray(graph.nodes[node]["parameters_best_estimate"]), (1, -1))
+
+        if graph.in_degree(node) == 0:
+            ins = _to_rank3(jnp.asarray(cfg.model.root_node_inputs[node]))
+        else:
+            n_inp = graph.nodes[node]["n_input_args"]
+            node_input = _rollout_node_input(graph, node, outputs)
+            x0 = x0.at[inp_curr:inp_curr + n_inp].set(node_input)
+            inp_curr += n_inp
+            ins = _to_rank3(node_input)
+
+        outputs[node] = graph.nodes[node]["forward_evaluator"].evaluate(des, ins, aux, unc)
+
+    return jnp.clip(jnp.where(jnp.isfinite(x0), x0, base), lb, ub)   # seed fallback per NaN slot
+
+
+def best_rollout_start(cfg, graph, problem_data, n_screen, penalty):
+    """
+    Sobol-sample the controls, roll each forward to a near-feasible start and keep
+    the lowest L1-merit one (objective + penalty * path-constraint violation), the
+    same scoring the decomposition's Sobol screen uses.
+    """
+    from mu_F.solvers.utilities import generate_initial_guess
+
+    var_bounds = problem_data["var_bounds"]
+    seeds = generate_initial_guess(int(n_screen), int(problem_data["num_vars"]), var_bounds, seed=42)
+    merit = _make_l1_merit(problem_data, penalty)
+
+    best_x, best_score = None, jnp.inf
+    for seed in seeds:
+        x0 = forward_rollout_guess(cfg, graph, var_bounds, seed)
+        score = float(merit(x0))
+        if score < best_score:
+            best_x, best_score = x0, score
+    logging.info(f"Sobol-rollout screen: {n_screen} starts, best L1 merit={best_score:.4g}")
+    return best_x
+
+
+def _make_l1_merit(problem_data, penalty):
+    """L1 merit obj + penalty * violation under the monolithic lhs <= g <= rhs bounds."""
+    obj = problem_data["objective_fn"]
+    cons = list(problem_data["constraints"])
+    lhs = jnp.asarray(problem_data["eq_lhs"]).reshape(-1)
+    rhs = jnp.asarray(problem_data["eq_rhs"]).reshape(-1)
+
+    def merit(x):
+        g = jnp.concatenate([jnp.ravel(c(x)) for c in cons])
+        viol = (jnp.maximum(0.0, lhs - g) + jnp.maximum(0.0, g - rhs)).sum()
+        return jnp.asarray(obj(x)).reshape(()) + float(penalty) * viol
+
+    return merit
+
+
+def _rollout_node_input(graph, node, outputs):
+    """Place each predecessor's edge-mapped output into this node's input block."""
+    node_input = jnp.zeros(graph.nodes[node]["n_input_args"])
+    for prec in graph.predecessors(node):
+        edge_out = jnp.ravel(graph.edges[prec, node]["edge_fn"](outputs[prec]))
+        idxs = jnp.asarray(graph.edges[prec, node]["input_indices"])
+        node_input = node_input.at[idxs].set(edge_out)
+    return node_input
+
+
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------

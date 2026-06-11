@@ -1,6 +1,7 @@
 """Constrained NLP solver backend wrapping septal's ParametricSQPFactory."""
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 from typing import Callable, Optional
 
@@ -12,6 +13,7 @@ from septal.jax.sqp import (
     ParametricSQPFactory,
     SQPConfig,
 )
+from septal.jax.sqp.solver import make_sqp_step, init_sqp_state, state_to_result
 
 DEFAULT_SQP_CONFIG = SQPConfig(
     max_iter=300,
@@ -204,7 +206,55 @@ def septal_monolithic_solver(objective, constraints, bounds, initial_guess,
         constraint_rhs=jnp.asarray(rhs).reshape(-1),
         n_constraints=n_g,
     )
-    factory = ParametricSQPFactory(
-        problem, config if config is not None else DEFAULT_SQP_CONFIG,
-    )
-    return factory.solve(x0, jnp.zeros(0))
+    cfg = config if config is not None else DEFAULT_SQP_CONFIG
+    return _run_logged_sqp(problem, x0, cfg)
+
+
+def _run_logged_sqp(problem, x0, cfg):
+    """
+    Drive septal's SQP step on the host so each iteration's KKT residuals are
+    logged and the loop exits the instant it converges (the scan solver always
+    runs every iteration). The compiled step is identical to factory.solve's.
+    """
+    step = jax.jit(make_sqp_step(problem, cfg))
+    state = init_sqp_state(x0, jnp.zeros(0), problem, cfg)
+    lb, ub = problem.bounds
+    logging.info(f"SQP start: n_d={problem.n_decision} n_g={problem.n_constraints} "
+                 f"max_iter={cfg.max_iter} tol_stat={cfg.tol_stationarity:.1e} "
+                 f"tol_feas={cfg.tol_feasibility:.1e}")
+
+    last, hits = 0, {}
+    for k in range(int(cfg.max_iter)):
+        state, _ = step(state, None)
+        last = k
+        idx, val = _worst_stationary_component(state, lb, ub)
+        hits[idx] = hits.get(idx, 0) + 1
+        logging.info(f"SQP iter {k:3d}: stationarity={float(state.stationarity):.3e} "
+                     f"feasibility={float(state.feasibility):.3e} "
+                     f"obj={float(state.f_val):.5f} penalty={float(state.penalty):.2e} "
+                     f"worst@{idx}={val:.2e}")
+        if bool(state.converged):
+            break
+
+    _log_stationarity_breakdown(state, lb, ub, hits)
+    status = "converged" if bool(state.converged) else "max_iter reached"
+    logging.info(f"SQP {status} at iter {last}: obj={float(state.f_val):.5f}")
+    return state_to_result(state, problem)
+
+
+def _worst_stationary_component(state, lb, ub):
+    """Index/value of the projected-gradient component that sets septal's stationarity."""
+    pg = jnp.abs(jnp.clip(state.x - state.grad_lag, lb, ub) - state.x)
+    idx = int(jnp.argmax(pg))
+    return idx, float(pg[idx])
+
+
+def _log_stationarity_breakdown(state, lb, ub, hits):
+    """Final top projected-gradient components and which indices dominated across iters."""
+    pg = jnp.abs(jnp.clip(state.x - state.grad_lag, lb, ub) - state.x)
+    order = [int(i) for i in jnp.argsort(pg)[::-1][:5]]
+    top = ", ".join(f"{i}:{float(pg[i]):.2e}" for i in order)
+    dom = sorted(hits.items(), key=lambda kv: kv[1], reverse=True)[:5]
+    dom_str = ", ".join(f"{i}({n})" for i, n in dom)
+    logging.info(f"SQP stationarity top-5 [final] {top}")
+    logging.info(f"SQP worst-index frequency [idx(count)] {dom_str}")

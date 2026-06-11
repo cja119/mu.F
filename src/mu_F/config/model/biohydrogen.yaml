@@ -37,13 +37,15 @@ c_fed: 50.0        # mmol/L
 n_max: 150.0       # mg/L culture nitrate ceiling
 o_max: 100.0       # % oxygen ceiling
 n_switch: 100.0    # mg/L H₂-production switch (Eq. 1g f(N))
+n_switch_beta: 1.0 # N-gate steepness; lower -> gentler switch
+o_gate_beta: 2.0   # O-gate steepness (aerobic/anaerobic); lower -> gentler, eases the monolithic trap
 
 integration:
-  scheme: Kvaerno5
-  step_size_controller: pid
+  scheme: tsit5              # fixed-step explicit: bounded gradient memory + accurate at dt0=0.05
+  step_size_controller: constant
   t0: 0
   tf: 24           # hours per node
-  dt0: Null
+  dt0: 0.05        # 480 steps/node; matches Kvaerno5 to 5 d.p. (0.1 is too coarse)
   max_steps: 5000
   vmap_chunk_size: 0
 

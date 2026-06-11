@@ -24,15 +24,18 @@ def del_data(graph, node):
 
 def update_aux_bounds(live_set, graph, node, cfg):
     """
-    Refresh the graph-level auxiliary bounds from the node's live set.
+    Refresh the graph-level aux bounds from the node's live set, updating only the
+    global slots this node carries so each slot tightens to its own range.
     """
-    # the aux set is the intersection, so this can run after each node
-    if cfg.case_study.n_aux_args[f'node_{node}'] != 0:
-        aux = live_set[:,-cfg.case_study.n_aux_args[f'node_{node}']:]
-        aux_bounds = calculate_box_outer_approximation(aux, cfg, ndim=2)
-        graph.graph['aux_bounds'] = [[[aux_bounds[0][0,i], aux_bounds[1][0,i]]] for i in range(aux_bounds[0].shape[1])]
-    else: pass
-
+    ids = graph.nodes[node]['aux_ids']
+    if len(ids) == 0:
+        return
+    aux = live_set[:, -len(ids):]                              # node's compact aux block
+    box = calculate_box_outer_approximation(aux, cfg, ndim=2)
+    bounds = [list(b) for b in graph.graph['aux_bounds']]      # plain, item-assignable copy
+    for k, j in enumerate(ids):                                # column k -> global slot j
+        bounds[j] = [[box[0][0, k], box[1][0, k]]]
+    graph.graph['aux_bounds'] = bounds
     return
 
 

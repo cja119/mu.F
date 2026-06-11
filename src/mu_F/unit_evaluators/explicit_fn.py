@@ -549,6 +549,7 @@ def _make_cstr_step(cfg: DictConfig):
     t_lower = float(cfg.model.t_lower)
     t_upper = float(cfg.model.t_upper)
     sp_ca = jnp.asarray(list(cfg.model.sp_ca))
+    penalty = str(cfg.model.get('tracking_penalty', 'smooth_log'))
 
     # Smoothness for the constraint-violation softmax (beta -> inf recovers the hard max).
     beta = _resolve_beta(cfg, 'softmax_beta', 50.0)
@@ -565,8 +566,9 @@ def _make_cstr_step(cfg: DictConfig):
         g_lower = jnp.atleast_1d((t_lower - x[1]) / t_upper)
         g_upper = jnp.atleast_1d((x[1] - t_upper) / t_upper)
 
-        dgdt = - _softplus(jnp.array([g_lower, g_upper]), beta)
-        rwd = _smooth_log(jnp.abs(jnp.take(sp_ca, node) - x[0]))
+        dgdt = -_softplus_centred(jnp.array([g_lower, g_upper]), beta)
+        e = jnp.take(sp_ca, node) - x[0]
+        rwd = (e * e) if penalty == 'quadratic' else _smooth_log(jnp.abs(e))
 
         return jnp.concatenate([jnp.ravel(dxdt), jnp.ravel(dgdt), jnp.ravel(rwd)], axis=0)
 
@@ -717,7 +719,7 @@ def _make_waste_water_step(cfg: DictConfig):
         g_ph_hi = (pH - PH_MAX) / PH_MAX
         g_ph_lo = (PH_MIN - pH) / PH_MIN
         g_zs2   = (S2 + EPS_Z_S2 - Z) / (_smooth_abs(Z) + _smooth_abs(S2))
-        dgdt = -_softplus(jnp.array([g_cod, g_s2, g_ph_hi, g_ph_lo, g_zs2]), beta)
+        dgdt = -_softplus_centred(jnp.array([g_cod, g_s2, g_ph_hi, g_ph_lo, g_zs2]), beta)
 
         # Stage cost
         q_m = k_6 * mu_2 * X2
@@ -758,6 +760,14 @@ def _smooth_min(x, y, beta):
 def _softplus(x, beta):
     """Softplus function with smoothness parameter beta.  beta -> inf recovers relu."""
     return jnp.logaddexp(x * beta, 0.0) / beta
+
+
+def _softplus_centred(x, beta):
+    """
+    Softplus shifted through the origin so a satisfied constraint contributes 0;
+    keeps an integrated path penalty feasible at the bound (PC=0 -> g=0).
+    """
+    return _softplus(x, beta) - jnp.log(2.0) / beta
 
 
 _MONO_METHODS = {'direct', 'single_shooting', 'multiple_shooting'}
@@ -906,6 +916,8 @@ def _make_biohydrogen_step(cfg: DictConfig):
     N_MAX    = float(cfg.model.n_max)
     O_MAX    = float(cfg.model.o_max)
     N_SWITCH = float(cfg.model.n_switch)
+    N_SWITCH_BETA = float(cfg.model.get('n_switch_beta', 1.0))
+    O_GATE_BETA = float(cfg.model.get('o_gate_beta', 2.0))
     TF       = float(cfg.model.integration.tf)
 
     @jit
@@ -924,10 +936,10 @@ def _make_biohydrogen_step(cfg: DictConfig):
         q_safe = jnp.maximum(q, 1e-8)
         t1 = mu_max * (1.0 - k_q / q_safe) * (C / (K_c + C + 1e-8))
         t2 = N / (K_N + N)
-        t3 = sigmoid(O * 2.0)                  # ~0 at O≈0, ~1 at O>0
+        t3 = sigmoid(O * O_GATE_BETA)          # ~0 at O≈0, ~1 at O>0
         # numerically-stable (1 - σ(2·O)) avoiding float64 cancellation
-        gate = sigmoid(-O * 2.0)
-        f_N = sigmoid((N_SWITCH - N) * 1.0)    # ~1 at N<switch, ~0 otherwise
+        gate = sigmoid(-O * O_GATE_BETA)
+        f_N = sigmoid((N_SWITCH - N) * N_SWITCH_BETA)    # ~1 at N<switch, ~0 otherwise
 
         # state derivatives; F_in is the decision directly (L/h)
         dX = X * t1 - mu_d * X ** 2
@@ -946,7 +958,7 @@ def _make_biohydrogen_step(cfg: DictConfig):
         g_F = (F - F_max) / F_max
         g_rate = (F_in - f_in_cap) / (F_max / TF)
 
-        dgdt = -_softplus(jnp.array([g_N, g_O, g_F, g_rate]), beta)
+        dgdt = -_softplus_centred(jnp.array([g_N, g_O, g_F, g_rate]), beta)
 
         # Cost
         rwd = -Y_HX * X * gate * f_N

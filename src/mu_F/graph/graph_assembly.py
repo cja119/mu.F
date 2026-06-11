@@ -8,15 +8,14 @@ from mu_F.utils import check_requires
 
 def _normalise_aux_spec(spec):
     """
-    Coerce an aux spec (int K or list of IDs) to a (count, ids_tuple) pair.
-    The list form lets different edges into the same successor route distinct
-    aux IDs to distinct slots; int K is the back-compat form for IDs (0,…,K-1).
+    Coerce an aux spec to a (count, ids_tuple) pair. A plain int K is sugar for
+    the full prefix (0,…,K-1); any list form (incl. an OmegaConf ListConfig) is
+    taken as the explicit global ids that entry references.
     """
-    if isinstance(spec, (list, tuple)):
-        ids = tuple(int(x) for x in spec)
-        return len(ids), ids
-    count = int(spec)
-    return count, tuple(range(count))
+    if isinstance(spec, int):
+        return spec, tuple(range(spec))
+    ids = tuple(int(x) for x in spec)
+    return len(ids), ids
 
 
 class GraphConstructorBase(ABC):
@@ -105,9 +104,10 @@ class GraphConstructor(GraphConstructorBase):
     def add_input_aux_indices(self):
         """
         Compute per-edge input and aux slot positions in each successor's
-        decision vector. In 'global' mode aux_ids index the shared aux slots;
-        in 'local' mode each edge's aux block is appended after its inputs.
+        decision vector. Aux lives in one shared global namespace; an edge
+        couples global ids, looked up against each endpoint's own aux list.
         """
+        self._validate_aux_wiring()                # fail clearly before the id lookups
         for node in self.G.nodes:
             n_d = 0
             for predec in self.G.predecessors(node):
@@ -118,21 +118,13 @@ class GraphConstructor(GraphConstructorBase):
 
             mode = self.cfg.model.constraint.auxiliary
             if mode == 'global':
-                for pred in self.G.predecessors(node):
-                    aux_ids = self.G.edges[pred, node]["aux_ids"]
-                    self.G.edges[pred, node]["auxiliary_indices"] = [n_d + a for a in aux_ids]
-            elif mode == 'local':
-                for pred in self.G.predecessors(node):
-                    aux_ids = self.G.edges[pred, node]["aux_ids"]
-                    self.G.edges[pred, node]["auxiliary_indices"] = [n_d + a for a in aux_ids]
-                    n_d += self.G.edges[pred, node]["n_auxiliary_args"]
+                self._wire_global_aux(node, n_d)
             elif mode in (None, 'None'):
                 for pred in self.G.predecessors(node):
                     self.G.edges[pred, node]["auxiliary_indices"] = []
             else:
                 raise ValueError(f"Invalid auxiliary variable structure: {mode!r}")
 
-        self._validate_aux_wiring()
         return
     
     def add_arg_to_edges(self, arg_name, arg_value):
@@ -142,14 +134,36 @@ class GraphConstructor(GraphConstructorBase):
 
     # ---- Private Methods ----
 
+    def _wire_global_aux(self, node, n_d):
+        """
+        Place each edge's coupled global aux ids by looking up their seat in the
+        producer's and consumer's aux lists, and store the handshake maps the
+        coupling evaluators copy through.
+        """
+        node_aux = self.G.nodes[node]["aux_ids"]
+        for pred in self.G.predecessors(node):
+            edge = self.G.edges[pred, node]
+            pred_aux = self.G.nodes[pred]["aux_ids"]
+            edge["auxiliary_indices"] = [n_d + node_aux.index(a) for a in edge["aux_ids"]]
+            edge["pred_aux_pos"] = [pred_aux.index(a) for a in edge["aux_ids"]]   # seat in producer's block
+            edge["node_aux_pos"] = [node_aux.index(a) for a in edge["aux_ids"]]   # seat in consumer's block
+
     def _validate_aux_wiring(self):
         """
-        Fail loudly at build if an edge or node routes an aux id outside the
-        declared global aux set; guards the index map this class builds.
+        Fail loudly at build if the aux wiring would corrupt the index map this
+        class builds: ids outside the global set, or an edge coupling aux that an
+        endpoint does not carry.
         """
         n_global = int(self.cfg.case_study.global_n_aux_args)
+        global_mode = self.cfg.model.constraint.auxiliary == 'global'
         for (pred, node) in self.G.edges:
-            self._check_aux_ids(self.G.edges[pred, node]["aux_ids"], n_global, f"edge ({pred}, {node})")
+            edge_ids = self.G.edges[pred, node]["aux_ids"]
+            self._check_aux_ids(edge_ids, n_global, f"edge ({pred}, {node})")
+            if global_mode:
+                self._check_endpoints_carry(
+                    edge_ids, self.G.nodes[pred]["aux_ids"], self.G.nodes[node]["aux_ids"],
+                    f"edge ({pred}, {node})",
+                )
         for node in self.G.nodes:
             self._check_aux_ids(self.G.nodes[node]["aux_ids"], n_global, f"node {node}")
 
@@ -163,6 +177,19 @@ class GraphConstructor(GraphConstructorBase):
             raise ValueError(
                 f"{where} routes aux ids {out_of_range} outside the global aux "
                 f"set [0, {n_global})."
+            )
+
+    @staticmethod
+    def _check_endpoints_carry(edge_ids, pred_ids, node_ids, where):
+        """
+        Raise if an edge couples aux that either endpoint lacks: in global mode the
+        index map n_d + a needs slot a carried by both producer and consumer.
+        """
+        missing = [a for a in edge_ids if a not in pred_ids or a not in node_ids]
+        if missing:
+            raise ValueError(
+                f"{where} couples aux ids {missing} not carried by both endpoints "
+                f"(producer {tuple(pred_ids)}, consumer {tuple(node_ids)})."
             )
 
 

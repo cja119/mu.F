@@ -13,7 +13,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from functools import partial
 import diffrax
-from diffrax import ODETerm, SaveAt, diffeqsolve, DirectAdjoint
+from diffrax import ODETerm, SaveAt, diffeqsolve, DirectAdjoint, RecursiveCheckpointAdjoint, ConstantStepSize
 from diffrax import Tsit5
 
 from mu_F.unit_evaluators.ode import case_studies
@@ -50,6 +50,10 @@ def unit_dynamics(design_params: Design, u: State, aux: Aux,
     # define step size controller for solver
     step_size_controller = dispatcher[cfg.model.integration.step_size_controller]
 
+    # adjoint method (config-driven): recursive checkpointing gives the smoother
+    # gradient an NLP wants; direct (default) is robust to adaptive stepping.
+    adjoint = adjoint_dispatcher[cfg.model.integration.get('adjoint', 'direct')]
+
     try:
         start = time.time()
         return diffeqsolve(
@@ -63,7 +67,7 @@ def unit_dynamics(design_params: Design, u: State, aux: Aux,
         max_steps=cfg.model.integration.max_steps,
         stepsize_controller=step_size_controller,
         saveat=saveat,
-        adjoint=DirectAdjoint(),
+        adjoint=adjoint,
     ).ys[
         :, :
     ][-1,:]  # t x n_components
@@ -80,7 +84,7 @@ def unit_dynamics(design_params: Design, u: State, aux: Aux,
             max_steps=cfg.model.integration.max_steps * 500,
             stepsize_controller=step_size_controller,
             saveat=saveat,
-            adjoint=DirectAdjoint(),
+            adjoint=adjoint,
             )
 
         except: # case study specific splodge
@@ -95,7 +99,7 @@ def unit_dynamics(design_params: Design, u: State, aux: Aux,
             max_steps=cfg.model.integration.max_steps,
             stepsize_controller=step_size_controller,
             saveat=saveat,
-            adjoint=DirectAdjoint(),
+            adjoint=adjoint,
         ).ys[
             :, :
         ][-1,:]  # t x n_components
@@ -109,5 +113,12 @@ dispatcher = {
     "dopri8": diffrax.Dopri8(),
     "Kvaerno5": diffrax.Kvaerno5(),
     "pid": diffrax.PIDController(rtol=1e-2, atol=1e-2),
+    "constant": ConstantStepSize(),          # fixed-dt: smooth integral for the NLP
+}
+
+# adjoint methods selectable via cfg.model.integration.adjoint
+adjoint_dispatcher = {
+    "direct": DirectAdjoint(),
+    "recursive": RecursiveCheckpointAdjoint(),
 }
 

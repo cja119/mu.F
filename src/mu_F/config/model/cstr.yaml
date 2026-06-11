@@ -23,19 +23,24 @@ sp_ca: [0.85, 0.85, 0.85, 0.85, 0.85, 0.85, 0.85, 0.85, 0.85, 0.85,
 t_lower: 315.0
 t_upper: 331.0
 
+# Setpoint-tracking penalty: 'smooth_log' keeps a steep gradient at the optimum for the
+# nested sampler; 'quadratic' is smooth there so the monolithic SQP can certify KKT.
+tracking_penalty: smooth_log
+
 # Disturbance bounds (for Z, currently not injected in simulator but kept for symmetry)
 disturbance_keys: ['Ti', 'Caf']
 disturbance_low: [325.0, 0.95]
 disturbance_high: [375.0, 1.05]
 
 integration:
-  scheme: Kvaerno5
-  step_size_controller: pid
+  scheme: tsit5                  # fixed-step explicit: smooth gradient for optimize-through-integration
+  step_size_controller: constant
   t0: 0
   tf: 0.56
-  dt0: Null
+  dt0: 0.005
   max_steps: 100000
   vmap_chunk_size: 0
+  adjoint: direct                # recursive checkpointing is incompatible with the exact-Hessian SQP
 
 # Smoothness for the constraint-violation softmax (higher -> closer to the hard max).
 softmax_beta:
