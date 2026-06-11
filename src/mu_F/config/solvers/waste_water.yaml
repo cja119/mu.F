@@ -8,8 +8,9 @@ decomposition:
   max_iter: 30
 
 monolithic:
-  feasibility_tol: 1.0e-2
-  optimality_tol:  1.0e-2
-  max_iter: 1000
-  use_exact_hessian: true
+  feasibility_tol: 1.0e-4
+  optimality_tol:  2.0e-2     # optimize-through-integration stationarity floor (1e-4 unreachable)
+  max_iter: 500
+  use_exact_hessian: false    # BFGS: exact Hessian OOMs through 72 chained diffrax solves
   scale_variables: true   # rescale decision vector + defect residuals to [0, 1] coords
+  warm_start: rollout         # physically-consistent forward-rollout start

@@ -17,7 +17,7 @@ os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count={}".format(
 import copy
 import logging
 import hydra
-from omegaconf import DictConfig, ListConfig
+from omegaconf import DictConfig, ListConfig, OmegaConf
 import networkx as nx
 
 """
@@ -79,14 +79,26 @@ def _as_methods(method):
     return [str(method)]
 
 
+def _select_integration_block(cfg: DictConfig) -> DictConfig:
+    """
+    Promote a method-specific integration override onto cfg.model.integration
+    when present (e.g. fixed-step for the monolithic, adaptive for sampling).
+    """
+    key = 'integration_monolithic' if cfg.method in _MONO_METHODS else 'integration_decomposition'
+    override = OmegaConf.select(cfg.model, key)
+    if override is not None:
+        cfg.model.integration = override
+    return cfg
+
+
 def _prepare_cfg(pristine, method):
     """
     Copy the pristine config, fix the scalar method, and promote that
-    method's solver block for the downstream consumers.
+    method's solver and integration blocks for the downstream consumers.
     """
     cfg = copy.deepcopy(pristine)
     cfg.method = method
-    return _select_solver_block(cfg)
+    return _select_integration_block(_select_solver_block(cfg))
 
 
 def _log_fn_evals(G):
