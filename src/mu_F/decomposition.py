@@ -213,7 +213,7 @@ def _run_a_single_evaluation(xi, cfg, G):
     Run one backward-forward decomposition for a candidate xi and return the
     negative joint log evidence for the Bayesian optimiser to minimise.
     """
-    max_devices = len(jax.devices('cpu'))
+    max_devices = len(jax.devices())
     logging.info(f"Running iteration {G.graph['iterate']} with xi: {xi}")
 
     G = _update_constraint_tuning_parameters(G, xi)

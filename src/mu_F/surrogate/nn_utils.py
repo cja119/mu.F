@@ -625,7 +625,7 @@ def _build_fused_train_pmap(model, model_type, num_devices, num_epochs, dispatch
             out = jnp.mean(jnp.square(valid_y - y_pred))
         return out.astype(loss_dtype)
 
-    devices = [d for i, d in enumerate(jax.devices('cpu')) if i < num_devices]
+    devices = [d for i, d in enumerate(jax.devices()) if i < num_devices]
 
     def fused_train(state, minibatch, valid_X, valid_y, init_es):
         """
@@ -753,7 +753,7 @@ def train(cfg, model, data, valid_data, model_type):
     )
 
     # create minibatches host-side, once per training run
-    num_devices = jax.local_device_count('cpu')
+    num_devices = jax.local_device_count()
     minibatches = create_minibatches(data, cfg.batch_size, num_devices)
     minibatches = minibatch_reshape(minibatches)
     actual_num_devices = int(minibatches['X'].shape[0])

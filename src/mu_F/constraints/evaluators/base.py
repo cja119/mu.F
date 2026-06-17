@@ -333,9 +333,9 @@ class BaseEvaluator(ABC):
 
         # Dispatch state cached once so _build_dispatch_fn is a dict lookup.
         from jax import devices
-        cpu_devs = list(devices('cpu'))
-        self._dispatch_W       = min(int(cfg.max_devices), len(cpu_devs))
-        self._dispatch_devices = cpu_devs[:self._dispatch_W]
+        avail_devs = list(devices())
+        self._dispatch_W       = min(int(cfg.max_devices), len(avail_devs))
+        self._dispatch_devices = avail_devs[:self._dispatch_W]
         self._dispatch_mode    = str(cfg.dispatch)
 
         # Build all compile-relevant per-key state before any evaluate call.

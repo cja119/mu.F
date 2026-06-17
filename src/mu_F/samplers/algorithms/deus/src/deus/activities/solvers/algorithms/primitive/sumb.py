@@ -53,15 +53,13 @@ class SamplingUniformlyMultipleBodies(PrimitiveAlgorithm):
         samples = np.empty((0, self._n_dims))
         n_samples = 0
         while n_samples < npts:
-            chosen_body_idx = int(np.random.choice(bodies_index,
-                                                   size=1,
-                                                   p=selection_pr))
+            chosen_body_idx = int(np.random.choice(bodies_index, p=selection_pr))
 
             sample = self.sample_one_body_by_index(chosen_body_idx)[0]
 
             ne = self.how_many_bodies_contain(sample)
 
-            u, a = float(np.random.uniform(0, 1, size=1)), 1.0/ne
+            u, a = float(np.random.uniform(0, 1)), 1.0/ne
             if u <= a:
                 samples = np.append(samples, [sample], axis=0)
                 n_samples += 1
