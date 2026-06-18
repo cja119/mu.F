@@ -9,6 +9,8 @@ decomposition:
   feasibility_tol: 1.0e-4
   optimality_tol:  1.0e-4
   max_iter: 30
+  cost_to_go:
+    max_iter: 60          # classifier-as-constraint NLP — observed ~48% KKT at 30 iters
 
 monolithic:
   feasibility_tol: 1.0e-4

@@ -121,6 +121,29 @@ def get_unit_bounds(G: nx.DiGraph, unit_index: int):
     else:
         bounds = { f'd{index+1}': {f'd{index+1}': [ G.nodes[unit_index]['extendedDS_bounds'][0][0,index],  G.nodes[unit_index]['extendedDS_bounds'][1][0,index]]} for index in range(len(G.nodes[unit_index]['extendedDS_bounds'][0].squeeze()))}
 
+    return _sanitise_bounds_for_deus(bounds, unit_index)
+
+
+def _sanitise_bounds_for_deus(bounds, unit_index, *, rel_eps=1.0e-6, abs_eps=1.0e-9):
+    """
+    Widen any collapsed (lb >= ub) interval by a tiny epsilon so DEUS's
+    strict `lb < ub` check_problem passes.  Logs each widening so the
+    underlying degeneracy isn't silently hidden.
+    """
+    for k, inner in bounds.items():
+        for kk, v in list(inner.items()):
+            lb, ub = float(v[0]), float(v[1])
+            if lb < ub:
+                continue
+            mid   = 0.5 * (lb + ub)
+            width = max(abs_eps, rel_eps * max(abs(lb), abs(ub), 1.0))
+            new_lb, new_ub = mid - 0.5 * width, mid + 0.5 * width
+            logging.warning(
+                "Bounds collapsed at unit %s, dim %s: [%g, %g] → [%g, %g] "
+                "(widened for DEUS).",
+                unit_index, kk, lb, ub, new_lb, new_ub,
+            )
+            inner[kk] = [new_lb, new_ub]
     return bounds
 
 
