@@ -8,7 +8,8 @@ from sklearn.base import BaseEstimator
 from omegaconf import DictConfig, OmegaConf
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import KFold, GridSearchCV
+from sklearn.model_selection import KFold, GridSearchCV, GroupKFold
+from sklearn.cluster import KMeans
 
 import jax.numpy as jnp
 from jax import jit
@@ -72,6 +73,17 @@ def train(cfg, dataset, num_folds, unit_index, iterate):
 
         return classifier, args, model_data
 
+
+def _spatial_groups(data_points, num_folds):
+    """Spatial cross-validation groups for the SVM grid search.
+    Clusters the support so GroupKFold holds out whole feature-space regions,
+    defeating the boundary-density optimism that lets high-gamma fits pass.
+    """
+    n_clusters = max(5 * num_folds, 20)
+    scaled = StandardScaler().fit_transform(data_points)
+    return KMeans(n_clusters=n_clusters, n_init=3, random_state=0).fit_predict(scaled)
+
+
 def compute_best_svm_classifier(
     data_points, labels, unit_index, cfg, iterate, num_folds
 ):
@@ -91,10 +103,14 @@ def compute_best_svm_classifier(
         }
     ]
     n_jobs = int(getattr(cfg, 'max_devices', 1))
-    model = GridSearchCV(clf, parameters, scoring="accuracy", cv=num_folds, n_jobs=n_jobs)
+    if data_points.ndim > 2:
+        data_points = data_points.squeeze()
+
+    # Hold out whole feature-space clusters; random k-fold on the boundary-dense live set can't penalise over-flexible fits.
+    groups = _spatial_groups(data_points, num_folds)
+    model = GridSearchCV(clf, parameters, scoring="balanced_accuracy", cv=GroupKFold(num_folds), n_jobs=n_jobs)
     try:
-        if data_points.ndim > 2: data_points = data_points.squeeze()
-        model.fit(data_points, labels.squeeze())
+        model.fit(data_points, labels.squeeze(), groups=groups)
     except:
         # single-class dataset (labels -1 feasible, +1 infeasible): caller falls back to a constant map
         ls = jnp.asarray(labels).squeeze()

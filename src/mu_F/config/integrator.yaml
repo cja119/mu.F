@@ -8,9 +8,9 @@ defaults:
   - reconstruction: hydrogen_export #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator # affine_study  #serial_batch_reactor #tablet_press # convex_estimator # serial_batch_reactor #convex_estimator # serial_batch_reactor #tablet_press #serial_batch_reactor
   - init: hydrogen_export #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator # affine_study  #serial_batch_reactor #tablet_press # convex_estimator # serial_batch_reactor #convex_estimator # serial_batch_reactor #tablet_press #serial_batch_reactor
 
-device: gpu        # cpu | gpu — JAX backend
+device: cpu        # cpu | gpu — JAX backend
 
-max_devices: 1
+max_devices: 12
 
 dispatch: vmap     # pmap | vmap | serial — how the per-shard parallelism
                    # runs.  pmap = multi-device; vmap = single-program,
