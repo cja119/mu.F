@@ -1,11 +1,16 @@
 # Septal SQP solver settings.
 
 decomposition:
-  n_starts: 4
-  n_sobol_screen: 256
+  n_starts: 2
+  n_sobol_screen: 32
   feasibility_tol: 1.0e-2
   optimality_tol:  1.0e-2
-  max_iter: 30
+  max_iter: 5
+
+  cost_to_go:
+    n_sobol_screen: 128
+    n_starts: 4
+    max_iter: 20
 
 monolithic:
   feasibility_tol: 1.0e-4
