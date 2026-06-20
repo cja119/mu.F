@@ -905,10 +905,23 @@ def _ann_forward_unstd_classifier(params, x, x_mean, x_std, model):
     if x.ndim < 2: x = x.reshape(1, -1)
     return _ann_mapp(model.apply(params, (x - x_mean) / x_std))
 
+def _ann_logit_margin(y):
+    """Pre-softmax margin logit_infeasible - logit_feasible; <= 0 means feasible.
+    Unsaturated counterpart to _ann_mapp, so a backoff can separate confidently-
+    wrong points from the deep-feasible interior the softmax score collapses."""
+    if y.ndim < 2: y = y.reshape(1, -1)
+    return (y[0, 1] - y[0, 0]).reshape(1)
+
+def _ann_forward_unstd_classifier_logit(params, x, x_mean, x_std, model):
+    """Forward a classifier on raw inputs, returning the logit margin."""
+    if x.ndim < 2: x = x.reshape(1, -1)
+    return _ann_logit_margin(model.apply(params, (x - x_mean) / x_std))
+
 _ann_forward_std_regressor_jit    = jit(_ann_forward_std_regressor,    static_argnames=('model',))
 _ann_forward_unstd_regressor_jit  = jit(_ann_forward_unstd_regressor,  static_argnames=('model',))
 _ann_forward_std_classifier_jit   = jit(_ann_forward_std_classifier,   static_argnames=('model',))
 _ann_forward_unstd_classifier_jit = jit(_ann_forward_unstd_classifier, static_argnames=('model',))
+_ann_forward_unstd_classifier_logit_jit = jit(_ann_forward_unstd_classifier_logit, static_argnames=('model',))
 
 
 def build_ann(cfg, model_data, model_class):
@@ -941,6 +954,13 @@ def build_ann(cfg, model_data, model_class):
                 params, x, x_mean, x_std, model=model,
             )
         return _predict_classifier
+
+    elif model_class == 'classifier_logit':
+        def _predict_classifier_logit(x):
+            return _ann_forward_unstd_classifier_logit_jit(
+                params, x, x_mean, x_std, model=model,
+            )
+        return _predict_classifier_logit
 
     else:
         raise NotImplementedError(f"Model class {model_class} not implemented")

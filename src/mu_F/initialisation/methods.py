@@ -308,7 +308,7 @@ class Initialisation(ABC):
                 if bound[0] not in (None, 'None') and bound[1] not in (None, 'None'):
                     bounds_[f'd{index}'] = {f'd{index}': [bound[0], bound[1]]}
                     index += 1
-    
+
         for j, unit_bounds in enumerate(bounds.aux_args):
             for i, bound in enumerate(unit_bounds):
                 if bound[0] not in (None, 'None') and bound[1] not in (None, 'None'):
@@ -316,7 +316,29 @@ class Initialisation(ABC):
                     bounds_[f'd{index}'] = {f'd{index}': [bound[0], bound[1]]}
                     index += 1
 
-            
+
         return bounds_
+
+
+# ---------------------------------------------------------------------------
+# Standalone driver
+# ---------------------------------------------------------------------------
+
+def run_initialisation(cfg, graph):
+    """
+    Run the forward pass on its own, outside the decomposition pipeline.
+    Called by the monolithic solver to populate the coupling bounds it needs
+    when no decomposition has been run beforehand.
+    """
+    from mu_F.samplers.space_filling import SobolSampler
+    from mu_F.samplers.appproximators import calculate_box_outer_approximation
+    from mu_F.unit_evaluators.constructor import NetworkSimulator
+    from mu_F.constraints.constructor import ConstraintEvaluator
+
+    sampler = SobolSampler() if cfg.init.sampler == 'sobol' else None
+    approximator = calculate_box_outer_approximation if cfg.samplers.ku_approximation == 'box' else None
+    return Initialisation(cfg, graph, network_simulator=NetworkSimulator,
+                          constraint_evaluator=ConstraintEvaluator,
+                          sampler=sampler, approximator=approximator).run()
 
 

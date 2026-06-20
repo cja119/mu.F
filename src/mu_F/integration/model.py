@@ -81,8 +81,8 @@ class SubproblemModel(ABC):
         self.function_evaluations += len(out)
         return out
 
-    def rollout(self, inputs, aux=None, key=None, n_samples=1):
+    def rollout(self, inputs, aux=None, key=None, n_samples=1, fixed_decision=None):
         """
         Monte-Carlo rollout entry point called by the orchestrator.
         """
-        return self.evaluator.rollout(inputs, aux, key, n_samples)
+        return self.evaluator.rollout(inputs, aux, key, n_samples, fixed_decision)

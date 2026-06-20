@@ -919,6 +919,7 @@ def _make_biohydrogen_step(cfg: DictConfig):
     N_SWITCH_BETA = float(cfg.model.get('n_switch_beta', 1.0))
     O_GATE_BETA = float(cfg.model.get('o_gate_beta', 2.0))
     TF       = float(cfg.model.integration.tf)
+    REWARD_SCALE = float(cfg.model.get('reward_scale', 1.0))
 
     @jit
     def _step(x: jnp.ndarray, u: jnp.ndarray, z: jnp.ndarray, aux: jnp.ndarray, node):
@@ -960,9 +961,9 @@ def _make_biohydrogen_step(cfg: DictConfig):
 
         dgdt = -_softplus_centred(jnp.array([g_N, g_O, g_F, g_rate]), beta)
 
-        # Cost
-        rwd = -Y_HX * X * gate * f_N
-        phi = -H / TF
+        # Cost — normalised by REWARD_SCALE to keep the monolithic objective O(1)
+        rwd = -Y_HX * X * gate * f_N / REWARD_SCALE
+        phi = -H / TF / REWARD_SCALE
 
         return jnp.concatenate([
             jnp.ravel(dxdt), jnp.ravel(dgdt),

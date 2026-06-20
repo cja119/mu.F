@@ -181,3 +181,4 @@ outputs/
 *.json
 /scripts
 MIGRATION.md
+**/*.log

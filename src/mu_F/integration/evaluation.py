@@ -67,10 +67,11 @@ class RolloutEvaluator:
         self.current = current                               # shared process + node cost
         self.rollout_costs = ConstraintEvaluator(cfg, graph, node, constraint_type='cost_rollout')
 
-    def rollout(self, inputs, aux=None, key=None, n_samples=1):
+    def rollout(self, inputs, aux=None, key=None, n_samples=1, fixed_decision=None):
         """
         One Markov step for N trajectories: decide weather-blind for each carried
-        state, then reveal N paired weathers and apply the control.
+        state, then reveal N paired weathers and apply the control. A
+        `fixed_decision` bypasses the recovery to apply an external policy.
         """
         N = int(n_samples)
         if inputs is None:
@@ -81,7 +82,11 @@ class RolloutEvaluator:
                    if aux_default else jnp.empty((inputs.shape[0], 0)))
 
         # Decide (weather-blind), then reveal + apply per-trajectory weather.
-        decision, opt_ctg, opt_status = self.rollout_costs.evaluate(inputs, aux)    # (N, n_design)
+        if fixed_decision is not None:
+            decision = jnp.asarray(fixed_decision, dtype=inputs.dtype).reshape(inputs.shape[0], -1)
+            opt_ctg = jnp.zeros((inputs.shape[0],)); opt_status = jnp.ones((inputs.shape[0],), dtype=bool)
+        else:
+            decision, opt_ctg, opt_status = self.rollout_costs.evaluate(inputs, aux)  # (N, n_design)
         d = jnp.concatenate([decision, inputs, aux], axis=-1)                       # (N, n_total)
         p = self.get_uncertain_params(key, n_samples=decision.shape[0])            # (N, param)
 
@@ -170,11 +175,11 @@ class SubproblemEvaluator:
             self.io_data = None         # forward-evaluation Surrogate I/O, when enabled
             self.rollout_evaluator = None
 
-    def rollout(self, inputs, aux=None, key=None, n_samples=1):
+    def rollout(self, inputs, aux=None, key=None, n_samples=1, fixed_decision=None):
         """
         Delegate to RolloutEvaluator; called by SubproblemModel in rollout mode.
         """
-        return self.rollout_evaluator.rollout(inputs, aux, key, n_samples)
+        return self.rollout_evaluator.rollout(inputs, aux, key, n_samples, fixed_decision)
 
     def evaluate(self, d, p) -> jnp.ndarray:
         """

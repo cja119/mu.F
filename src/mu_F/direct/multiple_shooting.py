@@ -105,14 +105,11 @@ class MultipleShooting(SolveDirect):
         des_curr = n_aux
         inp_curr = n_aux + total_des
 
-        # Per-state-dim scale normalising defect residuals; shared across edges (None disables scaling)
+        # Per-edge coupling widths normalising defect residuals (None disables scaling)
         scale_per_edge = None
         if bool(getattr(self.cfg.solvers, "scale_variables", False)):
-            non_root = next(n for n in graph.nodes if graph.in_degree(n) > 0)
-            n_inp_per = graph.nodes[non_root]["n_input_args"]
-            edge_scale = get_edge_input_scale(self.cfg, n_inp_per)
-            scale_per_edge = {(p, n): edge_scale
-                              for n in graph.nodes for p in graph.predecessors(n)}
+            graph = ensure_init_bounds(self.cfg, graph)
+            scale_per_edge = edge_defect_scales(graph)
 
         for node in nx.topological_sort(graph):
 

@@ -314,14 +314,16 @@ class CurrentCostEvaluator(BaseEvaluator):
         return constraint, 0
 
     def _classifier_constraint(self, key, ndim, input_indices, aux_indices, int_indices):
-        """Node feasibility classifier (multi-head aware)."""
+        """Node feasibility classifier (multi-head aware), tightened by the
+        a-posteriori backoff so the recovery lands inside the feasible region."""
         n_heads, classifier = _resolve_classifier(self.cfg, self.graph, key)
         masked = mask_surrogate(
             classifier, ndim=ndim, fix_ind=input_indices, aux_ind=aux_indices,
             int_ind=int_indices, n_heads=n_heads,
         )
+        backoff = jnp.sum(jnp.asarray(self.graph.nodes[key]['constraint_backoff']))
         def constraint(x_red, p_aug):
-            return jnp.atleast_1d(masked(x_red, p_aug))
+            return jnp.atleast_1d(masked(x_red, p_aug) + backoff)
         return constraint, n_heads
 
     def evaluate(self, inputs, aux):

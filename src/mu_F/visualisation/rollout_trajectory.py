@@ -73,9 +73,16 @@ def _captured_trajectories(path):
             'constraints': data['constraints'][idx], 'costs': data['costs'][idx][..., None]}
 
 
-def _simulated_trajectory(graph, cfg, x0, policy_path, n_design, n_nodes):
+def _parse_aux(path):
+    """Read the persisted aux block (aux_* columns) from a policy xlsx; () if absent."""
+    row = pd.read_excel(path, index_col=0).iloc[0]
+    aux_cols = [c for c in row.index if str(c).startswith('aux_')]
+    return np.asarray([float(row[c]) for c in aux_cols], dtype=float) if aux_cols else ()
+
+
+def _simulated_trajectory(graph, cfg, x0, policy_path, n_design, n_nodes, aux=()):
     """Forward-simulate one saved policy into the shared (1, n_nodes, .) layout."""
-    traj = _simulate_policy(graph, cfg, x0, _parse_policy(policy_path, n_design), n_nodes)
+    traj = _simulate_policy(graph, cfg, x0, _parse_policy(policy_path, n_design), n_nodes, aux)
     return {key: np.asarray(value)[None, ...] for key, value in traj.items()}
 
 
@@ -95,7 +102,8 @@ def _load_trajectories(cfg, graph, run_dir):
 
     monolithic_policy = _policy_path(run_dir, _POLICY_FILES['monolithic'])
     if monolithic_policy is not None:
-        trajs['monolithic'] = _simulated_trajectory(graph, cfg, x0, monolithic_policy, n_design, n_nodes)
+        trajs['monolithic'] = _simulated_trajectory(graph, cfg, x0, monolithic_policy, n_design, n_nodes,
+                                                    _parse_aux(monolithic_policy))
     return trajs
 
 
@@ -103,35 +111,33 @@ def _load_trajectories(cfg, graph, run_dir):
 # Forward re-simulation
 # ---------------------------------------------------------------------------
 
-def _simulate_node(graph, node, state, decision, sizes):
-    """Evaluate one node's forward model; returns (next_state, constraints, stage_cost)."""
-    f_size, g_size, l_size = sizes
-    design_args = jnp.asarray(decision, dtype=float).reshape(1, -1)           # (1, n_design)
-    input_args = jnp.asarray(state, dtype=float).reshape(1, 1, -1)            # (1, 1, F_SIZE)
-    aux_args = jnp.empty((1, 0))
-    unc = jnp.asarray(graph.nodes[node]['parameters_best_estimate']).reshape(1, -1)
+def _simulate_policy(graph, cfg, x0, per_node_decisions, n_nodes, aux=()):
+    """Apply a fixed policy through the same rollout chain the orchestrator uses —
+    forward model -> edge_fn coupling -> node_cost — so the trajectory matches the
+    real dynamics instead of a bespoke re-simulation."""
+    from mu_F.integration.model import SubproblemModel
 
-    flat = jnp.ravel(graph.nodes[node]['forward_evaluator'].evaluate(design_args, input_args, aux_args, unc))
-    next_state = np.asarray(flat[:f_size])                                    # F block
-    constraints = np.asarray(flat[f_size:f_size + g_size])                    # G block
-    stage_cost = float(flat[f_size + g_size]) if l_size > 0 else 0.0          # first L entry
-    return next_state, constraints, stage_cost
-
-
-def _simulate_policy(graph, cfg, x0, per_node_decisions, n_nodes):
-    """Roll one policy forward through every node and collect the node-wise trajectory."""
-    sizes = (int(cfg.case_study.sizes.F_SIZE),
-             int(cfg.case_study.sizes.G_SIZE),
-             int(cfg.case_study.sizes.L_SIZE))
-    state = np.asarray(x0, dtype=float)
+    aux_arr = jnp.asarray(aux, dtype=float).reshape(1, -1) if np.size(aux) else None
+    node_input = jnp.asarray(x0, dtype=float).reshape(1, 1, -1)
     decisions, states, constraints, costs = [], [], [], []
 
     for node in range(n_nodes):
-        states.append(state)
-        decisions.append(np.asarray(per_node_decisions[node], dtype=float))
-        state, g_vals, cost = _simulate_node(graph, node, state, per_node_decisions[node], sizes)
-        constraints.append(g_vals)
-        costs.append(cost)
+        model = SubproblemModel(node, cfg, graph, mode='rollout', max_devices=1)
+        if node_input.ndim < 3:
+            node_input = jnp.expand_dims(node_input, axis=0)
+        node_in = jnp.squeeze(node_input, axis=1)                             # (1, state)
+        decision = jnp.asarray(per_node_decisions[node], dtype=float).reshape(1, -1)
+        outputs, n_cost, decision, _, p_cons = model.rollout(
+            node_in, aux=aux_arr, n_samples=1, fixed_decision=decision)
+
+        states.append(np.asarray(node_in).reshape(-1))
+        decisions.append(np.asarray(decision).reshape(-1))
+        constraints.append(np.asarray(p_cons[0, 0, :]))
+        costs.append(float(np.asarray(n_cost).reshape(-1)[0]))
+
+        if graph.out_degree(node) > 0:
+            succ = list(graph.successors(node))[0]
+            node_input = graph.edges[node, succ]['edge_fn'](outputs)
 
     return {'decisions': np.array(decisions), 'states': np.array(states),
             'constraints': np.array(constraints), 'costs': np.array(costs).reshape(-1, 1)}

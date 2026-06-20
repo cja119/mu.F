@@ -3,8 +3,11 @@
 import logging
 
 import numpy as np
+import jax
+import jax.numpy as jnp
 
 from mu_F.surrogate.surrogate import Surrogate
+from mu_F.utils import TrainingDataset
 
 
 def _query_model(trained, cfg, selection, head):
@@ -54,17 +57,76 @@ def probability_map_construction(cfg, graph, node, iterate):
 def classifier_construction(cfg, graph, node, iterate):
     """Train the node's feasibility classifier and store it.
     Convention: g <= 0 ⇔ inside the feasible region."""
+    held_out = _hold_out_batch(cfg, graph, node)        # None unless the backoff is on
+    _train_node_classifier(cfg, graph, node, iterate)
+    if held_out is not None:
+        graph.nodes[node]['constraint_backoff'] = _calibrate_backoff(cfg, graph, node, held_out)
+        graph.nodes[node]['classifier_training'] = held_out['full']
+
+
+def _train_node_classifier(cfg, graph, node, iterate):
+    """Fit the feasibility classifier from the node's current training data and
+    store its callable + serialised form. Read by classifier_construction."""
     trained = Surrogate(graph, node, cfg,
                         ('classification', cfg.surrogate.classifier_selection, 'live_set_surrogate'),
                         iterate, data_str='classifier_training')
     trained.fit(node=node)
-    query_model, serialised = _query_model(trained, cfg, cfg.surrogate.classifier_selection, 'classifier')
+    query_model, serialised = _query_model(trained, cfg, cfg.surrogate.classifier_selection, _classifier_head(cfg))
 
     graph.nodes[node]["classifier"] = query_model
     graph.nodes[node]['classifier_x_scalar'] = trained.trainer.get_model_object('standardisation_metrics_input')
     graph.nodes[node]['classifier_serialised'] = serialised
-
     del trained
+
+
+def _classifier_head(cfg):
+    """Logit-margin head when the backoff is on (unsaturated, so the backoff can
+    separate near-boundary false positives the softmax score collapses); the
+    softmax score otherwise. ANN only. Read by _train_node_classifier."""
+    bk = cfg.surrogate.get('backoff', None)
+    on = bool(bk.get('enabled', False)) if bk else False
+    return 'classifier_logit' if (on and cfg.surrogate.classifier_selection == 'ANN') else 'classifier'
+
+
+def _hold_out_batch(cfg, graph, node):
+    """Hold a batch of the original sampling data out of training, for the
+    a-posteriori backoff calibration; None unless the backoff is enabled."""
+    bk = cfg.surrogate.get('backoff', None)
+    if bk is None or not bk.get('enabled', False):
+        return None
+
+    full = graph.nodes[node]['classifier_training']
+    n = int(full.X.shape[0])
+    n_hold = max(1, int(float(bk.get('held_out_frac', 0.2)) * n))
+    perm = np.random.default_rng(0).permutation(n)
+    hold_idx, train_idx = perm[:n_hold], perm[n_hold:]
+    graph.nodes[node]['classifier_training'] = TrainingDataset(full.X[train_idx], full.y[train_idx])
+    return {'full': full, 'X': full.X[hold_idx], 'y': full.y[hold_idx]}
+
+
+def _calibrate_backoff(cfg, graph, node, held_out):
+    """Minimal a-posteriori backoff: the smallest margin that excludes all but a
+    fraction epsilon of the held-out false positives (infeasible points the
+    classifier still admits). Read by classifier_construction."""
+    eps = float(cfg.surrogate.backoff.get('epsilon', 0.05))
+    classifier = graph.nodes[node]['classifier']
+
+    if cfg.samplers.notion_of_feasibility == 'positive':
+        infeasible = np.asarray(jnp.min(held_out['y'], axis=1) < 0).reshape(-1)
+    else:
+        infeasible = np.asarray(jnp.max(held_out['y'], axis=1) > 0).reshape(-1)
+
+    margins = np.asarray(jax.vmap(classifier)(jnp.asarray(held_out['X']))).reshape(-1)
+    false_positive = margins[infeasible & (margins <= 0)]            # admitted infeasibles
+    if false_positive.shape[0] == 0:
+        return jnp.asarray(0.0)
+
+    backoff = float(max(0.0, -np.quantile(false_positive, eps)))
+    kept = float(np.mean(margins[~infeasible] <= -backoff)) if (~infeasible).any() else 1.0
+    logging.info(f"Node {node}: held-out backoff {backoff:.3f} "
+                 f"({false_positive.shape[0]} false positives, eps={eps}, "
+                 f"feasible region kept {kept:.1%})")
+    return jnp.asarray(backoff)
 
 
 def ctg_surrogate_construction(cfg, graph, node, iterate):

@@ -185,10 +185,12 @@ def log_outputs(cfg, graph, result, solved):
 
     x_star = np.asarray(result.decision_variables).reshape(-1)
 
-    des_0 = 0
+    # Decision layout is [aux | designs | inputs]: x_pos reads x_star past the aux
+    # block, col_pos writes into the (aux-free) design-column order.
+    x_pos, col_pos = graph.graph["n_aux_args"], 0
     for node in graph.nodes():
         n_des = graph.nodes[node]["n_design_args"]
-        des_vals = x_star[des_0:des_0 + n_des]
+        des_vals = x_star[x_pos:x_pos + n_des]
         logging.info(f"Design variables for node {node}: {des_vals}")
 
         # Mirror _get_rollout_action_columns priority from integration.py
@@ -216,17 +218,27 @@ def log_outputs(cfg, graph, result, solved):
 
         # Assign positionally; process and design naming conventions differ after make_markov
         for idx, val in enumerate(des_vals):
-            col_idx = des_0 + idx
+            col_idx = col_pos + idx
             if col_idx < len(cols):
                 rollout_row[cols[col_idx]] = float(val)
 
-        des_0 += n_des
+        x_pos += n_des
+        col_pos += n_des
 
     rollout_df = pd.DataFrame([rollout_row])
+
+    # Persist the shared aux block so a forward re-simulation of the policy
+    # reproduces the optimised dynamics (read by the trajectory plot).
+    n_aux = graph.graph["n_aux_args"]
+    aux_vals = [float(v) for v in x_star[:n_aux]]
+    for idx, val in enumerate(aux_vals):
+        rollout_df[f"aux_{idx}"] = val
+    graph.graph["aux_star"] = aux_vals
+
     fname = 'monolithic_policy.xlsx'
     rollout_df.to_excel(fname)
-    logging.info(f"Saved monolithic policy ({len(cols)}-d) to {fname}")
-    
+    logging.info(f"Saved monolithic policy ({len(cols)}-d, aux={aux_vals}) to {fname}")
+
     return None
 
 
@@ -293,6 +305,14 @@ def get_bounds(cfg):
     return jnp.array(bounds)
 
 
+# Fractional widening of the init operating-range coupling box. A coupling sits
+# on its box bound iff its value equals an envelope edge (e.g. the H accumulator
+# pinned by a fixed-input root); there the box-bound gradient is parallel to the
+# defect gradient and LICQ fails, so the SQP stalls. The pad lifts couplings off
+# the bounds; the defect scale stays the unpadded width, so conditioning is O(1).
+_COUPLING_BOX_PAD = 0.25
+
+
 def get_bounds_ms(cfg, graph, total_inp):
     """
     Extend the single-shooting bounds with per-edge input-variable
@@ -303,14 +323,22 @@ def get_bounds_ms(cfg, graph, total_inp):
     base = get_bounds(cfg)
 
     non_root = next(n for n in graph.nodes if graph.in_degree(n) > 0)
-    ext = graph.nodes[non_root]["extendedDS_bounds"]
     n_inp_per = graph.nodes[non_root]["n_input_args"]
     reps = total_inp // n_inp_per
 
-    if ext not in (None, "None"):
-        # Priority 1: backward-sweep-derived box from the live set.
-        inp_lbs_per = jnp.array(ext[0][0, -n_inp_per:])
-        inp_ubs_per = jnp.array(ext[1][0, -n_inp_per:])
+    coupling_box = _chainwide_coupling_box(graph)
+    ext_set = graph.nodes[non_root]["extendedDS_bounds"] not in (None, "None")
+
+    if coupling_box is not None:
+        # Priority 1: extendedDS box, or the init operating range — shared with
+        # the defect scale so the scaled coupling columns stay O(1).
+        inp_lbs_per = jnp.array(coupling_box[0])
+        inp_ubs_per = jnp.array(coupling_box[1])
+        if not ext_set:
+            # extendedDS is already an overshoot; the init envelope is tight, so pad it.
+            pad = _COUPLING_BOX_PAD * jnp.maximum(inp_ubs_per - inp_lbs_per, 1e-8)
+            inp_lbs_per = inp_lbs_per - pad
+            inp_ubs_per = inp_ubs_per + pad
     elif getattr(cfg.case_study, "edge_clip", None) not in (None, "None"):
         # Priority 2: physical state-component limits declared in the case study.
         ec = cfg.case_study.edge_clip
@@ -329,18 +357,54 @@ def get_bounds_ms(cfg, graph, total_inp):
     return jnp.concatenate([base, jnp.stack([inp_lbs, inp_ubs])], axis=1)
 
 
-def get_edge_input_scale(cfg, n_inp_per):
+def ensure_init_bounds(cfg, graph):
     """
-    Per-state-dim scale for the defect residuals: edge_clip width when
-    available, ones otherwise (residuals stay in absolute units).
+    Populate per-edge input_data_bounds for the monolithic: skip when
+    extendedDS_bounds is pre-set or the bounds already exist, else run the
+    forward init pass (the same one the decomposition uses).
     """
-    from omegaconf import OmegaConf, ListConfig, DictConfig
-    ec = getattr(cfg.case_study, "edge_clip", None)
-    if ec in (None, "None"):
-        return jnp.ones(n_inp_per)
-    if isinstance(ec, (ListConfig, DictConfig)):
-        ec = OmegaConf.to_container(ec, resolve=True)
-    return jnp.array([p[1] - p[0] for p in ec])
+    from mu_F.decomposition import _extended_bounds_are_set
+    in_edges = [e for e in graph.edges if graph.in_degree(e[1]) > 0]
+    have = len(in_edges) > 0 and all("input_data_bounds" in graph.edges[e] for e in in_edges)
+    if _extended_bounds_are_set(cfg) or have:
+        return graph
+    from mu_F.initialisation.methods import run_initialisation
+    return run_initialisation(cfg, graph)
+
+
+def edge_defect_scales(graph):
+    """
+    Per-edge defect scale = the chain-wide coupling operating-range width, the
+    same box the input variables are scaled over (see get_bounds_ms) so the
+    scaled defect columns stay O(1). Shared across edges; None if no box is known.
+    """
+    box = _chainwide_coupling_box(graph)
+    if box is None:
+        return None
+    width = jnp.asarray(np.maximum(box[1] - box[0], 1e-8))
+    edges = [(p, n) for n in graph.nodes for p in graph.predecessors(n)]
+    return {e: width for e in edges}
+
+
+def _chainwide_coupling_box(graph):
+    """Chain-wide [lb, ub] per coupling state: the receiving node's extendedDS
+    input slots when set, else the envelope of the init input_data_bounds across
+    edges, else None. A state that collapses at one node keeps the range it has
+    elsewhere, so the envelope removes the need for a separate degeneracy floor."""
+    edges = [(p, n) for n in graph.nodes for p in graph.predecessors(n)]
+    n = edges[0][1]
+    n_inp = int(graph.nodes[n]["n_input_args"])
+
+    ext = graph.nodes[n].get("extendedDS_bounds", None)
+    if ext not in (None, "None"):
+        return np.asarray(ext[0]).reshape(-1)[-n_inp:], np.asarray(ext[1]).reshape(-1)[-n_inp:]
+
+    with_bounds = [e for e in edges if "input_data_bounds" in graph.edges[e]]
+    if with_bounds:
+        los = np.stack([np.asarray(graph.edges[e]["input_data_bounds"][0]).reshape(-1) for e in with_bounds])
+        his = np.stack([np.asarray(graph.edges[e]["input_data_bounds"][1]).reshape(-1) for e in with_bounds])
+        return los.min(axis=0), his.max(axis=0)
+    return None
 
 
 def _safe_scale_offset(lb, ub):
