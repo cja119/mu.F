@@ -75,9 +75,9 @@ integration_monolithic:
 # Smoothness for the constraint-violation softmax (higher -> closer to the hard max).
 softmax_beta:
   decomposition: 1000
-  monolithic: 50
+  monolithic: 1000
 
 # Smoothness for the edge clip (per method; higher -> closer to hard clip).
 edge_clip_beta:
   decomposition: 1000
-  monolithic: 50
+  monolithic: 1000
