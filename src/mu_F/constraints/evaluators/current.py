@@ -89,6 +89,21 @@ def _prepare_inputs(inputs, n_y_expected):
     return jnp.zeros(n_y_expected).at[:min(p.size, n_y_expected)].set(p[:n_y_expected])
 
 
+def _assemble_ys(inputs, aux, n_y):
+    """Pack the recovery NLP's fixed params as [input, aux], matching the
+    backward sweep so the surrogate is queried at the trajectory's true aux."""
+    in2 = jnp.atleast_2d(inputs) if inputs is not None else jnp.zeros((1, 0))
+    n = in2.shape[0]
+    aux2 = (jnp.atleast_2d(aux) if aux is not None and jnp.asarray(aux).size
+            else jnp.zeros((n, 0)))
+    if aux2.shape[0] == 1 and n > 1:
+        aux2 = jnp.broadcast_to(aux2, (n, aux2.shape[1]))
+    n_input = int(n_y) - aux2.shape[1]
+    take = min(int(in2.shape[1]), n_input)
+    ins = jnp.zeros((n, n_input)).at[:, :take].set(in2[:, :take])
+    return jnp.concatenate([ins, aux2], axis=-1)                          # (N, n_y)
+
+
 # ---------------------------------------------------------------------------
 # CurrentConstraintEvaluator — box-only feasibility on current node
 # ---------------------------------------------------------------------------
@@ -126,11 +141,8 @@ class CurrentConstraintEvaluator(BaseEvaluator):
                     jnp.zeros((n, 1)),
                     jnp.zeros((n, 1), dtype=bool))
 
-        # Batch N trajectory states into (N, n_y), zero-padded / truncated per row.
-        n_y = self.n_y[key]
-        in2 = jnp.atleast_2d(inputs) if inputs is not None else jnp.zeros((1, n_y))
-        take = min(int(in2.shape[1]), int(n_y))
-        ys = jnp.zeros((in2.shape[0], n_y)).at[:, :take].set(in2[:, :take])   # (N, n_y)
+        # Pack the fixed [input, aux] params for the N trajectory states.
+        ys = _assemble_ys(inputs, aux, self.n_y[key])                         # (N, n_y)
 
         per_theta = solve_integer_nlp_batched(self.specs[key], ys)
         full_design = vmap(
@@ -339,11 +351,8 @@ class CurrentCostEvaluator(BaseEvaluator):
                     jnp.zeros((n, 1)),
                     jnp.zeros((n, 1), dtype=bool))
 
-        # Batch N trajectory states into (N, n_y), zero-padded / truncated per row.
-        n_y = self.n_y[key]
-        in2 = jnp.atleast_2d(inputs) if inputs is not None else jnp.zeros((1, n_y))
-        take = min(int(in2.shape[1]), int(n_y))
-        ys = jnp.zeros((in2.shape[0], n_y)).at[:, :take].set(in2[:, :take])   # (N, n_y)
+        # Pack the fixed [input, aux] params for the N trajectory states.
+        ys = _assemble_ys(inputs, aux, self.n_y[key])                         # (N, n_y)
 
         per_theta = solve_integer_nlp_batched(self.specs[key], ys)
         full_design = vmap(
