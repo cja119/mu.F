@@ -24,7 +24,10 @@ class Initialisation(ABC):
     def __init__(self, cfg, graph, network_simulator, constraint_evaluator, sampler, approximator):
         self.cfg = cfg
         self.graph = graph
-        self.network_simulator = network_simulator(cfg, graph, constraint_evaluator)
+        sm = cfg.init.get('scoring_method', 'min_cost')
+        methods = [sm] if isinstance(sm, str) else list(sm)
+        self._cost_type = 'node_cost' if 'min_cost' in methods else None
+        self.network_simulator = network_simulator(cfg, graph, constraint_evaluator, cost_type=self._cost_type)
         self.sampler = sampler
         self.approximator = approximator
 
@@ -115,13 +118,13 @@ class Initialisation(ABC):
                 # Generate children around best samples
                 children = self._generate_children(best_samples, n_children, perturbation_scale, bounds)
 
-                # Evaluate children
-                child_constraints, child_eks = self.network_simulator.get_data(children, uncertain_params)
-
-                # Evaluate costs for children if needed
-                child_costs = None
-                if current_costs is not None:
-                    child_costs = self._evaluate_costs(children, uncertain_params)
+                # Evaluate children: one integration yields the constraints, the
+                # coupling, and (when cost-seeking) the node cost read off it
+                if self._cost_type is not None:
+                    child_constraints, child_eks, child_costs = self.network_simulator.get_data_cost(children, uncertain_params)
+                else:
+                    child_constraints, child_eks = self.network_simulator.get_data(children, uncertain_params)
+                    child_costs = None
 
                 # Combine samples
                 current_samples = jnp.vstack([current_samples, children])

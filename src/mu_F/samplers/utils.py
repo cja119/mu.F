@@ -106,6 +106,30 @@ def add_global_aux(bounds, G, node=None):
     return bounds
 
 
+def resolve_aux_override(cfg):
+    """Read by the rollout and recovery: the pinned aux value, or None when the
+    aux is to be optimised at the root node."""
+    v = cfg.get('aux_override', None)
+    return None if v in (None, 'None') else list(v)
+
+
+def aux_optimised_at_root(cfg, graph, node):
+    """True when the global aux is a free decision (no override) and this is the
+    root node — the single place it is solved before being carried forward."""
+    return resolve_aux_override(cfg) is None and graph.in_degree(node) == 0
+
+
+def global_aux_bounds(graph, node):
+    """Lower/upper bounds for the global aux slots a node carries, used to widen
+    the recovery's free-decision box when the aux is optimised."""
+    aux_bounds = graph.graph['aux_bounds']
+    pairs = [n for j in graph.nodes[node]['aux_ids'] for n in aux_bounds[j]
+             if n[0] not in (None, 'None')]
+    lb = jnp.asarray([p[0] for p in pairs]).reshape(-1)
+    ub = jnp.asarray([p[1] for p in pairs]).reshape(-1)
+    return lb, ub
+
+
 def get_unit_bounds(G: nx.DiGraph, unit_index: int):
     """
     Assemble design, coupling-input and aux bounds for a single unit.

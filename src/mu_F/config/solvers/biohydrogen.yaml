@@ -10,7 +10,7 @@ decomposition:
   optimality_tol:  1.0e-4
   max_iter: 30
   cost_to_go:
-    max_iter: 60          # classifier-as-constraint NLP — observed ~48% KKT at 30 iters
+    max_iter: 60          # backward cost-to-go NLP
 
 monolithic:
   feasibility_tol: 1.0e-4
@@ -18,6 +18,7 @@ monolithic:
   max_iter: 30
   use_exact_hessian: false   # skips 2nd-order AD through chained diffrax solves
   scale_variables: true   # rescale decision vector + defect residuals to [0, 1] coords
-  warm_start: rollout     # 'rollout' (forward-simulated start) or 'midpoint'
+  warm_start: decomposition  # 'decomposition' (seed from decomp rollout, paper-style),
+                             # 'rollout' (Sobol/forward-simulated start), or 'midpoint'
   n_sobol_screen: 32      # >1: Sobol-sample controls, roll each, keep lowest L1 merit
   screen_penalty: 1.0e3   # L1 weight on path-constraint violation in the screen

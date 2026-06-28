@@ -10,6 +10,7 @@ from jax.random import PRNGKey, choice
 
 from mu_F.constraints.constructor import ConstraintEvaluator
 from mu_F.unit_evaluators.constructor import SubproblemUnitWrapper
+from mu_F.samplers.utils import aux_optimised_at_root, resolve_aux_override
 
 from mu_F.integration.context import EvalContext, TrainingStore
 from mu_F.integration.formulations import make_formulation, _p_target
@@ -66,6 +67,8 @@ class RolloutEvaluator:
         self.node_evaluator = node_evaluator                 # shared forward model
         self.current = current                               # shared process + node cost
         self.rollout_costs = ConstraintEvaluator(cfg, graph, node, constraint_type='cost_rollout')
+        self.free_aux = aux_optimised_at_root(cfg, graph, node)   # root solves the aux
+        self.n_design = int(graph.nodes[node]['n_design_args'])
 
     def rollout(self, inputs, aux=None, key=None, n_samples=1, fixed_decision=None):
         """
@@ -76,17 +79,18 @@ class RolloutEvaluator:
         N = int(n_samples)
         if inputs is None:
             inputs = jnp.empty((N, 0))
-        if aux is None:
-            aux_default = list(self.cfg.case_study.get('aux_default', []) or [])
-            aux = (jnp.tile(jnp.asarray(aux_default, dtype=jnp.float32).reshape(1, -1), (inputs.shape[0], 1))
-                   if aux_default else jnp.empty((inputs.shape[0], 0)))
+        solve_aux = self.free_aux and fixed_decision is None        # recovery solves the aux here
+        if aux is None and not solve_aux:
+            aux = self._fixed_aux(inputs.shape[0])
 
         # Decide (weather-blind), then reveal + apply per-trajectory weather.
         if fixed_decision is not None:
             decision = jnp.asarray(fixed_decision, dtype=inputs.dtype).reshape(inputs.shape[0], -1)
             opt_ctg = jnp.zeros((inputs.shape[0],)); opt_status = jnp.ones((inputs.shape[0],), dtype=bool)
         else:
-            decision, opt_ctg, opt_status = self.rollout_costs.evaluate(inputs, aux)  # (N, n_design)
+            decision, opt_ctg, opt_status = self.rollout_costs.evaluate(inputs, aux)  # (N, n_design[+aux])
+        if solve_aux:
+            decision, aux = decision[:, :self.n_design], decision[:, self.n_design:]  # split solved aux*
         d = jnp.concatenate([decision, inputs, aux], axis=-1)                       # (N, n_total)
         p = self.get_uncertain_params(key, n_samples=decision.shape[0])            # (N, param)
 
@@ -105,7 +109,15 @@ class RolloutEvaluator:
         logging.info(
             f"Rollout node {self.node} per-constraint feasible-frac={np.round(per_con_frac, 3).tolist()} "
             f"worst-margin={np.round(worst_margin, 3).tolist()}")
-        return outputs, n_cost, decision, feasible, p_cons
+        return outputs, n_cost, decision, feasible, p_cons, aux
+
+    def _fixed_aux(self, n):
+        """Pinned aux tiled over the N trajectories: aux_override, else the
+        case-study default, else empty (used when the aux is not solved here)."""
+        base = resolve_aux_override(self.cfg) or list(self.cfg.case_study.get('aux_default', []) or [])
+        if not base:
+            return jnp.empty((n, 0))
+        return jnp.tile(jnp.asarray(base, dtype=jnp.float32).reshape(1, -1), (n, 1))
 
     def get_uncertain_params(self, key=None, n_samples=None):
         """

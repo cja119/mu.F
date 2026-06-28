@@ -506,11 +506,48 @@ def best_rollout_start(cfg, graph, problem_data, n_screen, penalty):
     best_x, best_score = None, jnp.inf
     for seed in seeds:
         x0 = forward_rollout_guess(cfg, graph, var_bounds, seed)
+        if not bool(jnp.all(jnp.isfinite(x0))):
+            continue
         score = float(merit(x0))
         if score < best_score:
             best_x, best_score = x0, score
+
+    # Long horizons can diverge every sampled control sequence; the mid-box
+    # roll stays finite and seeds a usable (if poorer) start.
+    if best_x is None:
+        logging.warning("Sobol-rollout screen: all starts non-finite; using mid-box rollout start.")
+        return forward_rollout_guess(cfg, graph, var_bounds, seed=None)
     logging.info(f"Sobol-rollout screen: {n_screen} starts, best L1 merit={best_score:.4g}")
     return best_x
+
+
+def decomposition_start(cfg, graph, var_bounds):
+    """Seed multiple shooting from the decomposition's saved rollout — the
+    paper's approach of initialising the monolithic NLP with the decomposition.
+    Falls back to the mid-box rollout start when no decomposition rollout exists."""
+    import glob
+    files = sorted(glob.glob('rollout_trajectories_iterate_*.npz'))
+    if not files:
+        logging.warning("warm_start=decomposition: no rollout trajectories found; using mid-box rollout start.")
+        return forward_rollout_guess(cfg, graph, var_bounds, seed=None)
+
+    data = np.load(files[-1])
+    decisions = np.asarray(data['decisions'])[0]                  # (n_nodes, n_design), trajectory 0
+    n_aux = int(graph.graph["n_aux_args"])
+    aux = np.asarray(data['aux']).reshape(-1) if 'aux' in data.files else np.zeros(n_aux)
+
+    seed = np.asarray(initial_guess(var_bounds)).reshape(-1).copy()
+    if n_aux and aux.size >= n_aux:
+        seed[:n_aux] = aux[:n_aux]
+    des_curr = n_aux
+    for i, node in enumerate(nx.topological_sort(graph)):
+        n_des = int(graph.nodes[node]["n_design_args"])
+        d = np.asarray(decisions[i]).reshape(-1)[:n_des]
+        seed[des_curr:des_curr + n_des] = np.where(np.isfinite(d), d, seed[des_curr:des_curr + n_des])
+        des_curr += n_des
+
+    logging.info(f"warm_start=decomposition: seeding monolithic from {files[-1]} (aux={np.round(aux, 4).tolist()}).")
+    return forward_rollout_guess(cfg, graph, var_bounds, jnp.asarray(seed))
 
 
 def _make_l1_merit(problem_data, penalty):

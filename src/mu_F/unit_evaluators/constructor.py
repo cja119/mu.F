@@ -193,11 +193,17 @@ class SubproblemUnitWrapper(UnitEvaluation):
 
     def get_auxilliary_input_decision_split(self, decisions):
         """
-        Split a flat decision vector into design / input / auxiliary blocks.
+        Split a flat decision vector into design / input / auxiliary blocks. Aux is
+        the trailing block, so a root node seeded with its full state (n_input = 0)
+        cannot bleed that state into the aux slot.
         """
         n_d = self.graph.nodes[self.node]['n_design_args']
-        n_u = self.graph.nodes[self.node]['n_input_args']
-        design_args, input_args, auxiliary_args = decisions[:,:n_d], decisions[:,n_d:n_d+n_u], decisions[:,n_d+n_u:]
+        n_aux = int(self.graph.graph['n_aux_args'])
+        design_args = decisions[:, :n_d]
+        if n_aux > 0:
+            input_args, auxiliary_args = decisions[:, n_d:-n_aux], decisions[:, -n_aux:]
+        else:
+            input_args, auxiliary_args = decisions[:, n_d:], decisions[:, n_d:n_d]
         return design_args, input_args, auxiliary_args
 
 
@@ -292,10 +298,11 @@ class NetworkSimulator(ABC):
 
     # ---- External Methods ----
 
-    def __init__(self, cfg, graph, constraint_evaluator, type_cons='process'):
+    def __init__(self, cfg, graph, constraint_evaluator, type_cons='process', cost_type=None):
         self.cfg = cfg
         self.graph = graph.copy()
         self.type = type_cons
+        self.cost_type = cost_type
         self.constraint_evaluator = constraint_evaluator
         self.function_evaluations = {node: 0 for node in self.graph.nodes}
         self.desired_node_index = self.cfg.surrogate.post_process_lower.desired_node_index
@@ -334,6 +341,11 @@ class NetworkSimulator(ABC):
             node_constraint_evaluator = self.constraint_evaluator(self.cfg, self.graph, node, constraint_type=self.type)
             self.graph.nodes[node]['constraint_store'] = node_constraint_evaluator.evaluate(decisions[:, n_d:n_d+unit_nd], inputs, aux_args, outputs)
 
+            # cost-seeking reads the node cost off the same integration
+            if self.cost_type is not None:
+                cost_evaluator = self.constraint_evaluator(self.cfg, self.graph, node, constraint_type=self.cost_type)
+                self.graph.nodes[node]['cost_store'] = cost_evaluator.evaluate(decisions[:, n_d:n_d+unit_nd], inputs, aux_args, outputs)
+
             n_d += unit_nd
 
         # constraint evaluation, information for extended KS bounds
@@ -368,8 +380,19 @@ class NetworkSimulator(ABC):
         for node, g in constraints.items():
             self.function_evaluations[node] += g.shape[0]*g.shape[1]
         return constraints, edge_data
-        
-    
+
+    def get_data_cost(self, decisions, uncertain_params=None):
+        """
+        Single-pass variant returning the node cost alongside the constraints
+        and inputs, read off the same integration; used by min_cost refinement.
+        """
+        constraints, edge_data = self.simulate(decisions, uncertain_params)
+        for node, g in constraints.items():
+            self.function_evaluations[node] += g.shape[0]*g.shape[1]
+        costs = {node: self.graph.nodes[node]['cost_store'] for node in self.graph.nodes}
+        return constraints, edge_data, costs
+
+
     def evaluate_direct(self, decisions, uncertain_params):
         """
         Direct-mode network walk that slices each node's uncertainty block from

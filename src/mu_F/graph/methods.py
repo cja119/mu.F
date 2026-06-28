@@ -131,6 +131,9 @@ def _markov_edge_with_clip(cfg):
     lo = bounds[:, 0]
     hi = bounds[:, 1]
 
+    if str(cfg.case_study.get('carbon_implementation', 'fixed')) == 'paper':
+        lo = lo.at[1].set(-1.0e3)   # glycerol (index 1): let C carry negative across nodes (paper's unbounded C)
+
     beta = _resolve_beta(cfg, 'edge_clip_beta', 50.0)
 
     def _clip(rollout):

@@ -10,7 +10,7 @@ import contextlib
 
 from mu_F.surrogate.augmentation import augment_training_data
 from mu_F.samplers.constructor import ConstructDeusProblem
-from mu_F.samplers.utils import create_problem_description_deus
+from mu_F.samplers.utils import create_problem_description_deus, resolve_aux_override
 from deus import DEUS
 from mu_F.utils import save_graph
 
@@ -152,6 +152,10 @@ class ApplyDecomposition:
         feasible = jnp.ones(n, dtype=bool)
         node_input = self._rollout_seed(nodes[0], n)
 
+        override = resolve_aux_override(cfg)         # None -> root solves the aux, then carry it
+        carried_aux = None
+        root_aux = None
+
         steps = []
         for node in nodes:
             model = SubproblemModel(node, cfg, self.graph, mode='rollout', max_devices=self.max_devices)
@@ -162,8 +166,15 @@ class ApplyDecomposition:
 
             state_in = ('root' if node_input is None
                         else np.round(np.asarray(node_input[0]).reshape(-1), 2).tolist())
-            outputs, n_cost, decision, node_feasible, p_cons = model.rollout(
-                node_input, key=fold_in(key, int(node)), n_samples=n)
+            aux_in = carried_aux if (override is None and self.graph.in_degree(node) > 0) else None
+            outputs, n_cost, decision, node_feasible, p_cons, aux_used = model.rollout(
+                node_input, aux=aux_in, key=fold_in(key, int(node)), n_samples=n)
+            if self.graph.in_degree(node) == 0:
+                root_aux = aux_used                   # the aux used at the root (solved or pinned)
+            if override is None and self.graph.in_degree(node) == 0:
+                carried_aux = aux_used
+                logging.info(f"Rollout root node {node} optimised aux="
+                             f"{np.round(np.asarray(aux_used[0]).reshape(-1), 4).tolist()} (carried forward)")
             logging.info(f"Rollout node {node} state-in(traj0)={state_in} "
                          f"decision(traj0)={np.round(np.asarray(decision[0]).reshape(-1), 2).tolist()}")
             self._record_rollout_action(node, decision)
@@ -177,7 +188,7 @@ class ApplyDecomposition:
             logging.info(f"Rollout through node {node}: mean cost-so-far {float(jnp.mean(cost)):.4g}, "
                          f"feasible paths {int(jnp.sum(feasible))}/{n}")
 
-        self._save_rollout_trajectories(steps)
+        self._save_rollout_trajectories(steps, root_aux)
         self._rollout_summary(cost, feasible, n)
         return self.graph
 
@@ -205,18 +216,21 @@ class ApplyDecomposition:
         return {'state': state, 'decision': np.asarray(decision),
                 'constraint': np.asarray(p_cons[:, 0, :]), 'cost': np.asarray(n_cost).reshape(-1)}
 
-    def _save_rollout_trajectories(self, steps):
-        """Stack the per-node steps into (N, n_nodes, .) tensors and save for the trajectory plot."""
+    def _save_rollout_trajectories(self, steps, root_aux=None):
+        """Stack the per-node steps into (N, n_nodes, .) tensors and save for the
+        trajectory plot and the monolithic's decomposition warm start."""
         for key in ('state', 'decision', 'constraint'):
             if len({step[key].shape[1] for step in steps}) > 1:
                 logging.info("Rollout trajectories not saved: per-node variable dimensions differ.")
                 return
+        aux = np.zeros(0) if root_aux is None else np.asarray(root_aux).reshape(-1)
         np.savez(
             f'rollout_trajectories_iterate_{self.iterate}.npz',
             states=np.stack([step['state'] for step in steps], axis=1),            # (N, n_nodes, F_SIZE)
             decisions=np.stack([step['decision'] for step in steps], axis=1),      # (N, n_nodes, n_design)
             constraints=np.stack([step['constraint'] for step in steps], axis=1),  # (N, n_nodes, n_g)
             costs=np.stack([step['cost'] for step in steps], axis=1),              # (N, n_nodes)
+            aux=aux,                                                               # solved global aux (n_aux,)
         )
         logging.info("Saved %d rollout trajectories over %d nodes.", steps[0]['cost'].shape[0], len(steps))
 

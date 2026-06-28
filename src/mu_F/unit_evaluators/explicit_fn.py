@@ -891,9 +891,10 @@ def hydrogen_export_simulator(cfg: DictConfig):
 
 def _make_biohydrogen_step(cfg: DictConfig):
     """
-    Factory for the JIT-compiled biohydrogen step (fed-batch H2 culture).
-    Controls feed nitrate concentration and log feed flow; the per-trajectory
-    aux caps the feed rate. Emits [F | G | R | Phi]; integration is in hours.
+    Factory for the biohydrogen fed-batch step (del Rio-Chanona et al., eqs 1a-1i).
+    N_Fed is the daily control; the global aux T (a fraction of the horizon) sets
+    the feed-start time and flow rate F_in = F_total/(horizon - T), so the total
+    feed is fixed and the formulation is independent of the node count.
     """
     # Smoothness for the constraint-violation softmax (beta -> inf recovers the hard max).
     beta = _resolve_beta(cfg, 'softmax_beta', 50.0)
@@ -908,17 +909,24 @@ def _make_biohydrogen_step(cfg: DictConfig):
     Y_OX   = float(cfg.model.y_ox)
     Y_d    = float(cfg.model.y_d)
     Y_CX   = float(cfg.model.y_cx)
-    F_max  = float(cfg.model.f_max)
+    F_TOTAL = float(cfg.model.f_max)       # total influent volume fed over [T, horizon] (eq 1i)
     O_Fed  = float(cfg.model.o_fed)
     C_Fed  = float(cfg.model.c_fed)
     Y_HX   = float(cfg.model.y_hx)
 
     N_MAX    = float(cfg.model.n_max)
     O_MAX    = float(cfg.model.o_max)
+    C_MIN    = float(cfg.model.get('c_min', 0.0))   # glycerol lower bound (paper keeps C >= 0)
+    C_JITTER = float(cfg.model.get('c_jitter', 0.1))  # carbon roll-off scale δ in C/(K_c+√(C²+δ²)); smooth, pole-free
+    CARBON_IMPL = str(cfg.case_study.get('carbon_implementation', 'fixed'))  # 'fixed' smooth gate (C≥0) | 'paper' K_c=0 unbounded C
+    if CARBON_IMPL == 'paper':
+        C_MIN = -1.0e6                               # disable the glycerol floor so g_C never binds (paper has no C bound)
     N_SWITCH = float(cfg.model.n_switch)
-    N_SWITCH_BETA = float(cfg.model.get('n_switch_beta', 1.0))
-    O_GATE_BETA = float(cfg.model.get('o_gate_beta', 2.0))
     TF       = float(cfg.model.integration.tf)
+    NUM_NODES = float(cfg.case_study.num_nodes)
+    HORIZON  = NUM_NODES * TF                           # total operating time (eq 1i denominator)
+    T_SWITCH_BETA = float(cfg.model.get('t_switch_beta', 2.0))
+    SWITCH_SMOOTH = _resolve_beta(cfg, 'switch_smooth', 0.1)   # f(N)/f(O) smoothing (paper 0.1; softer for the gradient-based monolithic)
     REWARD_SCALE = float(cfg.model.get('reward_scale', 1.0))
 
     @jit
@@ -928,46 +936,51 @@ def _make_biohydrogen_step(cfg: DictConfig):
         aux = jnp.ravel(aux)
         # z is unused — biohydrogen has Z_SIZE = 0.
 
-        X, C, N, q, O, H, F = x[0], x[1], x[2], x[3], x[4], x[5], x[6]
-        N_Fed, log_F_in = u[0], u[1]
-        F_in = jnp.exp(log_F_in)                  # decision is in log space
-        max_fr_per_node = aux[0]
+        X, C, N, q, O, H = x[0], x[1], x[2], x[3], x[4], x[5]
+        N_Fed = jnp.exp(u[0])                    # daily nitrate influent; design optimised in log space
+        T_frac = aux[0]                           # switch time as a fraction of the horizon
 
-        # Guards: k_q/q diverges as q→0, and C/(K_c+C)=0/0 at C=0 with K_c=0.
+        # Influent flow fixes the total feed F_TOTAL over [T, horizon] (eq 1i);
+        # T as a fraction keeps F_in and the gate independent of the node count.
+        F_in = F_TOTAL / (HORIZON * jnp.maximum(1.0 - T_frac, 1e-3))
+        T_node = T_frac * NUM_NODES               # switch time in node units
+        feed = F_in * sigmoid((node + 0.5 - T_node) * T_SWITCH_BETA)
+
+        # Guards: k_q/q diverges as q→0. Carbon term: 'fixed' uses the smooth pole-free roll-off
+        # sqrt(C²+δ²) (keeps C≥0); 'paper' uses C/(K_c+C), which runs C negative (the original artifact).
         q_safe = jnp.maximum(q, 1e-8)
-        t1 = mu_max * (1.0 - k_q / q_safe) * (C / (K_c + C + 1e-8))
+        if CARBON_IMPL == 'paper':
+            carbon = C / (K_c + C + 1e-8)
+        else:
+            carbon = C / (K_c + jnp.sqrt(C * C + C_JITTER * C_JITTER))
+        t1 = mu_max * (1.0 - k_q / q_safe) * carbon
         t2 = N / (K_N + N)
-        t3 = sigmoid(O * O_GATE_BETA)          # ~0 at O≈0, ~1 at O>0
-        # numerically-stable (1 - σ(2·O)) avoiding float64 cancellation
-        gate = sigmoid(-O * O_GATE_BETA)
-        f_N = sigmoid((N_SWITCH - N) * N_SWITCH_BETA)    # ~1 at N<switch, ~0 otherwise
+        f_O = O / jnp.sqrt(O * O + SWITCH_SMOOTH)                    # eq 1h: ~1 aerobic, ~0 at O≈0
+        f_N = 0.5 * (jnp.sqrt((N - N_SWITCH) ** 2) - (N - N_SWITCH)) \
+              / jnp.sqrt((N - N_SWITCH) ** 2 + SWITCH_SMOOTH)        # eq 1g: ~1 below switch, ~0 above
 
-        # state derivatives; F_in is the decision directly (L/h)
         dX = X * t1 - mu_d * X ** 2
-        dC = -Y_CX * X * t1 + F_in * C_Fed
-        dN = -Y_NX * X * t2 * mu_max + F_in * N_Fed
+        dC = -Y_CX * X * t1 + feed * C_Fed
+        dN = -Y_NX * X * t2 * mu_max + feed * N_Fed
         dq = Y_qX * t2 * mu_max - t1 * q
-        dO = Y_OX * X * t2 - Y_d * X ** 2 * t3 + O_Fed * F_in
-        dH = Y_HX * X * gate * f_N
-        dF = F_in
-        dxdt = jnp.array([dX, dC, dN, dq, dO, dH, dF])
+        dO = Y_OX * X * t2 - Y_d * X ** 2 * f_O + feed * O_Fed
+        dH = Y_HX * X * (1.0 - f_O) * f_N
+        dxdt = jnp.array([dX, dC, dN, dq, dO, dH])
 
         # Path constraints — framework convention (negative = violated, 0 feasible).
-        f_in_cap = max_fr_per_node * F_max / TF
         g_N = (N - N_MAX) / N_MAX
         g_O = (O - O_MAX) / O_MAX
-        g_F = (F - F_max) / F_max
-        g_rate = (F_in - f_in_cap) / (F_max / TF)
+        g_C = (C_MIN - C) / C_Fed                # glycerol lower bound: keep C >= C_MIN
+        dgdt = -_softplus_centred(jnp.array([g_N, g_O, g_C]), beta)
 
-        dgdt = -_softplus_centred(jnp.array([g_N, g_O, g_F, g_rate]), beta)
-
-        # Cost — normalised by REWARD_SCALE to keep the monolithic objective O(1)
-        rwd = -Y_HX * X * gate * f_N / REWARD_SCALE
-        phi = -H / TF / REWARD_SCALE
+        # Cost — the H2 grown this node (= -dH, negated for minimisation),
+        # normalised by REWARD_SCALE. Summed over nodes this telescopes to
+        # -H_final, so the objective is the total H2 produced.
+        rwd = -Y_HX * X * (1.0 - f_O) * f_N / REWARD_SCALE
 
         return jnp.concatenate([
             jnp.ravel(dxdt), jnp.ravel(dgdt),
-            jnp.atleast_1d(rwd), jnp.atleast_1d(phi),
+            jnp.atleast_1d(rwd),
         ], axis=0)
 
     return _step

@@ -9,9 +9,14 @@ eval_cost: True
 # 30 nodes × 24 h = 30 days (`REPEATS` in the cluster wrapper).
 num_nodes: 30
 
+# Glycerol handling: 'fixed' = our smooth pole-free carbon roll-off with C>=0 (physical);
+# 'paper' = original K_c=0 term with C unbounded, reproducing the paper (and its hidden
+# negative-glycerol artifact). Switches the carbon rate, the g_C floor, and the C edge-clip.
+carbon_implementation: fixed
+
 adjacency_matrix: None
 
-n_design_args: 2
+n_design_args: 1
 
 n_aux_args:
   node_0: 1
@@ -19,50 +24,54 @@ n_aux_args:
 
 global_n_aux_args: 1
 
-n_input_args: 7
+# Global aux = T, the feed-start time as a fraction of the horizon (eq 1i).  With
+# aux_override null the decomposition rollout solves it at the root node and
+# carries it forward; the monolithic/shooting use this default and aux_override pins it.
+aux_default: [0.1]
+
+n_input_args: 6
 
 reject_time: 0.5
 
 discount_factor: 0.99999
 
 sizes:
-  X_SIZE: 7    # X, C, N, q, O, H, F
-  U_SIZE: 2    # N_Fed, F_in
-  F_SIZE: 7
-  G_SIZE: 4    # N <= 150 mg/L, O <= 100 %, F <= F_max, F_in <= max_fr·F_max/tf
+  X_SIZE: 6    # X, C, N, q, O, H
+  U_SIZE: 1    # N_Fed (daily nitrate influent); T is the global aux
+  F_SIZE: 6
+  G_SIZE: 3    # N <= 150 mg/L, O <= 100 %, C >= 0 (glycerol non-negative)
   Z_SIZE: 0
-  L_SIZE: 1    # path reward: -Y_HX·X·(1-σ(2O))·f(N) (no /1000 scaling)
-  PHI_SIZE: 1  # terminal-style: dPHI/dt = -H/tf -> integral per node = -mean(H)
+  L_SIZE: 1    # node reward: -dH = -Y_HX·X·(1-f(O))·f(N); sums to -H_final
+  PHI_SIZE: 0  # no terminal term — objective is pure total H2 production
 
 
 KS_bounds:
   design_args:
-  - - 1.0
-    - 3000.0
-  - - -13.81551    # log(1e-6)
-    - -6.57897     # log(1.39e-3)
+  # N_Fed = influent (feedstock) nitrate concentration, optimised in log (ln) space
+  # so the surrogate resolves the 1e3-1e5 feed window (the step exp's it back to mg/L).
+  - - 0.0
+    - 12.21
 
+  # T (feed-start time as a fraction of the horizon); < 1 so F_in stays finite.
+  # Node-count agnostic: no need to retune when num_nodes changes.
   aux_args:
   - - - 0.0
-      - 1.0
+      - 0.97
 
 
 parameters_samples: [{'c': [0.0], 'w': 1.0}]
 
 parameters_best_estimate: [0.0]
 
-# 9-d extended DS for reconstruction plotting:
-#   [N_Fed, F_in, X, C, N, q, O, H, F]
 extendedDS_bounds: None
 
 edge_clip:
-  - [0.0, 5.0]         # X    biomass
-  - [0.0, 60.0]        # C    carbon
+  - [0.0, 60.0]        # X    biomass (carbon-rich: can grow toward C0/Y_CX ~48 g/L)
+  - [0.0, 1200.0]      # C    carbon (C0=1000, headroom above the charge)
   - [0.0, 250.0]       # N    culture nitrate
   - [0.01, 5.0]        # q    quota (keep above 1e-2 so k_q/q stays bounded)
   - [0.0, 110.0]       # O    oxygen %
-  - [0.0, 10000.0]     # H    H2 accumulator (was 1000; physical max ~8400)
-  - [-1.0e6, 1.0e6]    # F    feed accumulator — no clip; g_F PC enforces ≤ F_max
+  - [0.0, 10000.0]     # H    H2 accumulator (physical max ~8400)
 
 design_space_dimensions:
 - 'u0'
@@ -75,7 +84,7 @@ design_domain:
 # integer values (e.g. [1, 2, 3]) to declare an integer dim.  make_markov
 # tiles this template across nodes.
 
-process_space_names: ['N', 'log_F_in']
+process_space_names: ['N']
 
 mode:
   - backward

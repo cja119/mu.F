@@ -22,23 +22,6 @@ def del_data(graph, node):
     return graph
 
 
-def update_aux_bounds(live_set, graph, node, cfg):
-    """
-    Refresh the graph-level aux bounds from the node's live set, updating only the
-    global slots this node carries so each slot tightens to its own range.
-    """
-    ids = graph.nodes[node]['aux_ids']
-    if len(ids) == 0:
-        return
-    aux = live_set[:, -len(ids):]                              # node's compact aux block
-    box = calculate_box_outer_approximation(aux, cfg, ndim=2)
-    bounds = [list(b) for b in graph.graph['aux_bounds']]      # plain, item-assignable copy
-    for k, j in enumerate(ids):                                # column k -> global slot j
-        bounds[j] = [[box[0][0, k], box[1][0, k]]]
-    graph.graph['aux_bounds'] = bounds
-    return
-
-
 def update_node_bounds_iplus1(graph, node, cfg):
     """
     Set the node's iterate i+1 bounds from its iterate i live set.
@@ -114,5 +97,4 @@ def process_data_forward(cfg, graph, node, model, live_set, mode):
             _forward_surrogate_training_data(cfg, graph, node, model, feasible_indices)
 
     graph.nodes[node]["live_set_inner"] = live_set
-    update_aux_bounds(live_set, graph, node, cfg)
     update_node_bounds_iplus1(graph, node, cfg)

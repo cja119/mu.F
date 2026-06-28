@@ -71,11 +71,14 @@ class MultipleShooting(SolveDirect):
 
     def _initial_point(self, problem_data):
         """
-        Pick the SQP start: midpoint, a single forward rollout, or an
-        L1-screened Sobol-rollout multi-start (n_sobol_screen > 1).
+        Pick the SQP start: the decomposition's rollout, the midpoint, a single
+        forward rollout, or an L1-screened Sobol-rollout multi-start.
         """
         s = self.cfg.solvers
-        if str(getattr(s, "warm_start", "rollout")) != "rollout":
+        ws = str(getattr(s, "warm_start", "rollout"))
+        if ws == "decomposition":
+            return decomposition_start(self.cfg, self.G, problem_data["var_bounds"])
+        if ws != "rollout":
             return initial_guess(problem_data["var_bounds"])
         n_screen = int(getattr(s, "n_sobol_screen", 1))
         if n_screen > 1:

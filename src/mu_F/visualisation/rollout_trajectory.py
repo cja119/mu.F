@@ -127,7 +127,7 @@ def _simulate_policy(graph, cfg, x0, per_node_decisions, n_nodes, aux=()):
             node_input = jnp.expand_dims(node_input, axis=0)
         node_in = jnp.squeeze(node_input, axis=1)                             # (1, state)
         decision = jnp.asarray(per_node_decisions[node], dtype=float).reshape(1, -1)
-        outputs, n_cost, decision, _, p_cons = model.rollout(
+        outputs, n_cost, decision, _, p_cons, _ = model.rollout(
             node_in, aux=aux_arr, n_samples=1, fixed_decision=decision)
 
         states.append(np.asarray(node_in).reshape(-1))

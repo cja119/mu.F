@@ -19,6 +19,7 @@ from mu_F.solvers.integer_nlp import (
     splice_design_integers,
 )
 from mu_F.solvers.mixed_integer import resolve_integer_spec
+from mu_F.samplers.utils import aux_optimised_at_root, global_aux_bounds
 
 
 __all__ = [
@@ -33,10 +34,11 @@ __all__ = [
 # Shared geometry helper — used by both evaluators
 # ---------------------------------------------------------------------------
 
-def _current_geometry(graph, node, cfg):
+def _current_geometry(graph, node, cfg, free_aux=False):
     """
     Compute the geometry of a current-node sub-problem: dimensions, the
-    fix / aux / integer slot indices, and the design-portion bounds.
+    fix / aux / integer slot indices, and the design-portion bounds.  With
+    free_aux the aux leaves the fixed params and joins the free decision box.
     """
     n_design = int(graph.nodes[node]['n_design_args'])
     n_input  = int(graph.nodes[node]['n_input_args'])
@@ -44,7 +46,8 @@ def _current_geometry(graph, node, cfg):
     ndim     = n_design + n_input + n_aux
 
     input_indices = np.arange(n_design, n_design + n_input).astype(int)
-    aux_indices   = np.arange(ndim - n_aux, ndim).astype(int)
+    aux_indices   = (np.array([], dtype=int) if free_aux
+                     else np.arange(ndim - n_aux, ndim).astype(int))
 
     int_dims, int_values = resolve_integer_spec(
         cfg.case_study.get('design_domain', None)
@@ -54,6 +57,11 @@ def _current_geometry(graph, node, cfg):
     ks_design = graph.nodes[node]['KS_bounds']
     ks_lb = jnp.asarray([b[0] for b in ks_design]).reshape(-1)
     ks_ub = jnp.asarray([b[1] for b in ks_design]).reshape(-1)
+
+    if free_aux:                                  # widen the box with the aux bounds
+        aux_lb, aux_ub = global_aux_bounds(graph, node)
+        ks_lb = jnp.concatenate([ks_lb, aux_lb])
+        ks_ub = jnp.concatenate([ks_ub, aux_ub])
 
     return (ndim, n_design, n_input, n_aux,
             input_indices, aux_indices, int_indices, int_values,
@@ -232,6 +240,8 @@ class CurrentCostEvaluator(BaseEvaluator):
         self.specs: dict          = {}
         self.n_design_full: dict  = {}
         self.n_y: dict            = {}
+        self.free_aux: dict       = {}
+        self.n_aux: dict          = {}
         super().__init__(cfg, graph, node)
         self._thread = self.evaluate
 
@@ -243,11 +253,12 @@ class CurrentCostEvaluator(BaseEvaluator):
 
     def _build_for_key(self, key) -> None:
         """Build the constrained-CTG current-node IntegerNLPSpec."""
+        free_aux = aux_optimised_at_root(self.cfg, self.graph, key)
         (ndim, n_design, n_input, n_aux,
          input_indices, aux_indices, int_indices, int_values,
-         ks_lb, ks_ub) = _current_geometry(self.graph, key, self.cfg)
+         ks_lb, ks_ub) = _current_geometry(self.graph, key, self.cfg, free_aux=free_aux)
         n_int = int(int_indices.size)
-        n_y   = n_input + n_aux
+        n_y   = n_input + int(aux_indices.size)
 
         # Objective: CTG Surrogate, scalar (always single-output regression).
         objective = mask_surrogate(
@@ -296,6 +307,8 @@ class CurrentCostEvaluator(BaseEvaluator):
         )
         self.n_design_full[key] = n_design
         self.n_y[key]           = n_y
+        self.free_aux[key]      = free_aux
+        self.n_aux[key]         = n_aux
 
     def _feasibility_constraint(self, key, ndim, input_indices, aux_indices, int_indices):
         """Feasible-region constraint for the current-node CTG optimisation."""
@@ -355,12 +368,26 @@ class CurrentCostEvaluator(BaseEvaluator):
         ys = _assemble_ys(inputs, aux, self.n_y[key])                         # (N, n_y)
 
         per_theta = solve_integer_nlp_batched(self.specs[key], ys)
+        x_design, aux_opt = self._split_solution(key, per_theta.x)            # free aux trails the design
         full_design = vmap(
             lambda x, a: splice_design_integers(x, self.specs[key], a, self.n_design_full[key])
-        )(per_theta.x, per_theta.assignment_idx)                              # (N, n_design)
-        return (full_design,
+        )(x_design, per_theta.assignment_idx)                                 # (N, n_design)
+        decision = jnp.concatenate([full_design, aux_opt], axis=-1)          # [design, aux*] when free
+        return (decision,
                 per_theta.objective.reshape(-1, 1),
                 per_theta.success.reshape(-1, 1).astype(bool))
+
+    @staticmethod
+    def _split_aux(free_aux, n_aux, x):
+        """Peel the optimised aux off the tail of the free decision; empty block
+        when the aux is pinned, so the design passes through unchanged."""
+        if free_aux:
+            return x[:, :-n_aux], x[:, -n_aux:]
+        return x, x[:, :0]
+
+    def _split_solution(self, key, x):
+        """Read by evaluate: separate the design columns from the solved aux."""
+        return self._split_aux(self.free_aux[key], self.n_aux[key], x)
 
 
 # ---------------------------------------------------------------------------
