@@ -414,7 +414,20 @@ def train_nn_surrogate_model(cfg: DictConfig, D, model: nn.Module, num_folds: in
 
        
 _OUTPUT_AFS = {'identity': (lambda x: x), 'sigmoid': nn.sigmoid,
-               'relu': nn.relu, 'tanh': nn.tanh}
+               'relu': nn.relu, 'tanh': nn.tanh, 'gelu': nn.gelu}
+
+_HIDDEN_AFS = {'relu': nn.relu, 'sigmoid': nn.sigmoid,
+               'tanh': nn.tanh, 'gelu': nn.gelu}
+
+
+def _resolve_af_name(af):
+    """Validate an activation-function name; raise with the allowed set."""
+    if af not in _HIDDEN_AFS:
+        raise ValueError(
+            f"Unknown activation_function {af!r}; expected one of "
+            f"{sorted(_HIDDEN_AFS.keys())}."
+        )
+    return af
 
 
 class NeuralNetworkEstimator(nn.Module):
@@ -433,32 +446,31 @@ class NeuralNetworkEstimator(nn.Module):
     # ---- External Methods ----
 
     def setup(self):
-        """Construct the Dense layers and activation stack (flax hook)."""
-        self.layers = [nn.Dense(hidden_unit) for hidden_unit in self.hidden_units] + [nn.Dense(self.output_units)]
+        """Construct the Dense layers and activation stack (flax hook).
 
-        self.afs = []
-        for i, af in enumerate(self.activation_functions):
-            if af == 'relu':
-                self.afs += (nn.relu,)
-            elif af == 'sigmoid':
-                self.afs += (nn.sigmoid,)
-            elif af == 'tanh':
-                self.afs += (nn.tanh,)
+        `activation_functions` accepts either a scalar string (broadcast
+        across every hidden layer — lets the hp search mix depths freely)
+        or a per-layer list of strings (length must match
+        `len(hidden_units)`).
+        """
+        self.layers = [nn.Dense(h) for h in self.hidden_units] + [nn.Dense(self.output_units)]
 
-        self.afs += (_OUTPUT_AFS[self.output_activation],)
+        # Broadcast a scalar string to all hidden layers; a list-like is taken as-is.
+        if isinstance(self.activation_functions, str):
+            af_per_layer = [self.activation_functions] * len(self.hidden_units)
+        else:
+            af_per_layer = list(self.activation_functions)
 
-        # one activation per layer (output layer gets an implicit identity)
+        self.afs = tuple(_HIDDEN_AFS[_resolve_af_name(af)] for af in af_per_layer)
+        self.afs = self.afs + (_OUTPUT_AFS[self.output_activation],)
+
         assert len(self.afs) == len(self.layers), (
             f"NeuralNetworkEstimator layer/activation mismatch: "
-            f"len(hidden_units)={len(self.hidden_units)} + 1 output layer "
-            f"= {len(self.layers)} Dense layers, but "
-            f"len(activation_functions)={len(self.activation_functions)} "
-            f"+ 1 output identity = {len(self.afs)} afs.  "
-            f"`activation_functions` must have exactly one entry per "
-            f"hidden layer (it gets implicitly padded with an identity "
-            f"for the output layer).  Fix the yaml — e.g. for "
-            f"hidden_units={self.hidden_units!r} you need "
-            f"activation_functions of length {len(self.hidden_units)}."
+            f"hidden_units={self.hidden_units!r} → {len(self.hidden_units)} hidden layers, "
+            f"but activation_functions={self.activation_functions!r} "
+            f"expanded to {len(af_per_layer)} hidden activations.  "
+            f"Pass a scalar string (broadcast) or a list of length "
+            f"{len(self.hidden_units)}."
         )
 
 

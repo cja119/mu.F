@@ -14,9 +14,11 @@ memory: false
 pcgym_model_class: cstr_ode
 
 # pcgym ENV_PARAMS that are used inside the simulator
-N: 20
-tsim: 26
+N: 40
+tsim: 52
 sp_ca: [0.85, 0.85, 0.85, 0.85, 0.85, 0.85, 0.85, 0.85, 0.85, 0.85,
+        0.85, 0.85, 0.85, 0.85, 0.85, 0.85, 0.85, 0.85, 0.85, 0.85,
+        0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9,
         0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9,]
 
 # Constraint thresholds (path constraints embedded in simulator G block)

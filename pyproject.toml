@@ -46,7 +46,7 @@ cloudpickle = ">=3.1.2"
 dill = ">=0.3.9"
 
 # Case-study dynamics
-pcgym = ">=0.1.6"
+pcgym = "==0.1.6"
 
 # Project package (git)
 septal = {git = "https://github.com/mycelia-i/septal.git", branch = "main"}

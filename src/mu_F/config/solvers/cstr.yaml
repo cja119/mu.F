@@ -2,7 +2,7 @@
 
 decomposition:
   n_starts: 4
-  n_sobol_screen: 256
+  n_sobol_screen: 64        # trimmed for quick exploratory 40-node run
   feasibility_tol: 1.0e-4
   optimality_tol:  1.0e-4
   max_iter: 30

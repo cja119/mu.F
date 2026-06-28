@@ -19,11 +19,14 @@ classifier_args:
   ann:
     hidden_size_options:
       - [100, 100]
+      - [75, 75]
       - [50, 50]
+      - [50, 50, 25]
       - [25, 10]
       - [10, 10]
     activation_functions:
-      - ['tanh', tanh]
+      - 'tanh'
+      - 'gelu'
 
     decaying_lr_and_clip_param: True
     learning_rate: 0.01
@@ -46,11 +49,15 @@ surrogate_forward:
   drop_uncertain_params: False
   ann:
     hidden_size_options:
+      - [100, 100]
+      - [75, 75]
       - [50, 50]
+      - [50, 50, 25]
       - [50, 25]
       - [25, 10]
     activation_functions:
-      - ['tanh', tanh]
+      - 'tanh'
+      - 'gelu'
 
     decaying_lr_and_clip_param: True
     learning_rate: 0.01
@@ -65,11 +72,15 @@ surrogate_forward:
 surrogate_ctg:
   ann:
     hidden_size_options:
+      - [100, 100]
+      - [75, 75]
       - [50, 50]
+      - [50, 50, 25]
       - [50, 25]
       - [25, 10]
     activation_functions:
-      - ['tanh', tanh]
+      - 'tanh'
+      - 'gelu'
 
     decaying_lr_and_clip_param: True
     learning_rate: 0.01
