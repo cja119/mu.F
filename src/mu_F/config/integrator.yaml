@@ -1,12 +1,12 @@
 
 defaults:
-  - case_study: cstr #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator # affine_study  #serial_batch_reactor #tablet_press # convex_estimator # serial_batch_reactor #convex_estimator # serial_batch_reactor # tablet_press #
-  - model: cstr #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator # affine_study  #serial_batch_reactor #tablet_press # convex_estimator # serial_batch_reactor #convex_estimator # serial_batch_reactor #tablet_press #serial_batch_reactor
-  - surrogate: cstr #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator # affine_study  #serial_batch_reactor #tablet_press # convex_estimator # serial_batch_reactor #convex_estimator # serial_batch_reactor #tablet_press #serial_batch_reactor
-  - solvers: cstr #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator # affine_study  #serial_batch_reactor #tablet_press # convex_estimator # serial_batch_reactor #convex_estimator # serial_batch_reactor #tablet_press #serial_batch_reactor
-  - samplers: cstr #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator # affine_study  #serial_batch_reactor #tablet_press # convex_estimator # serial_batch_reactor #convex_estimator # serial_batch_reactor #tablet_press #serial_batch_reactor
-  - reconstruction: cstr #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator # affine_study  #serial_batch_reactor #tablet_press # convex_estimator # serial_batch_reactor #convex_estimator # serial_batch_reactor #tablet_press #serial_batch_reactor
-  - init: cstr #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator # affine_study  #serial_batch_reactor #tablet_press # convex_estimator # serial_batch_reactor #convex_estimator # serial_batch_reactor #tablet_press #serial_batch_reactor
+  - case_study: hydrogen_export #cstr #markov_process #affine_study #serial_batch_reactor #tablet_press # convex_estimator
+  - model: hydrogen_export #cstr
+  - surrogate: hydrogen_export #cstr
+  - solvers: hydrogen_export #cstr
+  - samplers: hydrogen_export #cstr
+  - reconstruction: hydrogen_export #cstr
+  - init: hydrogen_export #cstr
 
 device: cpu        # cpu | gpu — JAX backend
 
@@ -17,7 +17,7 @@ dispatch: vmap     # pmap | vmap | serial — how the per-shard parallelism
                    # XLA-fused; serial = Python for-loop (debug).
 
 formulation: deterministic # probabilistic  # #  #  #
-method: [decomposition, multiple_shooting] #decomposition_constraint_tuner #decomposition #direct # decomposition # # #direct # decomposition_constraint_tuner # direct # decomposition # #decomposition #decomposition # direct #
+method: [decomposition] #[decomposition, multiple_shooting] #decomposition_constraint_tuner #direct #
 max_uncertain_samples: 50
 
 # Global auxiliary handling.  Set to a list (e.g. [0.5]) to pin the aux as a

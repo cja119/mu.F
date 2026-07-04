@@ -310,6 +310,8 @@ class BaseEvaluator(ABC):
         self.max_iter        = int(  self._resolve_knob(cfg, 'max_iter'))
         self.n_sobol_screen  = int(  self._resolve_knob(cfg, 'n_sobol_screen'))
         self.screen_penalty  = float(self._resolve_knob(cfg, 'screen_penalty', default=1000.0))
+        self.integer_backend = str(  self._resolve_knob(cfg, 'integer_backend', default='enumeration'))
+        self.bb_max_nodes    = int(  self._resolve_knob(cfg, 'bb_max_nodes', default=0))
 
         # Deprecation warning for legacy configs that set the standardised flag.
         if bool(getattr(cfg.solvers, "standardised", False)):

@@ -23,8 +23,8 @@ pmap_batch: 100  # samples per pmap/vmap dispatch in evaluate_subproblem_batch
 boundary_expansion: 0.2
 
 ns:
-  n_live: 1000
-  final_sample_live: 1500
+  n_live: 500                # trimmed from 1000 for a faster 24-node diagnostic run
+  final_sample_live: 750     # trimmed proportionally from 1500
   n_replacements: 100
   n_iter: 10000
   f0: 0.1

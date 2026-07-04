@@ -184,6 +184,8 @@ class IntegerNLPSpec:
     sobol_pool: jnp.ndarray
     n_starts: int
     feasibility_tol: float
+    backend: str = 'enumeration'                # 'enumeration' | 'dfs_bb'
+    bb_max_nodes: int = 0                       # dfs_bb: assignment-visit cap (0 = all)
 
     _solve_batched:  Optional[Callable] = field(
         default=None, init=False, repr=False, compare=False,
@@ -272,22 +274,86 @@ class EnumerationBackend:
         return _pick_best(spec, state.f_val, viable, converged, state.x)
 
 
-_DEFAULT_BACKEND = EnumerationBackend()
+class DFSBranchBoundBackend:
+    """Anytime sequential search over integer assignments.
+
+    At this layer the integers live in the parametric tail (not the decision
+    vector), so no hull relaxation exists to bound internal nodes — the search
+    is a screener-ordered depth-one enumeration with incumbent pruning and an
+    optional visit cap (spec.bb_max_nodes).  Its value over EnumerationBackend
+    is memory (one assignment in flight instead of all at once) and early
+    termination on large assignment spaces; the true relaxation-based B&B is
+    the monolithic path (septal_monolithic_bb_solver).  Python-side control
+    flow: NOT vmap/jit-compatible, so batched theta falls back to a host loop.
+
+    """
+
+    # ---- External Methods ----
+
+    def solve(self, spec, y) -> SolveResult:
+        """Read by solve_integer_nlp when spec.backend == 'dfs_bb'."""
+        x0_per_asn = _screen_warmstarts(spec, y)            # (n_asn, n_starts, n_d)
+        p_per_asn  = _augment_p(spec, y)                    # (n_asn, n_p_total)
+        n_asn = int(p_per_asn.shape[0])
+        cap = spec.bb_max_nodes if spec.bb_max_nodes > 0 else n_asn
+
+        lb = spec.continuous_factory.problem.lb
+        ub = spec.continuous_factory.problem.ub
+
+        # Order assignments by their best screener score (cheapest-looking first).
+        if spec.screener is not None:
+            scores = jnp.stack([
+                jnp.min(jax.vmap(spec.screener, in_axes=(0, None))(spec.sobol_pool, p_per_asn[a]))
+                for a in range(n_asn)
+            ])
+            order = [int(i) for i in jnp.argsort(scores)]
+        else:
+            order = list(range(n_asn))
+
+        best = None
+        for count, a in enumerate(order):
+            if count >= cap:
+                break
+            state = spec._solve_batched(x0_per_asn[a:a+1], p_per_asn[a:a+1])
+            in_bounds = jnp.all((state.x >= lb) & (state.x <= ub), axis=-1)
+            viable = (jnp.asarray(state.feasibility) <= spec.feasibility_tol) & in_bounds
+            row = _pick_best(spec, state.f_val, viable, jnp.asarray(state.converged), state.x)
+            row = SolveResult(row.objective, row.success, row.kkt_converged,
+                              row.x, jnp.asarray(a))
+            if bool(row.success) and (best is None or float(row.objective) < float(best.objective)):
+                best = row
+        if best is None:
+            # nothing viable: return the first row so shapes/dtypes stay uniform
+            state = spec._solve_batched(x0_per_asn[0:1], p_per_asn[0:1])
+            in_bounds = jnp.all((state.x >= lb) & (state.x <= ub), axis=-1)
+            viable = (jnp.asarray(state.feasibility) <= spec.feasibility_tol) & in_bounds
+            best = _pick_best(spec, state.f_val, viable, jnp.asarray(state.converged), state.x)
+        return best
+
+
+_BACKENDS = {
+    'enumeration': EnumerationBackend(),
+    'dfs_bb':      DFSBranchBoundBackend(),
+}
+_DEFAULT_BACKEND = _BACKENDS['enumeration']
 
 
 def solve_integer_nlp(spec: IntegerNLPSpec, y,
-                      backend: IntegerBackend = _DEFAULT_BACKEND) -> SolveResult:
+                      backend: Optional[IntegerBackend] = None) -> SolveResult:
     """
     Solve one integer-aware parametric NLP for upstream input y. Theta-blind;
     for batched theta use solve_integer_nlp_batched, which caches the vmap
-    wrapper at module import.
+    wrapper at module import.  Backend resolves from spec.backend unless
+    overridden explicitly.
     """
+    if backend is None:
+        backend = _BACKENDS.get(getattr(spec, 'backend', 'enumeration'), _DEFAULT_BACKEND)
     return backend.solve(spec, y)
 
 
 def _solve_one(spec: IntegerNLPSpec, y) -> SolveResult:
     """Top-level trampoline so the vmap below has a stable function id."""
-    return solve_integer_nlp(spec, y)
+    return solve_integer_nlp(spec, y, backend=_DEFAULT_BACKEND)
 
 
 # jax.jit(static_argnums=(0,)) compiles the batched program once per spec.
@@ -302,8 +368,22 @@ def solve_integer_nlp_batched(spec: IntegerNLPSpec, ys) -> SolveResult:
     Batched solve over the theta axis of ys, shape (n_theta, n_y). spec is
     static and hashed via id(spec) for the pjit cache: one compile per spec,
     later calls hit the cache. Returns a SolveResult with leading n_theta axis.
+
+    'dfs_bb' specs run a host loop over theta rows (Python control flow can't
+    live inside vmap); expect it to be slower for large theta batches —
+    enumeration remains the right default for the decomposition.
     """
-    return _solve_one_batched(spec, ys)
+    if getattr(spec, 'backend', 'enumeration') == 'enumeration':
+        return _solve_one_batched(spec, ys)
+
+    rows = [solve_integer_nlp(spec, ys[i]) for i in range(int(ys.shape[0]))]
+    return SolveResult(
+        objective=jnp.stack([r.objective for r in rows]),
+        success=jnp.stack([r.success for r in rows]),
+        kkt_converged=jnp.stack([r.kkt_converged for r in rows]),
+        x=jnp.stack([r.x for r in rows]),
+        assignment_idx=jnp.stack([r.assignment_idx for r in rows]),
+    )
 
 
 # ---------------------------------------------------------------------------

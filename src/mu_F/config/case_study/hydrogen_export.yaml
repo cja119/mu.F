@@ -67,8 +67,8 @@ parameters_samples: [{'c': [0.02048169, 11.87977224, 0.29061465, 7.13482955, 7.7
 parameters_best_estimate: [8.420454054312653]
 
 extendedDS_bounds:
-  - [0.0, 4.0]              # n_active (control)
-  - [-2143.2, 857.28]        # delta_throughput (control, calorific units)
+  - [-0.25, 4.25]           # n_active (control) — 5% overshoot for boundary supervision
+  - [-2143.2, 857.28]       # delta_throughput (control, calorific units)
   - [-832.0, 18954.2]       # power_action (control; <0 = fuel cell, >0 = electrolyser)
   # Predecessor-state bounds deliberately overshoot the *physically* feasible
   # band on both sides.  DEUS samples joint (action, state) over these boxes;
@@ -77,17 +77,21 @@ extendedDS_bounds:
   # multi-head classifier — so the boundary is learnt from BOTH sides instead
   # of being inferred by smooth extrapolation past the feasible interior.
   - [0.0, 350000.0]         # _storage  (physical [59087, 295435] — widen to expose floor/ceiling)
-  - [0.0, 10000.0]          # _throughput  (physical [0, 8572.8] — widen past 4-train cap)
-  - [0.0, 4.0]              # _n_active  (already covers full integer range)
+  - [-500.0, 10000.0]       # _throughput  (widen below 0 to give the classifier both-sided support at the physical floor)
+  - [-0.25, 4.25]           # _n_active  — negative overshoot mirrors n_active control
 
-edge_clip:
-  - [59087, 295435]    # storage
-  - [0.0, 8572.8]      # throughput (4-train calorific capacity)
-  - [0, 4]             # n_active
+edge_clip: None       # disabled: the soft-clip masks storage-floor infeasibility
+                      # by silently pinning the state, so the classifier can
+                      # never learn that going below 59087 is a real failure.
+# edge_clip:
+#   - [59087, 295435]    # storage
+#   - [0.0, 8572.8]      # throughput (4-train calorific capacity)
+#   - [0, 4]             # n_active
 
 design_space_dimensions:
 - 'u0'
 - 'u1'
+- 'u2'
 
 design_domain:
 - [0, 1, 2, 3, 4]   # n_active (integer — number of active conversion trains; 0 = shutdown)
@@ -102,7 +106,7 @@ global_n_aux_args: 0
 aux_default: []
 # Rollout-time default for the global aux slot (empty: no global aux vars here).
 
-process_space_names: ['u0', 'u1']
+process_space_names: ['u0', 'u1', 'u2']
 
 mode:
   - backward

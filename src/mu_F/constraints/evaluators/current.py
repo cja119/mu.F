@@ -214,6 +214,8 @@ class CurrentConstraintEvaluator(BaseEvaluator):
             sobol_pool         = sobol_pool,
             n_starts           = self.n_starts,
             feasibility_tol    = self.feasibility_tol,
+            backend            = self.integer_backend,
+            bb_max_nodes       = self.bb_max_nodes,
         )
         self.n_design_full[key] = n_design
         self.n_y[key]           = n_y
@@ -238,6 +240,7 @@ class CurrentCostEvaluator(BaseEvaluator):
 
     def __init__(self, cfg, graph, node):
         self.specs: dict          = {}
+        self.fallback_specs: dict = {}   # feasibility-restore sub-problems
         self.n_design_full: dict  = {}
         self.n_y: dict            = {}
         self.free_aux: dict       = {}
@@ -304,7 +307,37 @@ class CurrentCostEvaluator(BaseEvaluator):
             sobol_pool         = sobol_pool,
             n_starts           = self.n_starts,
             feasibility_tol    = self.feasibility_tol,
+            backend            = self.integer_backend,
+            bb_max_nodes       = self.bb_max_nodes,
         )
+
+        # Feasibility-restore fallback: minimise the classifier (i.e. drive
+        # toward the deepest feasible interior) with no inequality constraints.
+        # Runs when the primary CTG solve returns non-viable, so the rollout
+        # never picks a decision the surrogate itself flags as infeasible.
+        def _fallback_objective(x_red, p_aug):
+            return jnp.max(jnp.asarray(constraint(x_red, p_aug)).reshape(-1))
+        fallback_factory = build_factory(
+            _fallback_objective, None, bounds,
+            n_decision=n_d_cont,
+            n_params=n_params,
+            n_constraints=0,
+            feasibility_tol=self.feasibility_tol,
+            optimality_tol=self.optimality_tol,
+            max_iter=self.max_iter,
+        )
+        fallback_screener = build_penalty_screener(_fallback_objective, None, self.screen_penalty)
+        self.fallback_specs[key] = IntegerNLPSpec(
+            integer_problem    = integer_problem,
+            continuous_factory = fallback_factory,
+            screener           = fallback_screener,
+            sobol_pool         = sobol_pool,
+            n_starts           = self.n_starts,
+            feasibility_tol    = self.feasibility_tol,
+            backend            = self.integer_backend,
+            bb_max_nodes       = self.bb_max_nodes,
+        )
+
         self.n_design_full[key] = n_design
         self.n_y[key]           = n_y
         self.free_aux[key]      = free_aux
@@ -356,6 +389,13 @@ class CurrentCostEvaluator(BaseEvaluator):
         Solve the constrained-CTG current-node NLP, returning
         (decision_variables, objective, converged) per the rollout agent's
         contract.  Theta dim is kept explicit (trivially 1 at rollout).
+
+        Feasibility-restore fallback: for any theta where the primary CTG solve
+        is non-viable (surrogate says infeasible), swap in the decision from
+        the fallback SQP that minimises the classifier — the closest-to-feasible
+        point in the design box.  Reported success stays the primary's flag
+        (so downstream still sees "surrogate infeasible") but the emitted
+        decision comes from the restore.
         """
         key = self.node
         if key is None:
@@ -364,24 +404,36 @@ class CurrentCostEvaluator(BaseEvaluator):
                     jnp.zeros((n, 1)),
                     jnp.zeros((n, 1), dtype=bool))
 
-        # Pack the fixed [input, aux] params for the N trajectory states.
         ys = _assemble_ys(inputs, aux, self.n_y[key])                         # (N, n_y)
 
-        per_theta = solve_integer_nlp_batched(self.specs[key], ys)
-        x_design, aux_opt = self._split_solution(key, per_theta.x)            # free aux trails the design
+        primary  = solve_integer_nlp_batched(self.specs[key], ys)
+        fallback = solve_integer_nlp_batched(self.fallback_specs[key], ys)
+
+        use_primary = primary.success                                          # (N,)
+        merged_x = jnp.where(use_primary[:, None], primary.x, fallback.x)
+        merged_assn = jnp.where(use_primary,
+                                 primary.assignment_idx,
+                                 fallback.assignment_idx)
+
+        x_design, aux_opt = self._split_solution(key, merged_x)
         full_design = vmap(
             lambda x, a: splice_design_integers(x, self.specs[key], a, self.n_design_full[key])
-        )(x_design, per_theta.assignment_idx)                                 # (N, n_design)
-        decision = jnp.concatenate([full_design, aux_opt], axis=-1)          # [design, aux*] when free
+        )(x_design, merged_assn)
+        decision = jnp.concatenate([full_design, aux_opt], axis=-1)
         return (decision,
-                per_theta.objective.reshape(-1, 1),
-                per_theta.success.reshape(-1, 1).astype(bool))
+                primary.objective.reshape(-1, 1),
+                primary.success.reshape(-1, 1).astype(bool))
 
     @staticmethod
     def _split_aux(free_aux, n_aux, x):
         """Peel the optimised aux off the tail of the free decision; empty block
-        when the aux is pinned, so the design passes through unchanged."""
-        if free_aux:
+        when the aux is pinned, so the design passes through unchanged.
+
+        Guards against n_aux == 0 because Python reads `:-0` as `:0`
+        (empty prefix), not the full sequence — which would send the entire
+        decision into the aux block.
+        """
+        if free_aux and n_aux > 0:
             return x[:, :-n_aux], x[:, -n_aux:]
         return x, x[:, :0]
 

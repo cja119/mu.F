@@ -40,3 +40,13 @@ monolithic:
   max_iter: 500
   use_exact_hessian: true
   scale_variables: true       # rescale decision vec + defect residuals to [0, 1]
+
+  # Integer handling for the monolithic NLP.  'none' relaxes integer design
+  # dims to their continuous hull (legacy behaviour); 'dfs_bb' runs the DFS
+  # branch-and-bound wrapper (solvers/branch_and_bound.py) around septal —
+  # one compiled SQP serves all B&B nodes via parametric integer bounds.
+  integer_backend: none       # 'none' | 'dfs_bb'
+  dfs_bb:
+    time_budget: 600          # wall-clock seconds
+    max_nodes: 2000           # visited-node cap
+    log_every: 25

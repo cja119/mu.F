@@ -138,6 +138,8 @@ class CTGEvaluator(BaseEvaluator):
             sobol_pool         = sobol_pool,
             n_starts           = self.n_starts,
             feasibility_tol    = self.feasibility_tol,
+            backend            = self.integer_backend,
+            bb_max_nodes       = self.bb_max_nodes,
         )
         self.input_indices[succ] = input_indices
         self.aux_indices[succ]   = aux_indices

@@ -7,28 +7,36 @@ classifier_selection: 'ANN'  # 'SVM' | 'ANN' | 'ellipsoid' — 'ellipsoid'
 regressor_selection: 'ANN'
 probability_map: false
 
-subsample_size: 100000
+subsample_size: 5000      # trimmed from 100000 to limit SVM support-vector count
 num_folds: 2
 
 index_on: 1
+
+# A-posteriori margin calibration: hold out a fraction of training, find
+# the smallest backoff that suppresses 1-eps of the false-positive
+# (admitted-infeasible) margins, add it back to the classifier output at
+# rollout so the SQP lands inside the true feasible region.
+backoff:
+  enabled: true
+  held_out_frac: 0.2
+  epsilon: 0.05
 
 classifier_args:
   standardised: true
   svm:
     kernel: ['rbf']
-    C: [20, 10, 2.5, 1, 0.1]
-    gamma: [0.2, 1, 0.5, 2, 4, 6]
+    C: [0.5, 1, 2]              # trimmed to cap support-vector count
+    gamma: [0.2, 0.5, 1]        # trimmed to keep kernel smooth, fewer SVs
     probability: [False]
   ann:
     hidden_size_options:
-      - [100, 100]
-      - [100, 50]
       - [200, 200]
+      - [100, 100, 50]
+      - [100, 100]
       - [50, 50]
-      - [25, 10]
-      - [10, 10]
     activation_functions:
-      - ['tanh', tanh]
+      - 'gelu'
+      - 'tanh'
 
     decaying_lr_and_clip_param: True
     learning_rate: 0.01
@@ -37,7 +45,7 @@ classifier_args:
     min_delta: 0.000001
     patience: 50
     batch_size: 264
-    weight_decay: 0.0
+    weight_decay: 1.0e-4    # L2 to suppress phantom-feasibility interpolation
 
 
 forward_evaluation_surrogate: false

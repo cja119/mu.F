@@ -43,7 +43,16 @@ parameters_samples: [{'c': [350.0, 1.0], 'w': 1.0}]
 
 parameters_best_estimate: [350.0, 1.0]
 
-extendedDS_bounds: None
+# Hard-set per-node sampling box for DEUS so the backward sweep doesn't
+# rely on init-derived edge bounds.  Order matches the training X columns:
+# [Tc (control), CA (input state), T (input state)].
+# Bounds are wider than the optimal manifold so off-policy rollout states
+# stay inside; T extends past the constraint band to give the multi-head
+# classifier negative samples on both sides of the feasibility frontier.
+extendedDS_bounds:
+  - [290.0, 302.0]   # Tc
+  - [0.78, 0.97]     # CA
+  - [314.0, 332.0]   # T
 
 # Per-state clip applied by `make_cstr_edge` to the F slice that flows
 # between nodes.  One [lo, hi] entry per F-state-dim (F_SIZE=2).

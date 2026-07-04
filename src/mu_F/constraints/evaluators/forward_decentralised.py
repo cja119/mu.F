@@ -279,6 +279,8 @@ class ForwardDecentralisedEvaluator(BaseEvaluator):
             sobol_pool         = sobol_pool,
             n_starts           = self.n_starts,
             feasibility_tol    = self.feasibility_tol,
+            backend            = self.integer_backend,
+            bb_max_nodes       = self.bb_max_nodes,
         )
         self.n_y[key] = n_y_node
 

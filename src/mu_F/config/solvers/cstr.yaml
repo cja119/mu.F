@@ -10,6 +10,6 @@ decomposition:
 monolithic:
   feasibility_tol: 1.0e-4
   optimality_tol:  2.0e-2   # stationarity floor set by the optimize-through-integration gradient bias
-  max_iter: 200
+  max_iter: 50              # trimmed from 200 for a guaranteed-finish 40-node SQP
   use_exact_hessian: true
   scale_variables: true   # rescale decision vector + defect residuals to [0, 1] coords

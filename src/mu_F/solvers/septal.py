@@ -210,14 +210,130 @@ def septal_monolithic_solver(objective, constraints, bounds, initial_guess,
     return _run_logged_sqp(problem, x0, cfg)
 
 
-def _run_logged_sqp(problem, x0, cfg):
+def septal_monolithic_bb_solver(objective, constraints, bounds, initial_guess,
+                                lhs, rhs, config: Optional[SQPConfig] = None,
+                                int_slots=None, int_domains=None,
+                                bb_options=None):
+    """
+    Integer-aware monolithic solve: DFS branch-and-bound over the decision
+    slots in `int_slots` (each restricted to the values in `int_domains`),
+    with septal solving each relaxation.
+
+    The integer box is enforced through 2*n_int parametric inequality rows
+    (x_i - lo_i >= 0, hi_i - x_i >= 0 with (lo, hi) carried in p), so a single
+    compiled SQP step serves every B&B node — branching just re-inits the
+    state with clamped (lo, hi).  Returns septal's native SQPResult for the
+    incumbent, so callers are agnostic to the backend.
+    """
+    from mu_F.solvers.branch_and_bound import BBConfig, dfs_branch_bound
+    import numpy as np
+
+    x0 = jnp.asarray(initial_guess).reshape(-1)
+    n_d = int(x0.size)
+    slots = [int(s) for s in (int_slots or [])]
+    domains = [list(map(float, d)) for d in (int_domains or [])]
+    n_int = len(slots)
+    assert n_int > 0, "septal_monolithic_bb_solver called without integer slots"
+    slot_arr = jnp.asarray(slots, dtype=jnp.int32)
+
+    if isinstance(constraints, (list, tuple)):
+        _cons_list = tuple(constraints)
+        def g_base(x):
+            return jnp.concatenate([jnp.asarray(c(x)).reshape(-1) for c in _cons_list])
+    else:
+        def g_base(x):
+            return jnp.asarray(constraints(x)).reshape(-1)
+
+    def g_aug(x, p):
+        lo, hi = p[:n_int], p[n_int:]
+        xi = x[slot_arr]
+        return jnp.concatenate([g_base(x), xi - lo, hi - xi])
+
+    def f_param(x, p):
+        return jnp.asarray(objective(x)).reshape(())
+
+    lb = jnp.asarray(bounds[0]).reshape(-1)
+    ub = jnp.asarray(bounds[1]).reshape(-1)
+    n_g = int(g_base(x0).shape[0])
+
+    lhs_aug = jnp.concatenate([jnp.asarray(lhs).reshape(-1), jnp.zeros(2 * n_int)])
+    rhs_aug = jnp.concatenate([jnp.asarray(rhs).reshape(-1), jnp.full(2 * n_int, jnp.inf)])
+
+    problem = ParametricNLPProblem(
+        objective=f_param,
+        bounds=[lb, ub],
+        n_decision=n_d,
+        n_params=2 * n_int,
+        constraints=g_aug,
+        constraint_lhs=lhs_aug,
+        constraint_rhs=rhs_aug,
+        n_constraints=n_g + 2 * n_int,
+    )
+    cfg = config if config is not None else DEFAULT_SQP_CONFIG
+    step = jax.jit(make_sqp_step(problem, cfg))
+    dom_lo = np.asarray([min(d) for d in domains])
+    dom_hi = np.asarray([max(d) for d in domains])
+
+    def _solve_relaxation(fixed: dict, warm):
+        lo, hi = dom_lo.copy(), dom_hi.copy()
+        for slot, val in fixed.items():
+            j = slots.index(slot)
+            lo[j] = hi[j] = val
+        p = jnp.asarray(np.concatenate([lo, hi]))
+
+        x_start = jnp.asarray(warm).reshape(-1) if warm is not None else x0
+        x_start = x_start.at[slot_arr].set(
+            jnp.clip(x_start[slot_arr], jnp.asarray(lo), jnp.asarray(hi)))
+
+        state = init_sqp_state(x_start, p, problem, cfg)
+        for _ in range(int(cfg.max_iter)):
+            state, _ = step(state, None)
+            if bool(state.converged):
+                break
+        feasible = bool(state.feasibility <= cfg.tol_feasibility * 10)
+        return (np.asarray(state.x), float(state.f_val),
+                feasible, float(state.feasibility))
+
+    opts = dict(bb_options or {})
+    bb_cfg = BBConfig(
+        time_budget=float(opts.get('time_budget', 600.0)),
+        max_nodes=int(opts.get('max_nodes', 2000)),
+        integrality_tol=float(opts.get('integrality_tol', 1.0e-3)),
+        log_every=int(opts.get('log_every', 25)),
+    )
+    logging.info(f"B&B monolithic solve: n_d={n_d} n_int={n_int} "
+                 f"budget={bb_cfg.time_budget:.0f}s max_nodes={bb_cfg.max_nodes}")
+
+    stats = dfs_branch_bound(_solve_relaxation, slots, domains, np.asarray(x0), bb_cfg)
+
+    if stats.best_x is None:
+        logging.warning("B&B found no feasible incumbent — returning the hull relaxation")
+        fixing = {}
+        warm = np.asarray(x0)
+    else:
+        fixing = stats.best_fixing
+        warm = stats.best_x
+
+    # Final logged solve at the incumbent fixing produces the returned SQPResult.
+    lo, hi = dom_lo.copy(), dom_hi.copy()
+    for slot, val in fixing.items():
+        j = slots.index(slot)
+        lo[j] = hi[j] = val
+    p_final = jnp.asarray(np.concatenate([lo, hi]))
+    x_start = jnp.asarray(warm).reshape(-1)
+    x_start = x_start.at[slot_arr].set(
+        jnp.clip(x_start[slot_arr], jnp.asarray(lo), jnp.asarray(hi)))
+    return _run_logged_sqp(problem, x_start, cfg, p=p_final)
+
+
+def _run_logged_sqp(problem, x0, cfg, p=None):
     """
     Drive septal's SQP step on the host so each iteration's KKT residuals are
     logged and the loop exits the instant it converges (the scan solver always
     runs every iteration). The compiled step is identical to factory.solve's.
     """
     step = jax.jit(make_sqp_step(problem, cfg))
-    state = init_sqp_state(x0, jnp.zeros(0), problem, cfg)
+    state = init_sqp_state(x0, jnp.zeros(0) if p is None else p, problem, cfg)
     lb, ub = problem.bounds
     logging.info(f"SQP start: n_d={problem.n_decision} n_g={problem.n_constraints} "
                  f"max_iter={cfg.max_iter} tol_stat={cfg.tol_stationarity:.1e} "

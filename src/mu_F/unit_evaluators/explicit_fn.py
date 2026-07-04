@@ -823,6 +823,11 @@ def _make_hydrogen_export_step(cfg: DictConfig):
     # Smoothness for the fuel-cell / electrolyser split (softplus β).
     split_beta = float(cfg.model.get('smooth_beta_power_split', 20.0))
 
+    # Per-node renewable-energy override: forced step profile (max for the
+    # first 12 nodes, zero for the next 12) — shorter diurnal day/night test.
+    # When set, this replaces the stochastic z passed in by the rollout.
+    renewable_schedule = jnp.asarray([11.88] * 12 + [0.0] * 12)
+
     @jit
     def _step(x: jnp.ndarray, u: jnp.ndarray, z: jnp.ndarray, node):
         x = jnp.ravel(x)
@@ -831,8 +836,9 @@ def _make_hydrogen_export_step(cfg: DictConfig):
 
         _storage, _throughput, _n_active, = x
         n_active, delta_throughput, power_action = u
-        # Weather realisation (0..11.88) sampled per scenario, passed via p.
-        renewable_energy = jnp.ravel(z)[0]
+        # Renewable forced from the per-node schedule above; the upstream z is
+        # ignored in this test so we can drive a deterministic day/night cycle.
+        renewable_energy = jnp.take(renewable_schedule, node)
 
         fuel_cell_energy    = _softplus(-power_action, beta=split_beta)
         electrolysis_energy = _softplus( power_action, beta=split_beta)

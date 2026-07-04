@@ -115,7 +115,14 @@ def resolve_aux_override(cfg):
 
 def aux_optimised_at_root(cfg, graph, node):
     """True when the global aux is a free decision (no override) and this is the
-    root node — the single place it is solved before being carried forward."""
+    root node — the single place it is solved before being carried forward.
+
+    Returns False when there is no aux to optimise (`n_aux_args == 0`), so
+    case studies without a global aux block don't masquerade as free-aux
+    problems downstream.
+    """
+    if int(graph.graph.get('n_aux_args', 0)) == 0:
+        return False
     return resolve_aux_override(cfg) is None and graph.in_degree(node) == 0
 
 

@@ -33,12 +33,22 @@ class MultipleShooting(SolveDirect):
         """
         Solve the problem with the loaded solver and return septal's
         native SQPResult unchanged.
+
+        With cfg.solvers.integer_backend == 'dfs_bb' and integer design dims
+        declared in design_domain, dispatches to the branch-and-bound wrapper;
+        the default plain SQP relaxes integers to their continuous hull.
         """
         from dataclasses import replace as dc_replace
+        from functools import partial
 
         problem_data = self._prepare_model(self.G)
         solver = self._load_solver()
         x0 = self._initial_point(problem_data)
+
+        int_slots, int_domains = self._integer_slots()
+        use_bb = (str(getattr(self.cfg.solvers, "integer_backend", "none")) == "dfs_bb"
+                  and len(int_slots) > 0)
+        bb_opts = getattr(self.cfg.solvers, "dfs_bb", None)
 
         if bool(getattr(self.cfg.solvers, "scale_variables", False)):
             s_obj, s_cons, s_bounds, s_x0, s_lhs, s_rhs, to_real = scale_problem(
@@ -46,6 +56,18 @@ class MultipleShooting(SolveDirect):
                 problem_data["var_bounds"], x0,
                 problem_data["eq_lhs"], problem_data["eq_rhs"],
             )
+            if use_bb:
+                # Integer values are in real units; map them into scaled coords.
+                lb = jnp.asarray(problem_data["var_bounds"][0]).reshape(-1)
+                ub = jnp.asarray(problem_data["var_bounds"][1]).reshape(-1)
+                scaled_domains = [
+                    [(v - float(lb[s])) / (float(ub[s]) - float(lb[s])) for v in dom]
+                    for s, dom in zip(int_slots, int_domains)
+                ]
+                from mu_F.solvers.septal import septal_monolithic_bb_solver
+                solver = partial(septal_monolithic_bb_solver,
+                                 int_slots=int_slots, int_domains=scaled_domains,
+                                 bb_options=bb_opts)
             result = solver(
                 s_obj, s_cons, s_bounds, s_x0, s_lhs, s_rhs,
                 config=self._monolithic_sqp_config(),
@@ -55,6 +77,11 @@ class MultipleShooting(SolveDirect):
                 decision_variables=to_real(jnp.asarray(result.decision_variables)),
             )
         else:
+            if use_bb:
+                from mu_F.solvers.septal import septal_monolithic_bb_solver
+                solver = partial(septal_monolithic_bb_solver,
+                                 int_slots=int_slots, int_domains=int_domains,
+                                 bb_options=bb_opts)
             result = solver(
                 problem_data["objective_fn"],
                 problem_data["constraints"],
@@ -66,6 +93,28 @@ class MultipleShooting(SolveDirect):
             )
         self._log_outputs(result)
         return result
+
+    def _integer_slots(self):
+        """
+        Map the per-node design_domain template onto the monolithic decision
+        vector [aux | des_0..des_n | inp_...], returning (slot indices, value
+        domains) for every integer design dim across all nodes.
+        """
+        from mu_F.solvers.mixed_integer import resolve_integer_spec
+
+        int_dims, int_values = resolve_integer_spec(
+            self.cfg.case_study.get('design_domain', None))
+        if not int_dims:
+            return [], []
+
+        slots, domains = [], []
+        des_curr = self.G.graph["n_aux_args"]
+        for node in nx.topological_sort(self.G):
+            for dim, values in zip(int_dims, int_values):
+                slots.append(int(des_curr + dim))
+                domains.append(list(values))
+            des_curr += self.G.nodes[node]["n_design_args"]
+        return slots, domains
 
     # ---- Private Methods ----
 

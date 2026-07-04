@@ -89,7 +89,7 @@ surrogate_ctg:
     min_delta: 0.00001
     patience: 50
     batch_size: 264
-    weight_decay: 0.0
+    weight_decay: 1.0e-4   # L2 regularisation to suppress phantom basins between training points
 
 # Training-data augmentation around the converged feasibles. Opt-in per
 # case study; legacy fallback to cfg.samplers.ns.n_anneal still applies
