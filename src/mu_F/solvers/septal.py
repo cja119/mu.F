@@ -299,12 +299,16 @@ def septal_monolithic_bb_solver(objective, constraints, bounds, initial_guess,
         time_budget=float(opts.get('time_budget', 600.0)),
         max_nodes=int(opts.get('max_nodes', 2000)),
         integrality_tol=float(opts.get('integrality_tol', 1.0e-3)),
+        bound_slack=float(opts.get('bound_slack', 0.0)),
         log_every=int(opts.get('log_every', 25)),
     )
+    seed_fixing = _seed_leaf(x0, slots, domains) if opts.get('seed_incumbent', False) else None
     logging.info(f"B&B monolithic solve: n_d={n_d} n_int={n_int} "
-                 f"budget={bb_cfg.time_budget:.0f}s max_nodes={bb_cfg.max_nodes}")
+                 f"budget={bb_cfg.time_budget:.0f}s max_nodes={bb_cfg.max_nodes} "
+                 f"seed_leaf={'on' if seed_fixing else 'off'}")
 
-    stats = dfs_branch_bound(_solve_relaxation, slots, domains, np.asarray(x0), bb_cfg)
+    stats = dfs_branch_bound(_solve_relaxation, slots, domains, np.asarray(x0), bb_cfg,
+                             seed_fixing=seed_fixing)
 
     if stats.best_x is None:
         logging.warning("B&B found no feasible incumbent — returning the hull relaxation")
@@ -324,6 +328,14 @@ def septal_monolithic_bb_solver(objective, constraints, bounds, initial_guess,
     x_start = x_start.at[slot_arr].set(
         jnp.clip(x_start[slot_arr], jnp.asarray(lo), jnp.asarray(hi)))
     return _run_logged_sqp(problem, x_start, cfg, p=p_final)
+
+
+def _seed_leaf(x0, slots, domains) -> dict:
+    """Snap the warm start's integer slots onto their nearest allowed values, so
+    the assignment it already carries (e.g. the decomposition's) can be solved as
+    a leaf and seed the incumbent.  Read by septal_monolithic_bb_solver."""
+    return {slot: min(domains[j], key=lambda c: abs(c - float(x0[slot])))
+            for j, slot in enumerate(slots)}
 
 
 def _run_logged_sqp(problem, x0, cfg, p=None):

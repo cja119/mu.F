@@ -18,16 +18,21 @@ adjacency_matrix: None
 
 n_design_args: 1
 
-n_aux_args:
-  node_0: 1
-  (0,1): 1
-
-global_n_aux_args: 1
-
-# Global aux = T, the feed-start time as a fraction of the horizon (eq 1i).  With
-# aux_override null the decomposition rollout solves it at the root node and
-# carries it forward; the monolithic/shooting use this default and aux_override pins it.
-aux_default: [0.1]
+# One entry per aux slot; every node carries the whole block (the Markov
+# template).  Order is positional: the model reads aux[i] for slot i.
+#   global_var   -- edge-coupled, optimised at node 0
+#   global_param -- edge-coupled, set before evaluation
+#   local_param  -- per-node, never coupled, set before evaluation
+#
+# T = the feed-start time as a fraction of the horizon (eq 1i).  As a global_var
+# the decomposition rollout solves it at the root and carries it forward;
+# aux_override still pins it.  global_n_aux_args / aux_var_type / aux_default and
+# the KS aux bounds are all derived from this block.
+aux:
+  - name: T
+    type: global_var
+    bounds: [0.0, 0.97]
+    default: 0.1
 
 n_input_args: 6
 
@@ -47,16 +52,13 @@ sizes:
 
 KS_bounds:
   design_args:
-  # N_Fed = influent (feedstock) nitrate concentration, optimised in log (ln) space
-  # so the surrogate resolves the 1e3-1e5 feed window (the step exp's it back to mg/L).
-  - - 0.0
-    - 12.21
+  # N_Fed = influent (feedstock) nitrate concentration, optimised in linear space
+  # (feed_log_space: false) so the H₂-gate cliff stays resolvable; range matches the
+  # former ln window [0, 12.21] -> [exp(0), exp(12.21)].
+  - - 1.0
+    - 200787.0
 
-  # T (feed-start time as a fraction of the horizon); < 1 so F_in stays finite.
-  # Node-count agnostic: no need to retune when num_nodes changes.
-  aux_args:
-  - - - 0.0
-      - 0.97
+  aux_args: []     # derived from the `aux` block
 
 
 parameters_samples: [{'c': [0.0], 'w': 1.0}]

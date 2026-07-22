@@ -69,10 +69,12 @@ class CTGEvaluator(BaseEvaluator):
             [n_d_succ + inp for inp in self.graph.edges[self.node, succ]['input_indices']],
             dtype=int,
         )
-        aux_indices = np.array(
-            [n_d_succ + idx for idx in self.graph.edges[self.node, succ]['auxiliary_indices']],
-            dtype=int,
-        )
+        # Pin the successor's whole aux block, not just what this edge couples: an
+        # uncoupled local_param has no edge seat but is still given, not chosen.
+        n_in_succ = int(self.graph.nodes[succ]['n_input_args'])
+        n_aux     = int(self.graph.graph['n_aux_args'])
+        aux_indices = np.arange(n_d_succ + n_in_succ,
+                                n_d_succ + n_in_succ + n_aux).astype(int)
         fix_indices = np.hstack([input_indices, aux_indices]).astype(int)
         ndim = (
             n_d_succ

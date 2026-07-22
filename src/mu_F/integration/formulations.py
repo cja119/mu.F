@@ -68,7 +68,7 @@ def _replicate_over_scenarios(g, n_theta) -> ConstraintScen:
 
 
 def bellman_target(ctx, keep, ctg_value, weights, gamma, node):
-    """θ-averaged `node_cost + γ·CTG_down` over the kept (feasible) designs.
+    """θ-averaged `node_cost + γ·CTG_down` over the kept designs.
     Shared by both formulations; they differ only in how `keep` is chosen."""
     node_cost = ctx.node_cost[keep]
     n_theta = node_cost.shape[1]
@@ -230,7 +230,7 @@ class DeterministicFormulation(Formulation):
 
     def downstream(self, ctx: EvalContext) -> EvalContext:
         """
-        Output-side backward coupling, then the CTG over the feasible designs.
+        Output-side backward coupling, then the CTG over the recoverable designs.
         """
         if self.backward is not None and self.graph.out_degree(self.node) > 0:
             t = time.time()
@@ -239,9 +239,9 @@ class DeterministicFormulation(Formulation):
             ctx.downstream = evals   # already (N, S, G) out of the backward pmap — no broadcast needed
         else:
             ctx.downstream = None
-        # CTG over the feasible designs (shared bellman); gate = ApplyFeasibility.
+        # CTG over the recoverable designs (shared bellman); gate = successor only.
         if ctx.node_cost is not None:
-            keep = self._feasible(ctx, self._concat(ctx))
+            keep = self._recoverable(ctx)
             ctx.keep = keep
             ctx.ctg = (bellman_target(ctx, keep, self.ctg_value, self.weights, self.gamma, self.node)
                        if keep.size > 0 else None)
@@ -270,6 +270,17 @@ class DeterministicFormulation(Formulation):
         """
         return jnp.concatenate(
             [c for c in (ctx.process, ctx.upstream, ctx.downstream) if c is not None], axis=-1)
+
+    def _recoverable(self, ctx: EvalContext):
+        """
+        Designs whose successor still admits a feasible decision, so their
+        cost-to-go is defined. Gates on the successor coupling alone: the CTG is a
+        property of the resulting state, so this node's own process feasibility
+        must not enter it (that would price two boundaries into one surrogate).
+        """
+        if ctx.downstream is None:
+            return jnp.arange(ctx.outputs.shape[0])       # terminal: nothing to recover from
+        return self._feasible(ctx, ctx.downstream)
 
     def _feasible(self, ctx: EvalContext, cons):
         """

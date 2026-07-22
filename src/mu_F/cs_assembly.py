@@ -4,6 +4,7 @@ from itertools import chain
 import jax.numpy as jnp
 import numpy as np
 import pandas as pd
+from omegaconf import open_dict
 
 
 from mu_F.unit_evaluators.constructor import UnitEvaluation, PostProcessEvaluation
@@ -18,10 +19,45 @@ from mu_F.unit_evaluators.utils import arrhenius_kinetics_fn, arrhenius_kinetics
 from mu_F.visualisation.visualiser import Visualiser
 
 
+def resolve_aux_block(cfg):
+    """
+    Derive every aux quantity from the single `aux` block, so the block is the
+    only place an auxiliary is declared.  Each entry is one slot of the per-node
+    aux vector; every node carries the whole block, so this is already the Markov
+    template and needs no tiling.  A case study without an `aux` key is untouched.
+    """
+    specs = cfg.case_study.get('aux', None)
+    if specs is None:
+        return cfg
+
+    types = [str(s['type']) for s in specs]
+    unknown = set(types) - {'global_var', 'global_param', 'local_param'}
+    if unknown:
+        raise ValueError(f"Unknown aux type(s): {sorted(unknown)}")
+
+    coupled = [i for i, t in enumerate(types) if t.startswith('global')]
+
+    with open_dict(cfg.case_study):          # these keys are derived, not authored
+        cfg.case_study.global_n_aux_args = len(specs)
+        cfg.case_study.aux_var_type      = types
+        cfg.case_study.aux_default       = [float(s['default']) for s in specs]
+        cfg.case_study.KS_bounds.aux_args = [[list(s['bounds'])] for s in specs]
+        cfg.case_study.n_aux_args = {'node_0': list(range(len(specs))), '(0,1)': coupled}
+
+    # The aux slots are the tail of the DEUS sampling box, so their bounds come
+    # from the block rather than being restated (and left to drift) alongside it.
+    ext = cfg.case_study.get('extendedDS_bounds', None)
+    if ext not in (None, 'None'):
+        with open_dict(cfg.case_study):
+            cfg.case_study.extendedDS_bounds = list(ext) + [list(s['bounds']) for s in specs]
+    return cfg
+
+
 def case_study_constructor(cfg):
     """
     Build and return the assembled case-study graph from the config.
     """
+    cfg = resolve_aux_block(cfg)
     constraint_dictionary = CS_holder[cfg.case_study.case_study]
     cost_dictionary = COST_holder[cfg.case_study.case_study] if cfg.case_study.eval_cost else None
 

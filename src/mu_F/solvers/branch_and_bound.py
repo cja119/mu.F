@@ -22,6 +22,9 @@ class BBConfig:
     max_nodes: int        = 2000     # visited-node cap
     integrality_tol: float = 1.0e-3  # |x - round(x)| below this counts as integral
     prune_tol: float      = 1.0e-6   # bound-prune margin against the incumbent
+    bound_slack: float    = 0.0      # fraction of |incumbent| a node may be worse by
+                                     # and still be explored; a local NLP value is not
+                                     # a valid bound, so 0 prunes good subtrees
     log_every: int        = 25       # progress line every N visited nodes
 
 
@@ -46,27 +49,49 @@ def dfs_branch_bound(
     int_domains: Sequence[Sequence[float]],
     warm_start: Optional[np.ndarray],
     bb_cfg: BBConfig,
+    seed_fixing: Optional[dict] = None,
 ) -> BBStats:
     """
-    DFS over the integer slots in order.  `solve_relaxation(fixed, warm)` must
-    return (x, objective, feasible, infeas_measure) with the un-fixed slots
-    relaxed to their domain hull.  Branch values are ordered by proximity to
-    the relaxation's value at the branching slot; children warm-start from the
-    parent's solution.  A relaxation whose free slots all come back integral is
-    accepted as an incumbent immediately (round-and-accept shortcut).
+    DFS over the integer slots.  `solve_relaxation(fixed, warm)` must return
+    (x, objective, feasible, infeas_measure) with the un-fixed slots relaxed to
+    their domain hull.  The branching slot is the most-fractional free one and
+    its values are ordered by proximity to the relaxation; children warm-start
+    from the parent's solution.  A relaxation whose free slots all come back
+    integral is accepted as an incumbent immediately (round-and-accept shortcut).
+
+    `seed_fixing` (slot -> value, all integer slots) is solved first as a leaf,
+    so a known-good assignment becomes the incumbent before the search starts
+    and bound-pruning is live from the first branch.  A root warm start alone
+    cannot do this: the root relaxes the very integers the seed carries.
     """
     stats = BBStats()
     slots = list(int_slots)
     domains = [list(d) for d in int_domains]
+    dom_of = {slot: domains[j] for j, slot in enumerate(slots)}
 
-    def _all_integral(x, depth) -> bool:
-        for j in range(depth, len(slots)):
-            v = float(x[slots[j]])
-            if min(abs(v - c) for c in domains[j]) > bb_cfg.integrality_tol:
-                return False
-        return True
+    def _distance_to_domain(x, slot) -> float:
+        """How un-integral this slot's relaxed value is, in domain units."""
+        v = float(x[slot])
+        return min(abs(v - c) for c in dom_of[slot])
+
+    def _all_integral(x, free) -> bool:
+        return all(_distance_to_domain(x, s) <= bb_cfg.integrality_tol for s in free)
+
+    def _prune_threshold() -> float:
+        """Objective a node must be worse than to be discarded. The relaxation is a
+        local NLP value, not a valid bound, so bound_slack buys back subtrees a
+        strict comparison would wrongly cut."""
+        best = stats.best_objective
+        if not np.isfinite(best):
+            return best
+        return best + abs(best) * bb_cfg.bound_slack - bb_cfg.prune_tol
 
     def _register_incumbent(x, obj, fixed):
+        """Keep only improvements: with bound_slack > 0 a node worse than the
+        incumbent can survive the prune and reach here, and an unguarded write
+        would ratchet best_objective the wrong way."""
+        if obj >= stats.best_objective:
+            return
         stats.best_objective = obj
         stats.best_fixing = dict(fixed)
         stats.best_x = np.asarray(x).copy()
@@ -89,7 +114,7 @@ def dfs_branch_bound(
         if not feasible:
             stats.pruned_infeasible += 1
             return
-        if obj >= stats.best_objective - bb_cfg.prune_tol:
+        if obj >= _prune_threshold():
             stats.pruned_bound += 1
             return
 
@@ -100,23 +125,35 @@ def dfs_branch_bound(
                 f"LB={obj:.4f} best={stats.best_objective:.4f}"
             )
 
-        if depth == len(slots) or _all_integral(x, depth):
+        free = [s for s in slots if s not in fixed]
+        if not free or _all_integral(x, free):
             # leaf, or the relaxation landed integral on all free slots
             full_fixing = dict(fixed)
-            for j in range(depth, len(slots)):
-                v = float(x[slots[j]])
-                full_fixing[slots[j]] = min(domains[j], key=lambda c: abs(c - v))
+            for s in free:
+                v = float(x[s])
+                full_fixing[s] = min(dom_of[s], key=lambda c: abs(c - v))
             _register_incumbent(x, obj, full_fixing)
             return
 
-        slot = slots[depth]
+        # most-fractional branching: split the decision the relaxation is least
+        # sure of, rather than walking the slots in index order
+        slot = max(free, key=lambda s: _distance_to_domain(x, s))
         branch_val = float(x[slot])
-        for cand in sorted(domains[depth], key=lambda c: abs(c - branch_val)):
+        for cand in sorted(dom_of[slot], key=lambda c: abs(c - branch_val)):
             child = dict(fixed)
             child[slot] = float(cand)
             _recurse(child, x)
             if stats.elapsed() > bb_cfg.time_budget or stats.nodes_visited >= bb_cfg.max_nodes:
                 return
+
+    if seed_fixing:
+        stats.nodes_visited += 1
+        x_s, obj_s, feasible_s, infeas_s = solve_relaxation(seed_fixing, warm_start)
+        if feasible_s:
+            _register_incumbent(x_s, obj_s, seed_fixing)
+        else:
+            logging.info(f"B&B seed leaf infeasible (infeas={infeas_s:.2e}); "
+                         f"searching without a seeded incumbent.")
 
     _recurse({}, warm_start)
 

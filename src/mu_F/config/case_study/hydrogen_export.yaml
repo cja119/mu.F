@@ -6,7 +6,7 @@ vmap_evaluations: True
 
 eval_cost: True
 
-num_nodes: 24
+num_nodes: 12
 
 adjacency_matrix: None
 

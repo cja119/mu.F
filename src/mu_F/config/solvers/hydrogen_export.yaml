@@ -45,8 +45,14 @@ monolithic:
   # dims to their continuous hull (legacy behaviour); 'dfs_bb' runs the DFS
   # branch-and-bound wrapper (solvers/branch_and_bound.py) around septal —
   # one compiled SQP serves all B&B nodes via parametric integer bounds.
-  integer_backend: none       # 'none' | 'dfs_bb'
+  integer_backend: dfs_bb     # 'none' | 'dfs_bb'
   dfs_bb:
-    time_budget: 600          # wall-clock seconds
+    time_budget: 3600         # wall-clock seconds
     max_nodes: 2000           # visited-node cap
     log_every: 25
+    seed_incumbent: true      # solve the warm start's own integer assignment as a
+                              # leaf first, so its objective bounds the search from
+                              # node 1 (a root warm start relaxes those integers away)
+    bound_slack: 0.05         # explore nodes up to 5% worse than the incumbent: the
+                              # relaxation is a local NLP value, not a valid bound,
+                              # so a strict prune discards good subtrees

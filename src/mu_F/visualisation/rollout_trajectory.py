@@ -114,10 +114,18 @@ def _load_trajectories(cfg, graph, run_dir):
 def _simulate_policy(graph, cfg, x0, per_node_decisions, n_nodes, aux=()):
     """Apply a fixed policy through the same rollout chain the orchestrator uses —
     forward model -> edge_fn coupling -> node_cost — so the trajectory matches the
-    real dynamics instead of a bespoke re-simulation."""
-    from mu_F.integration.model import SubproblemModel
+    real dynamics instead of a bespoke re-simulation.
 
-    aux_arr = jnp.asarray(aux, dtype=float).reshape(1, -1) if np.size(aux) else None
+    A saved aux is a single value for the whole chain, so it only stands in for a
+    carried global_var; a parametrisation varies per node and is left to the
+    rollout to resolve from aux_evaluation.
+    """
+    from mu_F.integration.model import SubproblemModel
+    from mu_F.samplers.utils import aux_var_types
+
+    carried = any(t == 'global_var' for t in aux_var_types(cfg))
+    aux_arr = (jnp.asarray(aux, dtype=float).reshape(1, -1)
+               if carried and np.size(aux) else None)
     node_input = jnp.asarray(x0, dtype=float).reshape(1, 1, -1)
     decisions, states, constraints, costs = [], [], [], []
 

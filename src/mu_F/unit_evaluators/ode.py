@@ -131,6 +131,23 @@ def reactor_network_5(t: float, state: jnp.ndarray, parameters: jnp.ndarray):
     return jnp.array([dCi, dCj, dCk, dCl, dCb, dCm, dCn])
 
 
+# ---------------------------------------------------------------------------
+# Parameter-row layout — one definition, shared by every field below
+# ---------------------------------------------------------------------------
+
+def _param_slices(cfg):
+    """Static slices into the params row `unit_dynamics` builds:
+    [design | decision_dependent | aux | uncertainty].  Resolved at factory time,
+    so the traced body only ever slices with Python ints."""
+    u = int(cfg.case_study.sizes.U_SIZE)
+    d = 0                     # make_markov studies emit an empty decision-dependent block
+    a = int(cfg.case_study.get('global_n_aux_args', 0))
+    z = int(cfg.case_study.sizes.Z_SIZE)
+    return (slice(0, u),
+            slice(u + d, u + d + a),
+            slice(u + d + a, u + d + a + z))
+
+
 def cstr_ode(cfg):
     """Factory: returns a diffrax-shaped ODE term for the cstr case study.
 
@@ -138,16 +155,18 @@ def cstr_ode(cfg):
     and dispatches the underlying step through `_make_cstr_step` (defined
     alongside the steady-state factory in unit_evaluators/explicit_fn.py),
     which closes over cfg-resolved constants and JIT-compiles the inner body.
+    The aux slot carries the per-node tracking setpoint.
     """
     from mu_F.unit_evaluators.explicit_fn import _make_cstr_step
     X_size = int(cfg.case_study.sizes.X_SIZE)
-    U_size = int(cfg.case_study.sizes.U_SIZE)
+    u_sl, aux_sl, _ = _param_slices(cfg)
     step = _make_cstr_step(cfg)
 
     def cstr_ode_fn(t: float, state: jnp.ndarray, parameters: jnp.ndarray, node=None):
-        x = state[..., :X_size]
-        u = parameters[..., :U_size]
-        return step(x, u, node)
+        x   = state[..., :X_size]
+        u   = parameters[..., u_sl]
+        aux = parameters[..., aux_sl]
+        return step(x, u, aux, node)
 
     return cstr_ode_fn
 
@@ -165,16 +184,14 @@ def waste_water_ode(cfg):
     """
     from mu_F.unit_evaluators.explicit_fn import _make_waste_water_step
     X_size = int(cfg.case_study.sizes.X_SIZE)
-    U_size = int(cfg.case_study.sizes.U_SIZE)
-    Z_size = int(cfg.case_study.sizes.Z_SIZE)
-    A_size = int(cfg.case_study.global_n_aux_args)
+    u_sl, aux_sl, z_sl = _param_slices(cfg)
     step = _make_waste_water_step(cfg)
 
     def waste_water_ode_fn(t: float, state: jnp.ndarray, parameters: jnp.ndarray, node=None):
         x   = state[..., :X_size]
-        u   = parameters[..., :U_size]
-        aux = parameters[..., U_size:U_size + A_size]
-        z   = parameters[..., U_size + A_size:U_size + A_size + Z_size]
+        u   = parameters[..., u_sl]
+        aux = parameters[..., aux_sl]
+        z   = parameters[..., z_sl]
         return step(x, u, aux, z, node)
 
     return waste_water_ode_fn
@@ -188,21 +205,14 @@ def biohydrogen_ode(cfg):
     """
     from mu_F.unit_evaluators.explicit_fn import _make_biohydrogen_step
     X_size = int(cfg.case_study.sizes.X_SIZE)
-    U_size = int(cfg.case_study.sizes.U_SIZE)
-    Z_size = int(cfg.case_study.sizes.Z_SIZE)
-    AUX_size = int(cfg.case_study.get('global_n_aux_args', 0))
+    u_sl, aux_sl, z_sl = _param_slices(cfg)
     step = _make_biohydrogen_step(cfg)
 
-    # unit_dynamics packs params as [design | decision_dependent | aux | uncertainty].
-    # biohydrogen has decision_dependent_size = 0, so aux sits at U_size+Z_size.
-    aux_lo = U_size + Z_size
-    aux_hi = aux_lo + AUX_size
-
     def biohydrogen_ode_fn(t: float, state: jnp.ndarray, parameters: jnp.ndarray, node=None):
-        x = state[..., :X_size]
-        u = parameters[..., :U_size]
-        z = parameters[..., U_size:U_size + Z_size]
-        aux = parameters[..., aux_lo:aux_hi]
+        x   = state[..., :X_size]
+        u   = parameters[..., u_sl]
+        z   = parameters[..., z_sl]
+        aux = parameters[..., aux_sl]
         return step(x, u, z, aux, node)
 
     return biohydrogen_ode_fn

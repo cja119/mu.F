@@ -12,18 +12,32 @@ import networkx as nx
 # Model construction
 # ---------------------------------------------------------------------------
 
+def _pin_aux_block(var_bounds, n_aux, values):
+    """Collapse the leading aux block to `values`; read by MultipleShooting when
+    the aux is given per node, so its now-unread slot is not a free null
+    direction the exact-Hessian SQP would have to resolve."""
+    lb = jnp.asarray(var_bounds[0]).reshape(-1).at[:n_aux].set(jnp.asarray(values)[:n_aux])
+    ub = jnp.asarray(var_bounds[1]).reshape(-1).at[:n_aux].set(jnp.asarray(values)[:n_aux])
+    return [lb, ub]
+
+
 def evaluate_node(node_fn, inp_slice_or_fn, des_slice, aux_slice, uncer):
     """
     Wrap a node forward evaluation, slicing design/aux/input args out
-    of the flat decision vector before calling it.
+    of the flat decision vector before calling it.  `aux_slice` is a (start, len)
+    slice when the aux is decided; pass this node's values instead when it is a
+    parametrisation, which the one shared aux block cannot carry per node.
     """
     des_0, des_len = des_slice
-    aux_0, aux_len = aux_slice
+    aux_is_slice = isinstance(aux_slice, tuple)
+    if aux_is_slice:
+        aux_0, aux_len = aux_slice
     inp_0, inp_len = inp_slice_or_fn if isinstance(inp_slice_or_fn, tuple) else (0, 0)
 
     def node_eval(ctrl):
         des = _slice_1d(ctrl, des_0, des_len).reshape(1, -1)   # (N=1, U)
-        aux = _slice_1d(ctrl, aux_0, aux_len).reshape(1, -1)   # (N=1, A)
+        aux = (_slice_1d(ctrl, aux_0, aux_len).reshape(1, -1) if aux_is_slice
+               else jnp.reshape(jnp.asarray(aux_slice), (1, -1)))   # (N=1, A)
         unc = jnp.reshape(uncer, (1, -1))                      # (S=1, Z)
         if isinstance(inp_slice_or_fn, tuple):
             ins = _to_rank3(_slice_1d(ctrl, inp_0, inp_len))   # (N=1, S=1, F)
@@ -395,9 +409,14 @@ def _chainwide_coupling_box(graph):
     n = edges[0][1]
     n_inp = int(graph.nodes[n]["n_input_args"])
 
+    # extendedDS is [design | input | aux]; slice the input block by position
+    # rather than off the end, which the aux tail would otherwise shift.
     ext = graph.nodes[n].get("extendedDS_bounds", None)
     if ext not in (None, "None"):
-        return np.asarray(ext[0]).reshape(-1)[-n_inp:], np.asarray(ext[1]).reshape(-1)[-n_inp:]
+        n_des = int(graph.nodes[n]["n_design_args"])
+        lo = np.asarray(ext[0]).reshape(-1)[n_des:n_des + n_inp]
+        hi = np.asarray(ext[1]).reshape(-1)[n_des:n_des + n_inp]
+        return lo, hi
 
     with_bounds = [e for e in edges if "input_data_bounds" in graph.edges[e]]
     if with_bounds:
@@ -461,11 +480,19 @@ def forward_rollout_guess(cfg, graph, var_bounds, seed=None):
     forward from the root under the `seed` controls (mid-box by default) so each
     node's real output seeds the next node's shooting state, leaving the defects
     near zero.  Only aux/design slots of `seed` are read; inputs come from the roll.
+
+    The roll must read the aux exactly as the objective does, or the defects it
+    is meant to zero are wrong from the start: a parametrisation is taken per node
+    from aux_evaluation, not from the shared aux slot.
     """
+    from mu_F.samplers.utils import aux_var_types, evaluation_aux_values
+
     lb = jnp.asarray(var_bounds[0]).reshape(-1)
     ub = jnp.asarray(var_bounds[1]).reshape(-1)
     base = initial_guess(var_bounds) if seed is None else jnp.asarray(seed).reshape(-1)
-    aux = base[:graph.graph["n_aux_args"]].reshape(1, -1)
+    n_aux = graph.graph["n_aux_args"]
+    aux_given = n_aux > 0 and not any(t == 'global_var' for t in aux_var_types(cfg))
+    aux = base[:n_aux].reshape(1, -1)
 
     total_des = sum(graph.nodes[n]["n_design_args"] for n in graph.nodes)
     des_curr, inp_curr = graph.graph["n_aux_args"], graph.graph["n_aux_args"] + total_des
@@ -476,6 +503,8 @@ def forward_rollout_guess(cfg, graph, var_bounds, seed=None):
         des = _slice_1d(base, des_curr, n_des).reshape(1, -1)
         des_curr += n_des
         unc = jnp.reshape(jnp.asarray(graph.nodes[node]["parameters_best_estimate"]), (1, -1))
+        if aux_given:
+            aux = jnp.asarray(evaluation_aux_values(cfg, node)).reshape(1, -1)
 
         if graph.in_degree(node) == 0:
             ins = _to_rank3(jnp.asarray(cfg.model.root_node_inputs[node]))

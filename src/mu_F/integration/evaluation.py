@@ -10,7 +10,8 @@ from jax.random import PRNGKey, choice
 
 from mu_F.constraints.constructor import ConstraintEvaluator
 from mu_F.unit_evaluators.constructor import SubproblemUnitWrapper
-from mu_F.samplers.utils import aux_optimised_at_root, resolve_aux_override
+from mu_F.samplers.utils import (aux_optimised_at_root, resolve_aux_override,
+                                 evaluation_aux_values)
 
 from mu_F.integration.context import EvalContext, TrainingStore
 from mu_F.integration.formulations import make_formulation, _p_target
@@ -112,10 +113,13 @@ class RolloutEvaluator:
         return outputs, n_cost, decision, feasible, p_cons, aux
 
     def _fixed_aux(self, n):
-        """Pinned aux tiled over the N trajectories: aux_override, else the
-        case-study default, else empty (used when the aux is not solved here)."""
-        base = resolve_aux_override(self.cfg) or list(self.cfg.case_study.get('aux_default', []) or [])
-        if not base:
+        """Given aux for this node, tiled over the N trajectories: aux_override
+        wins, else `aux_evaluation` resolves each slot, else its default.  Used
+        wherever the aux is read rather than solved."""
+        base = resolve_aux_override(self.cfg)
+        if base is None:
+            base = evaluation_aux_values(self.cfg, self.node)
+        if not len(base):
             return jnp.empty((n, 0))
         return jnp.tile(jnp.asarray(base, dtype=jnp.float32).reshape(1, -1), (n, 1))
 

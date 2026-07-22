@@ -10,7 +10,8 @@ import contextlib
 
 from mu_F.surrogate.augmentation import augment_training_data
 from mu_F.samplers.constructor import ConstructDeusProblem
-from mu_F.samplers.utils import create_problem_description_deus, resolve_aux_override
+from mu_F.samplers.utils import (create_problem_description_deus, resolve_aux_override,
+                                 aux_var_types)
 from deus import DEUS
 from mu_F.utils import save_graph
 
@@ -152,9 +153,12 @@ class ApplyDecomposition:
         feasible = jnp.ones(n, dtype=bool)
         node_input = self._rollout_seed(nodes[0], n)
 
-        override = resolve_aux_override(cfg)         # None -> root solves the aux, then carry it
+        # Only a solved global_var is carried from the root; a parametrisation is
+        # re-resolved at every node, so aux_evaluation can vary along the horizon.
+        carries_aux = (resolve_aux_override(cfg) is None
+                       and any(t == 'global_var' for t in aux_var_types(cfg)))
         carried_aux = None
-        root_aux = None
+        aux_trace = []
 
         steps = []
         for node in nodes:
@@ -166,12 +170,11 @@ class ApplyDecomposition:
 
             state_in = ('root' if node_input is None
                         else np.round(np.asarray(node_input[0]).reshape(-1), 2).tolist())
-            aux_in = carried_aux if (override is None and self.graph.in_degree(node) > 0) else None
+            aux_in = carried_aux if (carries_aux and self.graph.in_degree(node) > 0) else None
             outputs, n_cost, decision, node_feasible, p_cons, aux_used = model.rollout(
                 node_input, aux=aux_in, key=fold_in(key, int(node)), n_samples=n)
-            if self.graph.in_degree(node) == 0:
-                root_aux = aux_used                   # the aux used at the root (solved or pinned)
-            if override is None and self.graph.in_degree(node) == 0:
+            aux_trace.append(np.asarray(aux_used[0]).reshape(-1) if aux_used.size else np.zeros(0))
+            if carries_aux and self.graph.in_degree(node) == 0:
                 carried_aux = aux_used
                 logging.info(f"Rollout root node {node} optimised aux="
                              f"{np.round(np.asarray(aux_used[0]).reshape(-1), 4).tolist()} (carried forward)")
@@ -188,7 +191,7 @@ class ApplyDecomposition:
             logging.info(f"Rollout through node {node}: mean cost-so-far {float(jnp.mean(cost)):.4g}, "
                          f"feasible paths {int(jnp.sum(feasible))}/{n}")
 
-        self._save_rollout_trajectories(steps, root_aux)
+        self._save_rollout_trajectories(steps, aux_trace)
         self._rollout_summary(cost, feasible, n)
         return self.graph
 
@@ -216,21 +219,22 @@ class ApplyDecomposition:
         return {'state': state, 'decision': np.asarray(decision),
                 'constraint': np.asarray(p_cons[:, 0, :]), 'cost': np.asarray(n_cost).reshape(-1)}
 
-    def _save_rollout_trajectories(self, steps, root_aux=None):
+    def _save_rollout_trajectories(self, steps, aux_trace=None):
         """Stack the per-node steps into (N, n_nodes, .) tensors and save for the
-        trajectory plot and the monolithic's decomposition warm start."""
+        trajectory plot and the monolithic's decomposition warm start.  aux is the
+        per-node trace, so a local_param's schedule is recoverable alongside it."""
         for key in ('state', 'decision', 'constraint'):
             if len({step[key].shape[1] for step in steps}) > 1:
                 logging.info("Rollout trajectories not saved: per-node variable dimensions differ.")
                 return
-        aux = np.zeros(0) if root_aux is None else np.asarray(root_aux).reshape(-1)
+        aux = np.zeros((0, 0)) if not aux_trace else np.stack(aux_trace, axis=0)
         np.savez(
             f'rollout_trajectories_iterate_{self.iterate}.npz',
             states=np.stack([step['state'] for step in steps], axis=1),            # (N, n_nodes, F_SIZE)
             decisions=np.stack([step['decision'] for step in steps], axis=1),      # (N, n_nodes, n_design)
             constraints=np.stack([step['constraint'] for step in steps], axis=1),  # (N, n_nodes, n_g)
             costs=np.stack([step['cost'] for step in steps], axis=1),              # (N, n_nodes)
-            aux=aux,                                                               # solved global aux (n_aux,)
+            aux=aux,                                                               # (n_nodes, n_aux)
         )
         logging.info("Saved %d rollout trajectories over %d nodes.", steps[0]['cost'].shape[0], len(steps))
 

@@ -548,8 +548,9 @@ def _make_cstr_step(cfg: DictConfig):
 
     t_lower = float(cfg.model.t_lower)
     t_upper = float(cfg.model.t_upper)
-    sp_ca = jnp.asarray(list(cfg.model.sp_ca))
     penalty = str(cfg.model.get('tracking_penalty', 'smooth_log'))
+    move_weight = float(cfg.model.get('move_penalty', 0.0))     # lambda on (Tc_k - Tc_{k-1})^2
+    move_gain = float(cfg.model.get('move_gain', 40.0)) / float(cfg.model.integration.tf)
 
     # Smoothness for the constraint-violation softmax (beta -> inf recovers the hard max).
     beta = _resolve_beta(cfg, 'softmax_beta', 50.0)
@@ -558,33 +559,43 @@ def _make_cstr_step(cfg: DictConfig):
     model = getattr(mod, str(cfg.model.pcgym_model_class))(int_method="jax")
 
     @jit
-    def _step(x: jnp.ndarray, u: jnp.ndarray, node):
+    def _step(x: jnp.ndarray, u: jnp.ndarray, aux: jnp.ndarray, node):
         x = jnp.ravel(x)
         u = jnp.ravel(u)
-        dxdt = model(x, u).squeeze()
+        aux = jnp.ravel(aux)
+        dxdt = model(x[:2], u).squeeze()          # pcgym field takes the physical states only
+
+        # x[2] carries the previous node's coolant, so the move penalty is a
+        # function of the state; it relaxes onto this node's control, and leaves
+        # the node holding it for the next one.
+        dtc = jnp.atleast_1d(move_gain * (u[0] - x[2]))
 
         g_lower = jnp.atleast_1d((t_lower - x[1]) / t_upper)
         g_upper = jnp.atleast_1d((x[1] - t_upper) / t_upper)
 
         dgdt = -_softplus_centred(jnp.array([g_lower, g_upper]), beta)
-        e = jnp.take(sp_ca, node) - x[0]
-        rwd = (e * e) if penalty == 'quadratic' else _smooth_log(jnp.abs(e))
+        # aux[0] is this node's tracking setpoint: the policy is parameterised in it
+        e = aux[0] - x[0]
+        track = (e * e) if penalty == 'quadratic' else _smooth_log(jnp.abs(e))
+        # the 2*gain factor makes this integrate to exactly move_weight*(u - Tc_prev)^2
+        move = 2.0 * move_gain * move_weight * (u[0] - x[2]) ** 2
+        rwd = jnp.atleast_1d(track + move)
 
-        return jnp.concatenate([jnp.ravel(dxdt), jnp.ravel(dgdt), jnp.ravel(rwd)], axis=0)
+        return jnp.concatenate([jnp.ravel(dxdt), dtc, jnp.ravel(dgdt), rwd], axis=0)
 
     return _step
 
 
 def cstr_simulator(cfg: DictConfig):
     """
-    Factory for the CSTR steady-state simulator (unit_op == 'steady_state').
-    The step returns the bundled tensor [F | G | R]: state derivatives,
-    lower / upper temperature path constraints and the setpoint stage cost.
+    Factory for cstr used when unit_op == 'steady_state'.
+    The real workflow is dynamic and routes through ode.cstr_ode; this entry
+    exists for symmetry with the other dynamic case studies.
     """
     step = _make_cstr_step(cfg)
 
     def cstr_simulator_fn(cfg_unused: DictConfig, design_args, input_args, aux, uncertainties, node):
-        return step(input_args, design_args, node)
+        return step(input_args, design_args, aux, node)
 
     return cstr_simulator_fn
 
@@ -824,9 +835,9 @@ def _make_hydrogen_export_step(cfg: DictConfig):
     split_beta = float(cfg.model.get('smooth_beta_power_split', 20.0))
 
     # Per-node renewable-energy override: forced step profile (max for the
-    # first 12 nodes, zero for the next 12) — shorter diurnal day/night test.
+    # first 6 nodes, zero for the next 6) — 6 h full / 6 h no-power day/night test.
     # When set, this replaces the stochastic z passed in by the rollout.
-    renewable_schedule = jnp.asarray([11.88] * 12 + [0.0] * 12)
+    renewable_schedule = jnp.asarray([11.88] * 6 + [0.0] * 6)
 
     @jit
     def _step(x: jnp.ndarray, u: jnp.ndarray, z: jnp.ndarray, node):
@@ -934,6 +945,7 @@ def _make_biohydrogen_step(cfg: DictConfig):
     T_SWITCH_BETA = float(cfg.model.get('t_switch_beta', 2.0))
     SWITCH_SMOOTH = _resolve_beta(cfg, 'switch_smooth', 0.1)   # f(N)/f(O) smoothing (paper 0.1; softer for the gradient-based monolithic)
     REWARD_SCALE = float(cfg.model.get('reward_scale', 1.0))
+    FEED_LOG = bool(cfg.model.get('feed_log_space', True))   # design is ln(N_Fed); False optimises N_Fed directly
 
     @jit
     def _step(x: jnp.ndarray, u: jnp.ndarray, z: jnp.ndarray, aux: jnp.ndarray, node):
@@ -943,7 +955,7 @@ def _make_biohydrogen_step(cfg: DictConfig):
         # z is unused — biohydrogen has Z_SIZE = 0.
 
         X, C, N, q, O, H = x[0], x[1], x[2], x[3], x[4], x[5]
-        N_Fed = jnp.exp(u[0])                    # daily nitrate influent; design optimised in log space
+        N_Fed = jnp.exp(u[0]) if FEED_LOG else u[0]   # daily nitrate influent (linear keeps the gate cliff resolvable)
         T_frac = aux[0]                           # switch time as a fraction of the horizon
 
         # Influent flow fixes the total feed F_TOTAL over [T, horizon] (eq 1i);

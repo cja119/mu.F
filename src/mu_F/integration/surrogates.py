@@ -162,6 +162,9 @@ def cluster_classifier_construction(cfg, graph, node, iterate):
         logging.warning(f"Cluster classifier: no classifier_training data on node {node}")
         return
 
+    held_out = _hold_out_batch(cfg, graph, node)        # None unless the backoff is on
+    ds = graph.nodes[node]['classifier_training']
+
     X = np.asarray(ds.X)
     if X.ndim > 2:
         X = X.squeeze()
@@ -172,6 +175,7 @@ def cluster_classifier_construction(cfg, graph, node, iterate):
 
     if X_feas.shape[0] < 2:
         logging.warning(f"Cluster classifier: too few feasible points at node {node}")
+        _restore_full_training(graph, node, held_out)
         return
 
     from mu_F.surrogate.augmentation import xmeans_cluster_indices
@@ -183,6 +187,7 @@ def cluster_classifier_construction(cfg, graph, node, iterate):
             f"Cluster classifier: x-means K={n_clusters} on classifier_training "
             f"at node {node} — using single-head classifier."
         )
+        _restore_full_training(graph, node, held_out)   # single-head path re-splits itself
         classifier_construction(cfg, graph, node, iterate)
         return
     cluster_labels = np.empty(X_feas.shape[0], dtype=int)
@@ -202,3 +207,47 @@ def cluster_classifier_construction(cfg, graph, node, iterate):
     graph.nodes[node]['cluster_classifier_head']    = head_callable
     graph.nodes[node]['cluster_classifier_n_heads'] = n_clusters
     logging.info(f"Cluster classifier: trained {n_clusters}-head ANN at node {node}")
+
+    if held_out is not None:
+        graph.nodes[node]['constraint_backoff'] = _calibrate_backoff_multihead(
+            cfg, graph, node, held_out)
+        graph.nodes[node]['classifier_training'] = held_out['full']
+
+
+def _restore_full_training(graph, node, held_out):
+    """Undo the hold-out split on early exits so no samples are lost.
+    Read by cluster_classifier_construction."""
+    if held_out is not None:
+        graph.nodes[node]['classifier_training'] = held_out['full']
+
+
+def _calibrate_backoff_multihead(cfg, graph, node, held_out):
+    """Per-head a-posteriori backoff: for each head, the smallest margin that
+    excludes all but a fraction epsilon of the held-out infeasible points that
+    head still admits. Read by cluster_classifier_construction."""
+    eps = float(cfg.surrogate.backoff.get('epsilon', 0.05))
+    head = graph.nodes[node]['cluster_classifier_head']
+
+    if cfg.samplers.notion_of_feasibility == 'positive':
+        infeasible = np.asarray(jnp.min(held_out['y'], axis=1) < 0).reshape(-1)
+    else:
+        infeasible = np.asarray(jnp.max(held_out['y'], axis=1) > 0).reshape(-1)
+
+    X = jnp.asarray(held_out['X'])
+    if X.ndim > 2:
+        X = X.squeeze()
+    margins = np.asarray(jax.vmap(head)(X))                          # (n_hold, K)
+
+    backoffs = []
+    for k in range(margins.shape[1]):
+        fp = margins[infeasible & (margins[:, k] <= 0), k]           # head-k admitted infeasibles
+        backoffs.append(float(max(0.0, -np.quantile(fp, eps))) if fp.size else 0.0)
+
+    # feasible points still admitted by some head under the per-head backoffs
+    tightened = margins + np.asarray(backoffs)[None, :]
+    kept = (float(np.mean(np.min(tightened[~infeasible], axis=1) <= 0.0))
+            if (~infeasible).any() else 1.0)
+    logging.info(f"Node {node}: held-out per-head backoff "
+                 f"{np.round(backoffs, 3).tolist()} (eps={eps}, "
+                 f"feasible region kept {kept:.1%})")
+    return jnp.asarray(backoffs)

@@ -4,7 +4,7 @@ import networkx as nx
 import hydra
 import logging
 import jax.numpy as jnp
-from jax.random import PRNGKey, choice
+from jax.random import PRNGKey, choice, uniform
 
 
 def _phases_setup_block(cfg: DictConfig, n_live, n_replacements):
@@ -113,16 +113,74 @@ def resolve_aux_override(cfg):
     return None if v in (None, 'None') else list(v)
 
 
+def evaluation_aux_values(cfg, node):
+    """The aux vector this node is evaluated at, one entry per slot of the block.
+
+    Each slot is resolved from `aux_evaluation` by name — `fixed` (one value
+    everywhere), `schedule` (inclusive node ranges) or `random` (drawn from the
+    slot's declared bounds) — falling back to its declared default.  Shared by
+    the rollout and the monolithic, hence 'evaluation' rather than 'rollout'.
+    """
+    specs = cfg.case_study.get('aux', None)
+    if not specs:
+        return list(cfg.case_study.get('aux_default', []) or [])
+
+    plan = cfg.get('aux_evaluation', None) or {}
+    return [_resolve_aux_slot(s, plan.get(str(s['name']), None), node) for s in specs]
+
+
+def _resolve_aux_slot(spec, entry, node):
+    """One slot's value at this node; `entry` is its aux_evaluation stanza."""
+    if entry is None:
+        return float(spec['default'])
+
+    mode = str(entry.get('mode', 'fixed'))
+    if mode == 'fixed':
+        return float(entry['value'])
+    if mode == 'random':
+        lo, hi = (float(b) for b in spec['bounds'])
+        seed = int(entry.get('seed', 0))
+        # node in the key so a local_param draws independently at each node
+        u = float(uniform(PRNGKey(seed * 1000 + int(node))))
+        return lo + u * (hi - lo)
+    if mode == 'schedule':
+        for seg in entry['segments']:
+            lo_n, hi_n = (int(v) for v in seg['nodes'])
+            if lo_n <= int(node) <= hi_n:
+                return float(seg['value'])
+        return float(spec['default'])
+    raise ValueError(f"Unknown aux_evaluation mode {mode!r} for slot {spec['name']!r}")
+
+
+def aux_var_types(cfg):
+    """Per-slot aux types, or an all-`global_var` block for case studies still on
+    the legacy `global_n_aux_args` declaration.  Read by the aux resolvers."""
+    types = cfg.case_study.get('aux_var_type', None)
+    if types:
+        return [str(t) for t in types]
+    return ['global_var'] * int(cfg.case_study.get('global_n_aux_args', 0))
+
+
 def aux_optimised_at_root(cfg, graph, node):
-    """True when the global aux is a free decision (no override) and this is the
+    """True when the aux block is a free decision (no override) and this is the
     root node — the single place it is solved before being carried forward.
 
-    Returns False when there is no aux to optimise (`n_aux_args == 0`), so
-    case studies without a global aux block don't masquerade as free-aux
-    problems downstream.
+    Only `global_var` slots are optimised; parametrisations are given.  The block
+    is freed as a whole, so a mixed block would wrongly free its parametrisations
+    too and is rejected rather than silently mis-solved.
     """
     if int(graph.graph.get('n_aux_args', 0)) == 0:
         return False
+
+    types = aux_var_types(cfg)
+    if not any(t == 'global_var' for t in types):
+        return False
+    if not all(t == 'global_var' for t in types):
+        raise NotImplementedError(
+            "Mixed aux block: the recovery frees the aux block as a whole, so a "
+            "global_var cannot yet share it with a parametrisation. Types: "
+            f"{types}"
+        )
     return resolve_aux_override(cfg) is None and graph.in_degree(node) == 0
 
 

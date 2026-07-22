@@ -9,6 +9,7 @@ import networkx as nx
 from mu_F.direct.base import SolveDirect
 from mu_F.solvers.septal import septal_monolithic_solver
 from mu_F.direct.utils import *
+from mu_F.direct.utils import _pin_aux_block   # underscore: not picked up by the star import
 
 
 class MultipleShooting(SolveDirect):
@@ -147,9 +148,12 @@ class MultipleShooting(SolveDirect):
         inp_idx_map = {}
         inp_fn_map = {}
 
-        # Slicing for the global aux args
+        # Slicing for the global aux args.  A parametrisation is given, not
+        # decided, and varies per node, so it bypasses the shared aux block.
+        from mu_F.samplers.utils import aux_var_types, evaluation_aux_values
         n_aux = graph.graph["n_aux_args"]
         aux_slice = 0, n_aux
+        aux_given = n_aux > 0 and not any(t == 'global_var' for t in aux_var_types(self.cfg))
 
         # Variable layout: [aux | des_0, ..., des_n | inp_0, ..., inp_n]
         total_des = sum(graph.nodes[node]["n_design_args"] for node in graph.nodes)
@@ -182,7 +186,9 @@ class MultipleShooting(SolveDirect):
             # Building the node evaluation function
             node_fn = graph.nodes[node]["forward_evaluator"].evaluate
             uncer = jnp.array(graph.nodes[node]["parameters_best_estimate"])
-            composed_eval[node] = evaluate_node(node_fn, input_fn_or_slice, des_slice, aux_slice, uncer)
+            aux_arg = (jnp.asarray(evaluation_aux_values(self.cfg, node)) if aux_given
+                       else aux_slice)
+            composed_eval[node] = evaluate_node(node_fn, input_fn_or_slice, des_slice, aux_arg, uncer)
 
             # ------- Constraint Functions -------
             cons = list(graph.nodes[node]["constraints"].copy())
@@ -218,6 +224,10 @@ class MultipleShooting(SolveDirect):
         problem_data["objective_fn"] = make_objective(rewards)
         problem_data["constraints"] = constraints + eql_cons
         problem_data["var_bounds"] = get_bounds_ms(self.cfg, graph, total_inp)
+        if aux_given:
+            problem_data["var_bounds"] = _pin_aux_block(
+                problem_data["var_bounds"], n_aux,
+                evaluation_aux_values(self.cfg, next(iter(nx.topological_sort(graph)))))
         problem_data["eq_rhs"] = jnp.concatenate([jnp.inf * jnp.ones((n_g, 1)), jnp.zeros((n_e, 1))], axis=0)
         problem_data["eq_lhs"] = jnp.zeros((n_g+n_e, 1))
         problem_data["num_vars"] = curr_idx

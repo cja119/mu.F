@@ -1,5 +1,6 @@
 root_node_inputs:
-  - [0.8, 330.0]
+  - [0.8, 330.0, 296.0]   # [Ca, T, Tc_prev]; the root has no predecessor, so its
+                          # 'previous' coolant is the mid-box value
 
 constraint:
   auxiliary: 'None'
@@ -28,6 +29,14 @@ t_upper: 331.0
 # Setpoint-tracking penalty: 'smooth_log' keeps a steep gradient at the optimum for the
 # nested sampler; 'quadratic' is smooth there so the monolithic SQP can certify KKT.
 tracking_penalty: smooth_log
+
+# Control-move penalty: lambda*(Tc_k - Tc_{k-1})^2 added to the stage cost.  The
+# cost-to-go is nearly flat in Tc (~1-3% across the whole box, below the
+# surrogate's own fit error), so the rollout chatters between near-indifferent
+# controls; this gives the CTG real curvature in the action.  move_gain sets how
+# fast the Tc state relaxes onto the applied control within a node (x tf).
+move_penalty: 0.01
+move_gain: 40.0
 
 # Disturbance bounds (for Z, currently not injected in simulator but kept for symmetry)
 disturbance_keys: ['Ti', 'Caf']

@@ -21,9 +21,17 @@ index_on: 1
 classifier_args:
   standardised: true
   svm:
+    type: NuSVC          # SVC | NuSVC. NuSVC's nu ~ SV fraction, so it caps the
+                         # decision function the backward sweep vmaps; in 8D plain
+                         # SVC gave ~4000 SVs (compile-hang risk) and 848 phantom-
+                         # feasible points.
     kernel: ['rbf']
-    C: [20, 10, 2.5, 1, 0.1]
-    gamma: [0.2, 1, 0.5, 2, 4, 6]
+    nu: [0.02, 0.05, 0.1, 0.2]     # target SV fraction (~0.02n .. 0.2n support vectors)
+    C: [20, 10, 2.5, 1, 0.1]       # SVC only (ignored when type: NuSVC)
+    gamma: [0.2, 0.5, 1, 2]
+    infeasible_weight: 5.0   # >1 pushes the boundary toward feasibility: a phantom-
+                             # feasible admission costs this much more than a rejected
+                             # feasible. 1.0 = neutral.
     probability: [False]
   ann:
     hidden_size_options:

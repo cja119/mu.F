@@ -91,17 +91,31 @@ def compute_best_svm_classifier(
     Grid-search an SVM classifier over the configured kernel parameters and
     report cross-validation performance.
     """
-    # build classification model
+    # build classification model.  NuSVC parameterises the SV budget directly
+    # (nu lower-bounds the SV fraction), so it caps the decision function the
+    # backward sweep vmaps — plain SVC only controls it indirectly via C/gamma.
     x_r = sum(labels) / labels.shape[0]
-    clf = Pipeline([("scaler", StandardScaler()), ("svc", svm.SVC(cache_size=2000))])
-    parameters = [
-        {
-            "svc__kernel": cfg.surrogate.classifier_args.svm.kernel,
-            "svc__C": cfg.surrogate.classifier_args.svm.C,
-            "svc__gamma": cfg.surrogate.classifier_args.svm.gamma,
-            "svc__probability": cfg.surrogate.classifier_args.svm.probability,
-        }
-    ]
+    svm_cfg = cfg.surrogate.classifier_args.svm
+    use_nu = str(svm_cfg.get('type', 'SVC')) == 'NuSVC'
+
+    # Bias the boundary toward feasibility: weight the infeasible class (+1) so a
+    # misclassified infeasible point (a phantom-feasible admission) costs more,
+    # trading rejected-feasibles for fewer false positives.
+    w = float(svm_cfg.get('infeasible_weight', 1.0))
+    y_vals = jnp.asarray(labels).squeeze()
+    class_weight = ({int(c): (w if c > 0 else 1.0) for c in jnp.unique(y_vals).tolist()}
+                    if w != 1.0 else None)
+
+    estimator = (svm.NuSVC(cache_size=2000, class_weight=class_weight) if use_nu
+                 else svm.SVC(cache_size=2000, class_weight=class_weight))
+    clf = Pipeline([("scaler", StandardScaler()), ("svc", estimator)])
+    grid = {
+        "svc__kernel": svm_cfg.kernel,
+        "svc__gamma": svm_cfg.gamma,
+        "svc__probability": svm_cfg.probability,
+    }
+    grid["svc__nu" if use_nu else "svc__C"] = svm_cfg.nu if use_nu else svm_cfg.C
+    parameters = [grid]
     n_jobs = int(getattr(cfg, 'max_devices', 1))
     if data_points.ndim > 2:
         data_points = data_points.squeeze()
@@ -125,7 +139,10 @@ def compute_best_svm_classifier(
     support_vectors = model.best_estimator_["svc"].support_vectors_
     accuracy = model.score(data_points, labels)
     tn, fp, fn, tp = confusion_matrix(model.predict(data_points), labels).ravel()
-    training_performance = {"acc": accuracy, "tn": tn, "fp": fp, "fn": fn, "tp": tp}
+    # n_sv is what the backward sweep pays for; fp is the phantom-feasibility count
+    training_performance = {"acc": accuracy, "tn": tn, "fp": fp, "fn": fn, "tp": tp,
+                            "n_sv": int(support_vectors.shape[0]),
+                            "params": model.best_params_}
 
     logging.info(f"training_performance: {training_performance}")
 

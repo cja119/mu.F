@@ -116,14 +116,9 @@ class GraphConstructor(GraphConstructorBase):
                 ]
                 n_d += self.G.edges[predec, node]["n_input_args"]
 
-            mode = self.cfg.model.constraint.auxiliary
-            if mode == 'global':
-                self._wire_global_aux(node, n_d)
-            elif mode in (None, 'None'):
-                for pred in self.G.predecessors(node):
-                    self.G.edges[pred, node]["auxiliary_indices"] = []
-            else:
-                raise ValueError(f"Invalid auxiliary variable structure: {mode!r}")
+            # Coupling is per-slot: an edge carries only the global_* aux ids, so
+            # a block of local_param leaves aux_ids empty and wires to no seats.
+            self._wire_global_aux(node, n_d)
 
         return
     
@@ -155,15 +150,13 @@ class GraphConstructor(GraphConstructorBase):
         endpoint does not carry.
         """
         n_global = int(self.cfg.case_study.global_n_aux_args)
-        global_mode = self.cfg.model.constraint.auxiliary == 'global'
         for (pred, node) in self.G.edges:
             edge_ids = self.G.edges[pred, node]["aux_ids"]
             self._check_aux_ids(edge_ids, n_global, f"edge ({pred}, {node})")
-            if global_mode:
-                self._check_endpoints_carry(
-                    edge_ids, self.G.nodes[pred]["aux_ids"], self.G.nodes[node]["aux_ids"],
-                    f"edge ({pred}, {node})",
-                )
+            self._check_endpoints_carry(
+                edge_ids, self.G.nodes[pred]["aux_ids"], self.G.nodes[node]["aux_ids"],
+                f"edge ({pred}, {node})",
+            )
         for node in self.G.nodes:
             self._check_aux_ids(self.G.nodes[node]["aux_ids"], n_global, f"node {node}")
 

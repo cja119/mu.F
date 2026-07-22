@@ -39,6 +39,11 @@ c_min: 0.0         # mmol/L glycerol floor (carbon source non-negative, as the p
 n_switch: 100.0    # mg/L H₂-production threshold (eq 1g f(N); eq 1h gates on O)
 t_switch_beta: 2.0 # feed-start gate steepness in node units (~1-node transition)
 
+# Feed parameterisation: False optimises N_Fed directly so the H₂-gate cliff stays
+# resolvable to the CTG surrogate (log space crushed it against the bound). Pairs
+# with the linear design_args bound in case_study/biohydrogen.yaml.
+feed_log_space: false
+
 # Reward scaling: normalises the path/terminal H₂ reward so the monolithic
 # objective is O(1) (the raw objective ~ -2.7e4, dominated by the H accumulator).
 reward_scale: 1.0e4

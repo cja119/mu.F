@@ -17,13 +17,23 @@ dispatch: vmap     # pmap | vmap | serial — how the per-shard parallelism
                    # XLA-fused; serial = Python for-loop (debug).
 
 formulation: deterministic # probabilistic  # #  #  #
-method: [decomposition] #[decomposition, multiple_shooting] #decomposition_constraint_tuner #direct #
+method: [decomposition, multiple_shooting] #decomposition_constraint_tuner #direct #
 max_uncertain_samples: 50
 
 # Global auxiliary handling.  Set to a list (e.g. [0.5]) to pin the aux as a
 # fixed operating parameter; leave null to make it a free decision in the root
 # node's recovery NLP, whose solved value is carried through the rollout.
 aux_override: null
+
+# Values the aux parametrisations are evaluated at, keyed by the slot's name in
+# the case study's `aux` block.  Read by both the rollout and multiple shooting,
+# hence 'evaluation'.  global_var slots are absent: they are optimised.
+#   mode: fixed     -> value at every node
+#   mode: schedule  -> segments of inclusive node ranges
+#   mode: random    -> drawn from the slot's declared bounds (per node for a
+#                      local_param; once for a global_param)
+# A slot with no entry falls back to its declared default.
+aux_evaluation: null
 
 log_level: INFO
 
