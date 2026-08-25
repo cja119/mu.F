@@ -152,7 +152,7 @@ class SubproblemUnitWrapper(UnitEvaluation):
         if uncertain_params is None:
             uncertain_params = jnp.empty((1,1))
         
-        design_args, input_args, aux_args = self.get_auxilliary_input_decision_split(decisions)
+        design_args, input_args, aux_args, theta_args = self.get_auxilliary_input_decision_split(decisions)
         
         # if no inputs to the unit, use the root node inputs or add empty array
         if input_args.shape[1] == 0: 
@@ -167,6 +167,10 @@ class SubproblemUnitWrapper(UnitEvaluation):
             else:
                 aux_args = jnp.empty((design_args.shape[0], 0))
             
+        # theta riding the design space is per-row, not a shared scenario
+        if theta_args.shape[1] > 0:
+            return self.evaluate_diagonal(design_args, input_args, aux_args, theta_args)
+
         input_args = _spread(input_args, uncertain_params.shape[0])
 
         return self.evaluate(design_args, input_args, aux_args, uncertain_params)
@@ -177,7 +181,7 @@ class SubproblemUnitWrapper(UnitEvaluation):
         Row i is trajectory i's realisation; returns (N, 1, n_out) with no
         scenario-axis broadcast.
         """
-        design_args, input_args, aux_args = self.get_auxilliary_input_decision_split(decisions)
+        design_args, input_args, aux_args, theta_args = self.get_auxilliary_input_decision_split(decisions)
         n = design_args.shape[0]
         if input_args.shape[1] == 0:
             if self.cfg.model.root_node_inputs[self.node] not in (None, 'None'):
@@ -189,22 +193,26 @@ class SubproblemUnitWrapper(UnitEvaluation):
                 aux_args = jnp.array([self.cfg.model.root_node_aux[self.node]] * n)
             else:
                 aux_args = jnp.empty((n, 0))
+        if theta_args.shape[1] > 0:
+            uncertain_params = theta_args
         return self.evaluate_diagonal(design_args, input_args, aux_args, uncertain_params)
 
     def get_auxilliary_input_decision_split(self, decisions):
         """
-        Split a flat decision vector into design / input / auxiliary blocks. Aux is
-        the trailing block, so a root node seeded with its full state (n_input = 0)
-        cannot bleed that state into the aux slot.
+        Split a flat decision vector into design / input / aux / theta blocks. Aux and
+        theta trail, so a root node seeded with its full state cannot bleed into either;
+        theta is empty unless it rides the design space.
         """
         n_d = self.graph.nodes[self.node]['n_design_args']
         n_aux = int(self.graph.graph['n_aux_args'])
+        n_theta = int(self.graph.graph.get('n_theta_input', 0))
+        cut = decisions.shape[1] - n_aux - n_theta
+
         design_args = decisions[:, :n_d]
-        if n_aux > 0:
-            input_args, auxiliary_args = decisions[:, n_d:-n_aux], decisions[:, -n_aux:]
-        else:
-            input_args, auxiliary_args = decisions[:, n_d:], decisions[:, n_d:n_d]
-        return design_args, input_args, auxiliary_args
+        input_args = decisions[:, n_d:cut]
+        auxiliary_args = decisions[:, cut:cut + n_aux]
+        theta_args = decisions[:, cut + n_aux:]
+        return design_args, input_args, auxiliary_args, theta_args
 
 
 def _aux_expanded_base(base, cfg, node, graph):

@@ -7,6 +7,15 @@ decomposition:
   optimality_tol:  1.0e-2
   max_iter: 5
 
+  # a second pass rescues nothing here (measured: 0 of 57 at 3x), so leave it off
+  retry_factor: 1
+
+  # worst-case outer over theta, budgeted separately so it does not multiply the inner
+  adversarial:
+    n_sobol_screen: 512   # coarse phase: broad Sobol sweep over theta
+    n_starts: 4           # best of those become outer SQP starts
+    max_iter: 25
+
   cost_to_go:
     n_sobol_screen: 128
     n_starts: 4

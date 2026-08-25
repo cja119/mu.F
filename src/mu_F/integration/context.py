@@ -27,6 +27,7 @@ class EvalContext:
     design:    Optional[jnp.ndarray] = None
     inputs:    Optional[jnp.ndarray] = None
     aux:       Optional[jnp.ndarray] = None
+    theta:     Optional[jnp.ndarray] = None
     # current (REAL, consumes outputs)
     process:   Optional[jnp.ndarray] = None     # raw per-scenario g  (n_d, n_theta, n_g)
     node_cost: Optional[jnp.ndarray] = None     # (n_d, n_theta, 1)

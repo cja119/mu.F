@@ -40,9 +40,18 @@ KS_bounds:
   - - - 0.5
       - 1.0
 
-parameters_samples: [{'c': [3.0, 30.0, 65.0, 95.0], 'w': 1.0}]
+  # influent composition, worst-cased over in the coupling: the measured spans
+  theta_args:
+  - - 4.8      # S1_in  COD  (g/L)
+    - 15.0
+  - - 38.0     # S2_in  VFA  (mmol/L)
+    - 114.0
+  - - 4.4      # pH_in
+    - 5.3
 
-parameters_best_estimate: [3.0, 30.0, 65.0, 95.0]
+parameters_samples: [{'c': [9.97, 78.39, 4.66], 'w': 1.0}]
+
+parameters_best_estimate: [9.97, 78.39, 4.66]
 
 extendedDS_bounds: None
 
@@ -69,7 +78,7 @@ serial_graph: True
 
 unit_op: 'dynamic'
 
-n_theta: 4
+n_theta: 3
 
 fn_evals: 0
 

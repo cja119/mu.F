@@ -85,9 +85,11 @@ def _forward_surrogate_training_data(cfg, graph, node, model, feasible_indices):
             model.evaluator.io_data, index_on=cfg.surrogate.index_on
         ).transform_data_to_matrix(io_fn, feasible_indices)
 
-        if cfg.formulation == 'deterministic':         # drop the scenario columns
+        if cfg.formulation == 'deterministic':         # drop the scenario columns, keep theta
             n = graph.nodes[node]
-            x_io = x_io[:, :n['n_design_args'] + n['n_input_args'] + n['n_auxiliary_args']]
+            keep = (n['n_design_args'] + n['n_input_args'] + n['n_auxiliary_args']
+                    + int(graph.graph.get('n_theta_input', 0)))
+            x_io = x_io[:, :keep]
         if y_io.ndim > 2:          y_io = y_io.squeeze()
         if selected_y_io.ndim < 2: selected_y_io = selected_y_io.reshape(-1, 1)
 

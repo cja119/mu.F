@@ -32,6 +32,21 @@ __all__ = [
 # Module-level helpers
 # ---------------------------------------------------------------------------
 
+def sampled_tail(graph):
+    """
+    Aux and theta widths of the sampled layout [design | inputs | aux | theta];
+    theta is zero unless it is a surrogate input.
+    """
+    return int(graph.graph['n_aux_args']), int(graph.graph.get('n_theta_input', 0))
+
+
+def theta_indices(graph, n_design, n_input):
+    """Seats theta occupies in the sampled layout; empty when it is marginalised."""
+    n_aux, n_theta = sampled_tail(graph)
+    base = int(n_design) + int(n_input) + n_aux
+    return np.arange(base, base + n_theta).astype(int)
+
+
 def build_factory(
     objective: Callable,
     constraint: Optional[Callable],
@@ -310,6 +325,8 @@ class BaseEvaluator(ABC):
         self.max_iter        = int(  self._resolve_knob(cfg, 'max_iter'))
         self.n_sobol_screen  = int(  self._resolve_knob(cfg, 'n_sobol_screen'))
         self.screen_penalty  = float(self._resolve_knob(cfg, 'screen_penalty', default=1000.0))
+        # >1 re-solves whatever the first pass leaves unconverged, at this multiple of max_iter
+        self.retry_factor    = int(  self._resolve_knob(cfg, 'retry_factor', default=1))
         self.integer_backend = str(  self._resolve_knob(cfg, 'integer_backend', default='enumeration'))
         self.bb_max_nodes    = int(  self._resolve_knob(cfg, 'bb_max_nodes', default=0))
 

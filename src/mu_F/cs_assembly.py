@@ -13,6 +13,7 @@ from mu_F.graph.graph_assembly import GraphConstructor, MarkovGraphConstructor
 from mu_F.graph.methods import CS_edge_holder, vmap_CS_edge_holder
 from mu_F.surrogate.surrogate import Surrogate
 from mu_F.constraints.constructor import ConstraintEvaluator
+from mu_F.samplers.utils import n_theta_input
 from mu_F.post_processes.constructor import PostProcessSamplingScheme, PostProcessLocalSipScheme
 from mu_F.post_processes.methods import post_process_regressor_data_function
 from mu_F.unit_evaluators.utils import arrhenius_kinetics_fn, arrhenius_kinetics_fn_2
@@ -125,6 +126,8 @@ def case_study_allocation(G, cfg, dict_of_edge_fn, constraint_dictionary, solver
     # Graph-level arguments.
     G.add_arg_to_graph('aux_bounds', cfg.case_study.KS_bounds.aux_args)
     G.add_arg_to_graph('n_aux_args', cfg.case_study.global_n_aux_args)
+    G.add_arg_to_graph('theta_bounds', cfg.case_study.KS_bounds.get('theta_args', None) or [])
+    G.add_arg_to_graph('n_theta_input', n_theta_input(cfg))
     G.add_arg_to_graph('initial_forward_pass', initial_forward_pass)
     G.add_arg_to_graph('solve_post_processing_problem', False)
     G.add_arg_to_graph('post_process_decision_indices', cfg.reconstruction.post_process_decision_indices if hasattr(cfg, 'reconstruction') else [])

@@ -70,6 +70,7 @@ class RolloutEvaluator:
         self.rollout_costs = ConstraintEvaluator(cfg, graph, node, constraint_type='cost_rollout')
         self.free_aux = aux_optimised_at_root(cfg, graph, node)   # root solves the aux
         self.n_design = int(graph.nodes[node]['n_design_args'])
+        self.n_theta_input = int(graph.graph.get('n_theta_input', 0))
 
     def rollout(self, inputs, aux=None, key=None, n_samples=1, fixed_decision=None):
         """
@@ -92,7 +93,8 @@ class RolloutEvaluator:
             decision, opt_ctg, opt_status = self.rollout_costs.evaluate(inputs, aux)  # (N, n_design[+aux])
         if solve_aux:
             decision, aux = decision[:, :self.n_design], decision[:, self.n_design:]  # split solved aux*
-        d = jnp.concatenate([decision, inputs, aux], axis=-1)                       # (N, n_total)
+        d = jnp.concatenate([decision, inputs, aux, self._nominal_theta(inputs.shape[0])],
+                            axis=-1)                                                # (N, n_total)
         p = self.get_uncertain_params(key, n_samples=decision.shape[0])            # (N, param)
 
         outputs = self.node_evaluator.get_constraints_rollout(d, p)                # (N, 1, n_out)
@@ -111,6 +113,17 @@ class RolloutEvaluator:
             f"Rollout node {self.node} per-constraint feasible-frac={np.round(per_con_frac, 3).tolist()} "
             f"worst-margin={np.round(worst_margin, 3).tolist()}")
         return outputs, n_cost, decision, feasible, p_cons, aux
+
+    def _nominal_theta(self, n):
+        """
+        Theta at its best estimate, tiled over the N trajectories; empty unless theta
+        rides the design space. The rollout never worst-cases it.
+        """
+        if not self.n_theta_input:
+            return jnp.empty((n, 0))
+
+        pbe = self.cfg.case_study.parameters_best_estimate[self.node]
+        return jnp.tile(jnp.asarray(pbe, dtype=float).reshape(1, -1), (n, 1))
 
     def _fixed_aux(self, n):
         """Given aux for this node, tiled over the N trajectories: aux_override
@@ -204,7 +217,7 @@ class SubproblemEvaluator:
         """
         ctx = EvalContext(d=d, p=p, collecting=self.collecting)
         ctx.outputs = None if self._skip_forward else self.node_evaluator.get_constraints(d, p)   # forward ONCE
-        ctx.design, ctx.inputs, ctx.aux = \
+        ctx.design, ctx.inputs, ctx.aux, ctx.theta = \
             self.node_evaluator.get_auxilliary_input_decision_split(d)
         if ctx.outputs is not None:
             self.current.evaluate(ctx)         # real (process + node cost)

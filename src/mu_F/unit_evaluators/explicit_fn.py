@@ -695,11 +695,7 @@ def _make_waste_water_step(cfg: DictConfig):
         log_D = u[0]
         D = jnp.exp(log_D)
         alpha = aux[0]
-        #S1_in, S2_in, pH_in, C_in = z[0], z[1], z[2], z[3]
-
-        S1_in = jnp.take(CODin, node)
-        S2_in = jnp.take(VFAin, node)
-        pH_in = jnp.take(pHin, node)
+        S1_in, S2_in, pH_in = z[0], z[1], z[2]
         C_in = Cin
 
         # pH

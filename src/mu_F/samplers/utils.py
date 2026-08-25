@@ -106,6 +106,34 @@ def add_global_aux(bounds, G, node=None):
     return bounds
 
 
+def theta_is_input(cfg):
+    """True when theta is a sampled surrogate input rather than marginalised at
+    training; deterministic only, since the probabilistic path keeps its weights."""
+    if str(cfg.get('formulation', 'deterministic')) != 'deterministic':
+        return False
+    return cfg.case_study.KS_bounds.get('theta_args', None) not in (None, 'None')
+
+
+def n_theta_input(cfg):
+    """Width theta contributes to the sampled space; zero when it is marginalised."""
+    return int(cfg.case_study.n_theta) if theta_is_input(cfg) else 0
+
+
+def add_global_theta(bounds, G):
+    """
+    Append theta's declared range to a node's sampled space, so DEUS explores it
+    and the surrogates come out theta-conditional.
+    """
+    if not int(G.graph.get('n_theta_input', 0)):
+        return bounds
+
+    n_index = len(bounds)
+    for lo, hi in G.graph['theta_bounds']:
+        bounds[f'd{n_index+1}'] = {f'd{n_index+1}': [float(lo), float(hi)]}
+        n_index += 1
+    return bounds
+
+
 def resolve_aux_override(cfg):
     """Read by the rollout and recovery: the pinned aux value, or None when the
     aux is to be optimised at the root node."""
@@ -207,6 +235,7 @@ def get_unit_bounds(G: nx.DiGraph, unit_index: int):
         else:
             bounds = design_var
         bounds = add_global_aux(bounds, G, unit_index)
+        bounds = add_global_theta(bounds, G)
     else:
         bounds = { f'd{index+1}': {f'd{index+1}': [ G.nodes[unit_index]['extendedDS_bounds'][0][0,index],  G.nodes[unit_index]['extendedDS_bounds'][1][0,index]]} for index in range(len(G.nodes[unit_index]['extendedDS_bounds'][0].squeeze()))}
 

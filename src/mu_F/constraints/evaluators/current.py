@@ -7,6 +7,8 @@ from jax import vmap
 
 from mu_F.constraints.evaluators.base import (
     BaseEvaluator,
+    sampled_tail,
+    theta_indices,
     build_factory,
     build_penalty_screener,
     precompute_sobol_pool,
@@ -42,12 +44,15 @@ def _current_geometry(graph, node, cfg, free_aux=False):
     """
     n_design = int(graph.nodes[node]['n_design_args'])
     n_input  = int(graph.nodes[node]['n_input_args'])
-    n_aux    = int(graph.graph['n_aux_args'])
-    ndim     = n_design + n_input + n_aux
+    n_aux, n_theta = sampled_tail(graph)
+    ndim     = n_design + n_input + n_aux + n_theta
 
     input_indices = np.arange(n_design, n_design + n_input).astype(int)
+    aux_0 = n_design + n_input
     aux_indices   = (np.array([], dtype=int) if free_aux
-                     else np.arange(ndim - n_aux, ndim).astype(int))
+                     else np.arange(aux_0, aux_0 + n_aux).astype(int))
+    # theta is pinned at nominal in the rollout, exactly like the aux block
+    aux_indices   = np.hstack([aux_indices, theta_indices(graph, n_design, n_input)]).astype(int)
 
     int_dims, int_values = resolve_integer_spec(
         cfg.case_study.get('design_domain', None)

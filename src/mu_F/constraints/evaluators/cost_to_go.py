@@ -7,6 +7,8 @@ import numpy as np
 
 from mu_F.constraints.evaluators.base import (
     BaseEvaluator,
+    sampled_tail,
+    theta_indices,
     build_factory,
     build_penalty_screener,
     precompute_sobol_pool,
@@ -75,11 +77,14 @@ class CTGEvaluator(BaseEvaluator):
         n_aux     = int(self.graph.graph['n_aux_args'])
         aux_indices = np.arange(n_d_succ + n_in_succ,
                                 n_d_succ + n_in_succ + n_aux).astype(int)
-        fix_indices = np.hstack([input_indices, aux_indices]).astype(int)
+        fix_indices = np.hstack([input_indices, aux_indices,
+                                 theta_indices(self.graph, n_d_succ, n_in_succ)]).astype(int)
+        # pinned but not a coupling input: derived from fix_indices so they cannot diverge
+        pinned_tail = np.setdiff1d(fix_indices, input_indices).astype(int)
         ndim = (
             n_d_succ
             + int(self.graph.nodes[succ]['n_input_args'])
-            + int(self.graph.graph['n_aux_args'])
+            + sum(sampled_tail(self.graph))
         )
         n_fix = int(len(fix_indices))
 
@@ -102,7 +107,7 @@ class CTGEvaluator(BaseEvaluator):
             self.graph.nodes[succ]['ctg_surrogate'],
             ndim=ndim,
             fix_ind=input_indices,
-            aux_ind=aux_indices,
+            aux_ind=pinned_tail,
             int_ind=int_indices,
             n_heads=0,
             aggregator='scalar',
@@ -110,9 +115,12 @@ class CTGEvaluator(BaseEvaluator):
 
         # Feasible region: classifier, or chance constraint under direct-probability.
         constraint, n_heads = self._feasibility_constraint(
-            succ, ndim, input_indices, aux_indices, int_indices,
+            succ, ndim, input_indices, pinned_tail, int_indices,
         )
         n_params = n_fix + n_int + n_heads
+        assert n_d_cont == ndim - len(fix_indices) - n_int, (
+            f"layout: {n_d_cont} free slots, ndim {ndim} less {len(fix_indices)} pinned "
+            f"and {n_int} integer — a pinned slot has leaked into the free set")
 
         # Septal factory + screener + Sobol pool.
         factory = build_factory(
@@ -184,6 +192,18 @@ class CTGEvaluator(BaseEvaluator):
             return jnp.atleast_1d(masked(x_red, p_aug))
         return constraint, n_heads
 
+    def _nominal_theta(self, n):
+        """
+        Theta at its best estimate, tiled over the batch; empty unless theta rides
+        the design space. The cost-to-go is never worst-cased over it.
+        """
+        _, n_theta = sampled_tail(self.graph)
+        if not n_theta:
+            return jnp.empty((n, 0))
+
+        pbe = self.cfg.case_study.parameters_best_estimate[self.node]
+        return jnp.tile(jnp.asarray(pbe, dtype=float).reshape(1, -1), (n, 1))
+
     # Shard entry point — pmap target.
     def evaluate(self, outputs_s, aux_s, mask_s):
         """
@@ -198,6 +218,8 @@ class CTGEvaluator(BaseEvaluator):
                 ys = succ_inputs[succ]
                 if aux_s is not None and aux_s.size > 0:
                     ys = jnp.concatenate([ys, aux_s], axis=-1)
+                # the cost-to-go is read at nominal theta, never worst-cased
+                ys = jnp.concatenate([ys, self._nominal_theta(ys.shape[0])], axis=-1)
                 # ys is (n_theta, n_y); module-level solver caches one program per spec.
                 per_theta = solve_integer_nlp_batched(self.specs[succ], ys)
                 evals.append(per_theta.objective.reshape(-1, 1))
