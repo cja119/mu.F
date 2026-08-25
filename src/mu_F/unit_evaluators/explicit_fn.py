@@ -610,8 +610,9 @@ def _make_waste_water_step(cfg: DictConfig):
     derivatives, five feasibility margins and the -q_m / Q_M_REF stage cost.
     cfg-dependent constants are resolved eagerly at factory time.
     """
-    # Smoothness for the constraint-violation softmax (beta -> inf recovers the hard max).
-    beta = _resolve_beta(cfg, 'softmax_beta', 50.0)
+    # Softening and integrand cap for the signed soft-min margin accumulated in the G block.
+    beta_m = float(cfg.model.get('margin_beta', 50.0))
+    integrand_cap = float(cfg.model.get('margin_cap', 1000.0))
 
     # Kinetics
     mu_1_max = float(cfg.model.mu_1_max)
@@ -730,13 +731,16 @@ def _make_waste_water_step(cfg: DictConfig):
         g_ph_hi = (pH - PH_MAX) / PH_MAX
         g_ph_lo = (PH_MIN - pH) / PH_MIN
         g_zs2   = (S2 + EPS_Z_S2 - Z) / (_smooth_abs(Z) + _smooth_abs(S2))
-        dgdt = -_softplus_centred(jnp.array([g_cod, g_s2, g_ph_hi, g_ph_lo, g_zs2]), beta)
+        g_vec = jnp.array([g_cod, g_s2, g_ph_hi, g_ph_lo, g_zs2])
+        # G accumulates exp(beta_m g); make_waste_water_cons recovers the signed margin from it
+        dgdt = jnp.minimum(jnp.exp(beta_m * g_vec), integrand_cap)
 
         # Stage cost
         q_m = k_6 * mu_2 * X2
         rwd = -q_m / Q_M_REF
 
-        return jnp.concatenate([jnp.ravel(dxdt), jnp.ravel(dgdt), jnp.atleast_1d(rwd)], axis=0)
+        return jnp.concatenate([jnp.ravel(dxdt), jnp.ravel(dgdt),
+                                jnp.atleast_1d(rwd)], axis=0)   # [F | G | R]
 
     return _step
 

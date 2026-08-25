@@ -3,6 +3,8 @@
 from abc import ABC, abstractmethod
 from dataclasses import replace
 
+from omegaconf import OmegaConf
+
 from mu_F.solvers.septal import DEFAULT_SQP_CONFIG
 
 
@@ -32,12 +34,16 @@ class SolveDirect(ABC):
         default with the monolithic solver block promoted to cfg.solvers.
         """
         s = self.cfg.solvers
+        # anything under solvers.<method>.sqp passes straight through to septal
+        extra = OmegaConf.to_container(s.sqp, resolve=True) if 'sqp' in s else {}
+
         return replace(
             DEFAULT_SQP_CONFIG,
             tol_stationarity=float(s.optimality_tol),
             tol_feasibility=float(s.feasibility_tol),
             max_iter=int(s.max_iter),
             use_exact_hessian=bool(s.use_exact_hessian),
+            **extra,
         )
 
     # ---- Base Methods ----

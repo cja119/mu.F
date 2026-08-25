@@ -125,6 +125,8 @@ def _cached_masked_surrogate(callable_, n_heads, ndim,
         # Aggregator dispatch resolved at construction time (no traced control flow).
         if aggregator == 'scalar':
             return out.reshape(())
+        if aggregator == 'vector':
+            return out.reshape(-1)                           # raw K-vector (no reduction)
         if aggregator == 'onehot_sum':
             y_struct = p_aug[0, n_y_eff + n_int : n_y_eff + n_int + n_heads]
             return jnp.sum(y_struct * out)                   # Σ_k y_k · head[k]
@@ -143,7 +145,7 @@ def mask_surrogate(callable_: Callable, ndim,
                    n_y: int = None) -> Callable:
     """
     Wrap any Surrogate into septal's (x_red, p_aug) signature, dispatching on
-    the aggregator (scalar, onehot_sum, vector_diff) and parametric tail layout.
+    the aggregator (scalar, vector, onehot_sum, vector_diff) and parametric tail layout.
     """
     if aggregator is None:
         aggregator = 'scalar' if int(n_heads) == 0 else 'onehot_sum'

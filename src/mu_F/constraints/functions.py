@@ -204,6 +204,48 @@ def make_markov_cons_cfg(cfg):
     return [partial(_markov_cons_cfg, F_size, G_size, i) for i in range(G_size)]
 
 
+def _markov_softmin_margin_cfg(M_off, beta_m, T, i, rollout, cfg=None):
+    """
+    Recover the signed soft-min margin from the accumulated exp(beta_m g) block,
+    normalised by the interval so it is comparable across nodes (>= 0 feasible).
+    The floor keeps a deeply-feasible underflow finite rather than +inf.
+    """
+    A = jnp.maximum(rollout[..., M_off + i], 1e-30)
+    return -(jnp.log(A) - jnp.log(T)) / beta_m
+
+
+def make_softmin_margin_cfg(cfg):
+    """
+    One signed soft-min margin per constraint, read as the node's constraint block.
+    """
+    s = cfg.case_study.sizes
+    M_off  = int(s.F_SIZE)                       # the G block itself holds the accumulator
+    M_size = int(s.G_SIZE)
+    beta_m = float(cfg.model.get('margin_beta', 50.0))
+    T = float(cfg.model.integration.tf) - float(cfg.model.integration.t0)
+    return [partial(_markov_softmin_margin_cfg, M_off, beta_m, T, i) for i in range(M_size)]
+
+
+def _markov_smooth_margin_cfg(M_off, T, i, rollout, cfg=None):
+    """
+    Same zero-crossing as the soft-min margin but linear in the accumulator, so
+    there is no log and no 1/A gradient blow-up for the gradient-based monolithic.
+    """
+    A = rollout[..., M_off + i]
+    return 1.0 - A / T
+
+
+def make_smooth_margin_cfg(cfg):
+    """
+    Linear-in-accumulator variant of make_softmin_margin_cfg, for the monolithic.
+    """
+    s = cfg.case_study.sizes
+    M_off  = int(s.F_SIZE)
+    M_size = int(s.G_SIZE)
+    T = float(cfg.model.integration.tf) - float(cfg.model.integration.t0)
+    return [partial(_markov_smooth_margin_cfg, M_off, T, i) for i in range(M_size)]
+
+
 def _markov_cost_cfg(F_size: int, G_size: int, L_size: int, PHI_size: int, rollout, cfg=None):
     base = F_size + G_size
     R = rollout[..., base:base + L_size]
@@ -230,7 +272,7 @@ def make_cstr_cost(cfg):            return make_markov_cost_cfg(cfg)
 def make_cstr_cons(cfg):            return make_markov_cons_cfg(cfg)
 
 def make_waste_water_cost(cfg):     return make_markov_cost_cfg(cfg)
-def make_waste_water_cons(cfg):     return make_markov_cons_cfg(cfg)
+def make_waste_water_cons(cfg):     return make_softmin_margin_cfg(cfg)
 
 def make_hydrogen_export_cost(cfg): return make_markov_cost_cfg(cfg)
 def make_hydrogen_export_cons(cfg): return make_markov_cons_cfg(cfg)

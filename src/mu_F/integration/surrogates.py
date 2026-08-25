@@ -143,6 +143,243 @@ def ctg_surrogate_construction(cfg, graph, node, iterate):
     del trained
 
 
+# ---------------------------------------------------------------------------
+# Signed-margin regressor
+# ---------------------------------------------------------------------------
+
+def margin_surrogate_construction(cfg, graph, node, iterate):
+    """Train the signed-margin regressor and its conformal backoff on the node's
+    margin channel, leaving the classifier as the far-field backstop."""
+    if graph.nodes[node].get('margin_training', None) is None:
+        return
+
+    held_out = _hold_out_margin(cfg, graph, node)
+    graph.nodes[node]['margin_backoff'] = jnp.zeros(_margin_width(graph, node))
+
+    if _ensemble_size(cfg) <= 1:
+        _train_node_margin(cfg, graph, node, iterate)
+        if held_out is not None:
+            graph.nodes[node]['margin_backoff'] = _calibrate_margin_backoff(cfg, graph, node, held_out)
+    else:
+        _train_margin_ensemble(cfg, graph, node, iterate, held_out)
+
+    _train_margin_classifiers(cfg, graph, node, iterate, held_out)
+    _restore_margin_training(graph, node, held_out)
+
+
+def _ensemble_size(cfg):
+    """Number of bagged members requested; 1 collapses to the single point model."""
+    ens = cfg.surrogate.get('margin_ensemble', None)
+    return int(ens.get('n_members', 1)) if (ens and ens.get('enabled', False)) else 1
+
+
+def _margin_width(graph, node):
+    """Constraint count G carried by the node's margin targets."""
+    return int(np.asarray(graph.nodes[node]['margin_training'].y).shape[-1])
+
+
+def _restore_margin_training(graph, node, held_out):
+    """Put the un-split training set back once calibration has consumed it."""
+    if held_out is not None:
+        graph.nodes[node]['margin_training'] = held_out['full']
+
+
+def _hold_out_margin(cfg, graph, node):
+    """Hold a batch of margin_training out for the conformal backoff calibration;
+    None unless the backoff is enabled. Read by margin_surrogate_construction."""
+    bk = cfg.surrogate.get('backoff', None)
+    if bk is None or not bk.get('enabled', False):
+        return None
+
+    full = graph.nodes[node]['margin_training']
+    n = int(full.X.shape[0])
+    n_hold = max(1, int(float(bk.get('held_out_frac', 0.2)) * n))
+    perm = np.random.default_rng(0).permutation(n)
+    hold_idx, train_idx = perm[:n_hold], perm[n_hold:]
+
+    graph.nodes[node]['margin_training'] = TrainingDataset(full.X[train_idx], full.y[train_idx])
+    return {'full': full, 'X': full.X[hold_idx], 'y': full.y[hold_idx]}
+
+
+def _train_node_margin(cfg, graph, node, iterate):
+    """Fit the multi-output signed-margin regressor, one head per constraint.
+    Read by margin_surrogate_construction."""
+    trained = Surrogate(graph, node, cfg,
+                        ('regression', cfg.surrogate.regressor_selection, 'margin_surrogate'),
+                        iterate, data_str='margin_training')
+    trained.fit(node=None)
+    query_model, serialised = _query_model(trained, cfg, cfg.surrogate.regressor_selection, 'regressor')
+
+    graph.nodes[node]['margin_surrogate'] = query_model
+    graph.nodes[node]['margin_surrogate_x_scalar'] = trained.trainer.get_model_object('standardisation_metrics_input')
+    graph.nodes[node]['margin_surrogate_serialised'] = serialised
+
+    del trained
+
+
+
+def _margin_predictions(model, held_out):
+    """Held-out predictions and truths as matching matrices, one column per constraint."""
+    X = jnp.asarray(held_out['X'])
+    if X.ndim > 2:
+        X = X.squeeze()
+    n = int(X.shape[0])
+    return (np.asarray(jax.vmap(model)(X)).reshape(n, -1),      # (n_hold, G) or (n_hold, 2G)
+            np.asarray(held_out['y']).reshape(n, -1))           # (n_hold, G)
+
+
+def _conformal_quantile(over_prediction, m_true_j, band, eps):
+    """One constraint's backoff: the (1-eps) quantile of over-prediction near the boundary."""
+    near = over_prediction[m_true_j > -band]
+    return max(0.0, float(np.quantile(near, 1.0 - eps))) if near.size else 0.0
+
+
+def _feasible_kept(admits, m_true):
+    """Fraction of the truly-feasible held-out points the calibrated gate still admits."""
+    feasible = np.all(m_true >= 0, axis=1)
+    return float(np.mean(admits[feasible])) if feasible.any() else 1.0
+
+
+def _log_margin_backoff(node, kind, values, kept, eps):
+    """Report a calibrated backoff and how much of the feasible region survives it."""
+    logging.info(f"Node {node}: margin {kind} {np.round(values, 3).tolist()} "
+                 f"(eps={eps}, feasible region kept {kept:.1%})")
+
+
+def _calibrate_margin_backoff(cfg, graph, node, held_out):
+    """Split-conformal per-constraint backoff: gating on m_hat_j >= b_j implies the true
+    margin >= 0 with probability 1 - eps. Read by margin_surrogate_construction."""
+    eps  = float(cfg.surrogate.backoff.get('epsilon', 0.05))
+    band = float(cfg.surrogate.backoff.get('margin_band', 1.0))
+
+    m_hat, m_true = _margin_predictions(graph.nodes[node]['margin_surrogate'], held_out)
+
+    # bound the over-prediction rather than the violation rate: the rollout SQP seeks out wherever the surrogate is most optimistic
+    resid = m_hat - m_true
+    backoffs = np.array([_conformal_quantile(resid[:, j], m_true[:, j], band, eps)
+                         for j in range(m_true.shape[1])])
+
+    _log_margin_backoff(node, 'backoff', backoffs,
+                        _feasible_kept(np.all(m_hat >= backoffs[None, :], axis=1), m_true), eps)
+    return jnp.asarray(backoffs)
+
+
+def _train_margin_ensemble(cfg, graph, node, iterate, held_out):
+    """Bagged ensemble over bootstrap resamples; member spread becomes a spatially
+    varying backoff. Read by margin_surrogate_construction."""
+    full = graph.nodes[node]['margin_training']
+    members = [_fit_margin_member(cfg, graph, node, iterate, full, k)
+               for k in range(_ensemble_size(cfg))]
+    graph.nodes[node]['margin_training'] = full
+
+    stat_fn = _ensemble_stat_fn(members)
+    graph.nodes[node]['margin_ensemble'] = stat_fn
+    if held_out is not None:
+        graph.nodes[node]['margin_backoff_q'] = _calibrate_ensemble_backoff(cfg, node, held_out, stat_fn)
+
+
+def _fit_margin_member(cfg, graph, node, iterate, full, k):
+    """One ensemble member on a bootstrap resample, which supplies the diversity
+    since the init seed is fixed. Read by _train_margin_ensemble."""
+    n = int(full.X.shape[0])
+    idx = np.random.default_rng(k + 1).integers(0, n, size=n)
+    graph.nodes[node]['margin_training'] = TrainingDataset(full.X[idx], full.y[idx])
+
+    trained = Surrogate(graph, node, cfg,
+                        ('regression', cfg.surrogate.regressor_selection, 'margin_surrogate'),
+                        iterate, data_str='margin_training')
+    trained.fit(node=None)
+    member, _ = _query_model(trained, cfg, cfg.surrogate.regressor_selection, 'regressor')
+
+    del trained
+    return member
+
+
+def _ensemble_stat_fn(members):
+    """Jitted map from a query point to the per-constraint mean and standard deviation
+    across the members. Read by _train_margin_ensemble."""
+    def stat(x):
+        preds = jnp.stack([jnp.asarray(m(x)).reshape(-1) for m in members])   # (K, G)
+        return jnp.concatenate([preds.mean(axis=0), preds.std(axis=0)])       # (2G,)
+    return jax.jit(stat)
+
+
+def _calibrate_ensemble_backoff(cfg, node, held_out, stat_fn):
+    """Backoff multiplier in ensemble-std units, so gating on mean_j - q_j*std_j >= 0
+    holds w.p. 1 - eps: wide where members disagree. Read by _train_margin_ensemble."""
+    eps  = float(cfg.surrogate.backoff.get('epsilon', 0.05))
+    band = float(cfg.surrogate.backoff.get('margin_band', 1.0))
+
+    stats, m_true = _margin_predictions(stat_fn, held_out)
+    n_g = stats.shape[1] // 2
+    mean, std = stats[:, :n_g], stats[:, n_g:]
+
+    q = np.array([_conformal_quantile((mean[:, j] - m_true[:, j]) / (std[:, j] + 1e-6),
+                                      m_true[:, j], band, eps) for j in range(n_g)])
+
+    _log_margin_backoff(node, 'ensemble q', q,
+                        _feasible_kept(np.all(mean >= q[None, :] * std, axis=1), m_true), eps)
+    return jnp.asarray(q)
+
+
+def _train_margin_classifiers(cfg, graph, node, iterate, held_out):
+    """Hybrid gate: swap the rough signed-margin regressor for a sigmoid feasibility
+    head on the constraints named in cfg.surrogate.margin_classify."""
+    cols = _classify_columns(cfg, graph, node)
+    if not cols:
+        return
+
+    train = graph.nodes[node]['margin_training']
+    m = np.asarray(train.y).reshape(int(jnp.asarray(train.X).shape[0]), -1)      # (N_train, G)
+
+    classifiers = {j: _fit_feasibility_head(cfg, graph, node, iterate, train.X, m[:, j]) for j in cols}
+    thresholds = {j: _classifier_threshold(cfg, node, classifiers[j], held_out, j) for j in cols}
+
+    graph.nodes[node].pop('margin_classify_training', None)
+    graph.nodes[node]['margin_classifiers'] = classifiers
+    graph.nodes[node]['margin_thresholds'] = thresholds
+    logging.info(f"Node {node}: hybrid gate on constraints {cols}, "
+                 f"thresholds {[round(float(thresholds[j]), 3) for j in cols]}")
+
+
+def _classify_columns(cfg, graph, node):
+    """Constraint columns the config routes to a classifier, clipped to the node's
+    constraint count. Read by _train_margin_classifiers."""
+    raw = list(cfg.surrogate.get('margin_classify', []) or [])
+    n_g = _margin_width(graph, node)
+    return [int(j) for j in raw if 0 <= int(j) < n_g]
+
+
+def _fit_feasibility_head(cfg, graph, node, iterate, X, m_j):
+    """Fit one sigmoid-headed ANN on a single constraint's binary feasibility, reusing
+    the probability-map path. Read by _train_margin_classifiers."""
+    label = jnp.asarray((np.asarray(m_j) >= 0).astype(np.float32)).reshape(-1, 1)   # 1 = feasible
+    graph.nodes[node]['margin_classify_training'] = TrainingDataset(jnp.asarray(X), label)
+
+    trained = Surrogate(graph, node, cfg, ('regression', 'ANN', 'probability_map_surrogate'),
+                        iterate, data_str='margin_classify_training')
+    trained.fit(node=None)
+    return trained.get_model('unstandardised_model')
+
+
+def _classifier_threshold(cfg, node, classifier, held_out, j):
+    """Split-conformal admission threshold: gating on P_feas >= tau_j rejects all but a
+    fraction eps of the held-out points infeasible on j. Read by _train_margin_classifiers."""
+    if held_out is None:
+        return 0.5
+
+    eps = float(cfg.surrogate.backoff.get('epsilon', 0.05))
+    p, m_true = _margin_predictions(classifier, held_out)
+    infeasible = p.reshape(-1)[m_true[:, j] < 0]
+    if infeasible.size == 0:
+        return 0.5
+
+    tau = float(np.clip(np.quantile(infeasible, 1.0 - eps), 0.0, 1.0))
+    logging.info(f"Node {node}: classifier g{j} tau {tau:.3f} "
+                 f"({infeasible.size} infeasible held out, eps={eps})")
+    return tau
+
+
 def cluster_classifier_construction(cfg, graph, node, iterate):
     """Build a K-head ANN classifier from this node's training data."""
 

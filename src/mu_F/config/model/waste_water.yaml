@@ -60,9 +60,7 @@ integration:
   max_steps: 100000
   vmap_chunk_size: 0
 
-# Promoted over `integration` for monolithic methods (multiple/single shooting):
-# fixed-step explicit keeps the gradient graph bounded (the adaptive implicit solver
-# above OOMs through 72 chained solves) and matches Kvaerno5 to ~5 d.p. at dt0=0.005.
+
 integration_monolithic:
   scheme: tsit5
   step_size_controller: constant
@@ -76,6 +74,13 @@ integration_monolithic:
 softmax_beta:
   decomposition: 1000
   monolithic: 1000
+
+# Soft-min path margin: the G block accumulates exp(beta * g), and the constraint is
+# the signed worst-case margin m_j = -(1/beta) log <exp(beta g_j)>_t.
+margin_beta: 50.0
+
+# Bounds the accumulator's derivative, so it also floors the margin at -log(cap)/beta.
+margin_cap: 1000.0
 
 # Smoothness for the edge clip (per method; higher -> closer to hard clip).
 edge_clip_beta:

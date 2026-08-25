@@ -19,7 +19,8 @@ from mu_F.integration.utils import _StdoutToLog, _log_sqp_convergence, _get_roll
 from mu_F.integration.data import del_data, process_data_forward
 from mu_F.integration.surrogates import (
     surrogate_training_forward, probability_map_construction,
-    classifier_construction, cluster_classifier_construction, ctg_surrogate_construction)
+    classifier_construction, cluster_classifier_construction, ctg_surrogate_construction,
+    margin_surrogate_construction)
 from mu_F.integration.model import SubproblemModel
 
 
@@ -138,6 +139,9 @@ class ApplyDecomposition:
                 cluster_classifier_construction(cfg, graph, node, iterate)
             else:
                 classifier_construction(cfg, graph, node, iterate)
+            # signed-margin regressor: near-boundary feasibility with a per-constraint backoff
+            if cfg.surrogate.get('margin_regressor', False):
+                margin_surrogate_construction(cfg, graph, node, iterate)
         if cfg.surrogate.probability_map and not tuner_pass and direct_prob:
             probability_map_construction(cfg, graph, node, iterate)
 

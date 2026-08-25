@@ -14,6 +14,7 @@ def del_data(graph, node):
     """
     # classifier_training is absent under direct-probability (no classifier).
     graph.nodes[node]["classifier_training"] = None
+    graph.nodes[node]["margin_training"] = None
 
     for successor in graph.successors(node):
         if 'surrogate_training' in graph.edges[node, successor]:
@@ -51,6 +52,16 @@ def _feasibility_training_data(cfg, graph, node, model):
         xc, yc, feasible_indices = ApplyFeasibility(
             [x_d[on:]], [y_d[on:]], cfg, node, cfg.formulation).get_feasible(return_indices=True)
         graph.nodes[node]["classifier_training"] = TrainingDataset(X=xc, y=yc)
+
+    if store.has('classifier'):                        # same values, unfiltered, for the regressor
+        x_m, y_m = store.matrix('classifier')
+        y_m = np.asarray(y_m)
+        if y_m.ndim == 3:                              # (N, n_theta, G) -> worst case over scenarios
+            y_m = y_m.min(axis=1)
+        x_m, y_m = np.asarray(x_m)[on:], y_m[on:]
+        finite = np.isfinite(y_m).all(axis=-1)         # drop non-viable (failed-integration) rows
+        graph.nodes[node]["margin_training"] = TrainingDataset(
+            X=jnp.asarray(x_m[finite]), y=jnp.asarray(y_m[finite]))
 
     if cfg.case_study.eval_cost and store.has('ctg'):  # E_p[ctg]; drop NaN (non-viable) rows
         Xc, yc = store.matrix('ctg')

@@ -4,14 +4,23 @@ classifier_selection: 'ANN'
 regressor_selection: 'ANN'
 probability_map: false
 
-# A-posteriori feasibility backoff. A batch of the original sampling data is held
-# out of classifier training; the recovery's classifier margin (logit, so it does
-# not saturate) is then tightened to the smallest value excluding all but a fraction
-# `epsilon` of the held-out false positives.
+
+margin_regressor: true
+
+# Keep the classifier alongside the margin gate; off gates purely on the margin.
+margin_backstop: true
+
+
+margin_ensemble:
+  enabled: false
+  n_members: 5
+
+
 backoff:
   enabled: true
   held_out_frac: 0.2
   epsilon: 0.05
+  margin_band: 1.0
 
 subsample_size: 100000
 num_folds: 2

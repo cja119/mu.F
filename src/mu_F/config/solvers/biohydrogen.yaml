@@ -22,3 +22,12 @@ monolithic:
                              # 'rollout' (Sobol/forward-simulated start), or 'midpoint'
   n_sobol_screen: 32      # >1: Sobol-sample controls, roll each, keep lowest L1 merit
   screen_penalty: 1.0e3   # L1 weight on path-constraint violation in the screen
+
+  # Passed straight through to septal's SQPConfig. Powell damping inflates the BFGS
+  # scale, collapsing the step while alpha stays at 1, so septal's own safeguards
+  # (which watch alpha, and cond(H)) never fire. An alpha_tol above 1 makes the
+  # stagnation test true every iteration, turning patience into a restart interval:
+  # the Hessian returns to a scaled identity every `stagnation_patience` steps.
+  sqp:
+    stagnation_alpha_tol: 2.0
+    stagnation_patience: 10

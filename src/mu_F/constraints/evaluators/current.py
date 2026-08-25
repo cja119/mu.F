@@ -274,7 +274,7 @@ class CurrentCostEvaluator(BaseEvaluator):
         )
 
         # Feasible region: classifier, or chance constraint under direct-probability.
-        constraint, n_heads = self._feasibility_constraint(
+        constraint, n_heads, n_constraints = self._feasibility_constraint(
             key, ndim, input_indices, aux_indices, int_indices,
         )
 
@@ -286,7 +286,7 @@ class CurrentCostEvaluator(BaseEvaluator):
             objective, constraint, bounds,
             n_decision=n_d_cont,
             n_params=n_params,
-            n_constraints=1,
+            n_constraints=n_constraints,
             feasibility_tol=self.feasibility_tol,
             optimality_tol=self.optimality_tol,
             max_iter=self.max_iter,
@@ -316,12 +316,93 @@ class CurrentCostEvaluator(BaseEvaluator):
         self.n_aux[key]         = n_aux
 
     def _feasibility_constraint(self, key, ndim, input_indices, aux_indices, int_indices):
-        """Feasible-region constraint for the current-node CTG optimisation."""
+        """Feasible-region constraint for the current-node CTG optimisation, as the
+        triple (constraint, n_heads, n_constraints)."""
         direct_prob = (bool(self.cfg.samplers.deus.get('direct_probability', False))
                        and self.cfg.formulation == 'probabilistic')
         if direct_prob:
             return self._chance_constraint(key, ndim, input_indices, aux_indices, int_indices)
+
+        node = self.graph.nodes[key]
+        if (self.cfg.surrogate.get('margin_regressor', False)
+                and ('margin_surrogate' in node or 'margin_ensemble' in node)):
+            return self._margin_constraint(key, ndim, input_indices, aux_indices, int_indices)
         return self._classifier_constraint(key, ndim, input_indices, aux_indices, int_indices)
+
+    def _margin_constraint(self, key, ndim, input_indices, aux_indices, int_indices):
+        """
+        Signed-margin gate on the node's calibrated margin regressor, with the
+        single-head classifier retained as a far-field backstop.
+        """
+        node = self.graph.nodes[key]
+        if 'margin_ensemble' in node:
+            masked = mask_surrogate(node['margin_ensemble'], ndim=ndim, fix_ind=input_indices,
+                                    aux_ind=aux_indices, int_ind=int_indices, n_heads=0,
+                                    aggregator='vector')
+            residual, n_g = self._ensemble_residual(masked, node['margin_backoff_q'])
+        else:
+            masked = mask_surrogate(node['margin_surrogate'], ndim=ndim, fix_ind=input_indices,
+                                    aux_ind=aux_indices, int_ind=int_indices, n_heads=0,
+                                    aggregator='vector')
+            residual, n_g = self._point_residual(masked, node['margin_backoff'])
+
+        residual = self._apply_margin_classifiers(
+            key, residual, ndim, input_indices, aux_indices, int_indices)
+
+        n_heads, classifier = _resolve_classifier(self.cfg, self.graph, key)
+        if not (bool(self.cfg.surrogate.get('margin_backstop', True)) and n_heads == 0):
+            return residual, 0, n_g
+
+        backstop = mask_surrogate(classifier, ndim=ndim, fix_ind=input_indices,
+                                  aux_ind=aux_indices, int_ind=int_indices, n_heads=0)
+        offset = jnp.sum(jnp.asarray(node['constraint_backoff']).reshape(-1))
+
+        def constraint(x_red, p_aug):
+            return jnp.concatenate([residual(x_red, p_aug),
+                                    jnp.atleast_1d(backstop(x_red, p_aug) + offset)])
+        return constraint, 0, n_g + 1
+
+    @staticmethod
+    def _point_residual(masked, backoff):
+        """Single-model gate b_j - m_hat_j <= 0. Read by _margin_constraint."""
+        b = jnp.asarray(backoff).reshape(-1)
+
+        def residual(x_red, p_aug):
+            return b - jnp.asarray(masked(x_red, p_aug)).reshape(-1)        # (G,), <= 0 feasible
+        return residual, int(b.size)
+
+    @staticmethod
+    def _ensemble_residual(masked, backoff_q):
+        """Ensemble gate q_j*std_j - mean_j <= 0, so the backoff widens where the
+        members disagree. Read by _margin_constraint."""
+        q = jnp.asarray(backoff_q).reshape(-1)
+        n_g = int(q.size)
+
+        def residual(x_red, p_aug):
+            out = jnp.asarray(masked(x_red, p_aug)).reshape(-1)             # (2G,) = [mean | std]
+            return q * out[n_g:] - out[:n_g]                                # (G,), <= 0 feasible
+        return residual, n_g
+
+    def _apply_margin_classifiers(self, key, base_residual, ndim, input_indices,
+                                  aux_indices, int_indices):
+        """Override the classified columns with tau_j - P_feas_j, so they gate on a
+        smooth sigmoid threshold instead of the rough margin. Read by _margin_constraint."""
+        classifiers = self.graph.nodes[key].get('margin_classifiers', None)
+        if not classifiers:
+            return base_residual
+
+        taus = self.graph.nodes[key]['margin_thresholds']
+        masked = {int(j): (mask_surrogate(fn, ndim=ndim, fix_ind=input_indices,
+                                          aux_ind=aux_indices, int_ind=int_indices,
+                                          n_heads=0, aggregator='scalar'), float(taus[j]))
+                  for j, fn in classifiers.items()}
+
+        def residual(x_red, p_aug):
+            r = base_residual(x_red, p_aug)
+            for j, (masked_j, tau) in masked.items():
+                r = r.at[j].set(tau - jnp.reshape(jnp.asarray(masked_j(x_red, p_aug)), ()))
+            return r
+        return residual
 
     def _chance_constraint(self, key, ndim, input_indices, aux_indices, int_indices):
         """Chance constraint `P_feas(x) >= p_target` from the node's probability_map.
@@ -341,7 +422,7 @@ class CurrentCostEvaluator(BaseEvaluator):
         )
         def constraint(x_red, p_aug):
             return jnp.atleast_1d(p_target - masked(x_red, p_aug))
-        return constraint, 0
+        return constraint, 0, 1
 
     def _classifier_constraint(self, key, ndim, input_indices, aux_indices, int_indices):
         """Node feasibility classifier (multi-head aware), tightened by the
@@ -360,12 +441,12 @@ class CurrentCostEvaluator(BaseEvaluator):
                 p = jnp.atleast_2d(jnp.asarray(p_aug))
                 onehot = p[0, head_0:head_0 + n_heads]
                 return jnp.atleast_1d(masked(x_red, p_aug) + jnp.sum(onehot * backoff))
-            return constraint, n_heads
+            return constraint, n_heads, 1
 
         total = jnp.sum(backoff)
         def constraint(x_red, p_aug):
             return jnp.atleast_1d(masked(x_red, p_aug) + total)
-        return constraint, n_heads
+        return constraint, n_heads, 1
 
     def evaluate(self, inputs, aux):
         """
