@@ -1,0 +1,318 @@
+case_study:
+  case_study: cstr
+  make_markov: true
+  vmap_evaluations: true
+  eval_cost: true
+  num_nodes: 50
+  adjacency_matrix: None
+  n_design_args: 1
+  aux:
+  - name: setpoint
+    type: local_param
+    bounds:
+    - 0.8
+    - 0.95
+    default: 0.85
+  n_input_args: 3
+  reject_time: 0.5
+  discount_factor: 0.99999
+  sizes:
+    X_SIZE: 3
+    U_SIZE: 1
+    F_SIZE: 3
+    G_SIZE: 2
+    Z_SIZE: 2
+    L_SIZE: 1
+    PHI_SIZE: 0
+  KS_bounds:
+    design_args:
+    - - 290
+      - 302
+    aux_args: []
+  parameters_samples:
+  - c:
+    - 350.0
+    - 1.0
+    w: 1.0
+  parameters_best_estimate:
+  - 350.0
+  - 1.0
+  extendedDS_bounds:
+  - - 290.0
+    - 302.0
+  - - 0.78
+    - 0.97
+  - - 314.0
+    - 332.0
+  - - 290.0
+    - 302.0
+  edge_clip: None
+  design_space_dimensions:
+  - u0
+  design_domain:
+  - real
+  process_space_names:
+  - Tc
+  mode:
+  - backward
+  - rollout
+  evaluation_mode: jax-pmap
+  serial_graph: true
+  unit_op: dynamic
+  n_theta: 2
+  fn_evals: 0
+  bypass_visualisations: true
+model:
+  root_node_inputs:
+  - - 0.8
+    - 330.0
+    - 296.0
+  constraint:
+    auxiliary: None
+  node_aux: None
+  feas_thresh: 0.1
+  memory: false
+  pcgym_model_class: cstr_ode
+  'N': 40
+  tsim: 52
+  sp_ca:
+  - 0.85
+  - 0.85
+  - 0.85
+  - 0.85
+  - 0.85
+  - 0.85
+  - 0.85
+  - 0.85
+  - 0.85
+  - 0.85
+  - 0.85
+  - 0.85
+  - 0.85
+  - 0.85
+  - 0.85
+  - 0.85
+  - 0.85
+  - 0.85
+  - 0.85
+  - 0.85
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  - 0.9
+  t_lower: 315.0
+  t_upper: 331.0
+  tracking_penalty: smooth_log
+  move_penalty: 0.01
+  move_gain: 40.0
+  disturbance_keys:
+  - Ti
+  - Caf
+  disturbance_low:
+  - 325.0
+  - 0.95
+  disturbance_high:
+  - 375.0
+  - 1.05
+  integration:
+    scheme: tsit5
+    step_size_controller: constant
+    t0: 0
+    tf: 0.56
+    dt0: 0.005
+    max_steps: 100000
+    vmap_chunk_size: 0
+    adjoint: direct
+  softmax_beta:
+    decomposition: 1000
+    monolithic: 50
+  edge_clip_beta:
+    decomposition: 1000
+    monolithic: 50
+surrogate:
+  classifier: true
+  classifier_selection: SVM
+  regressor_selection: ANN
+  probability_map: false
+  subsample_size: 100000
+  num_folds: 2
+  index_on: 1
+  classifier_args:
+    standardised: true
+    svm:
+      kernel:
+      - rbf
+      C:
+      - 20
+      - 10
+      - 2.5
+      - 1
+      - 0.1
+      gamma:
+      - 0.2
+      - 1
+      - 0.5
+      - 2
+      - 4
+      - 6
+      probability:
+      - false
+    ann:
+      hidden_size_options:
+      - - 100
+        - 100
+      - - 75
+        - 75
+      - - 50
+        - 50
+      - - 50
+        - 50
+        - 25
+      - - 25
+        - 10
+      - - 10
+        - 10
+      activation_functions:
+      - tanh
+      - gelu
+      decaying_lr_and_clip_param: true
+      learning_rate: 0.01
+      terminal_lr: 1.0e-05
+      num_epochs: 1000
+      min_delta: 1.0e-06
+      patience: 50
+      batch_size: 264
+      weight_decay: 0.0
+  forward_evaluation_surrogate: false
+  post_process_lower:
+    model_class: classification
+    desired_node_index: 0
+  surrogate_forward:
+    drop_uncertain_params: false
+    ann:
+      hidden_size_options:
+      - - 100
+        - 100
+      - - 75
+        - 75
+      - - 50
+        - 50
+      - - 50
+        - 50
+        - 25
+      - - 50
+        - 25
+      - - 25
+        - 10
+      activation_functions:
+      - tanh
+      - gelu
+      decaying_lr_and_clip_param: true
+      learning_rate: 0.01
+      terminal_lr: 1.0e-05
+      num_epochs: 1000
+      min_delta: 1.0e-05
+      patience: 50
+      batch_size: 264
+      weight_decay: 0.0
+  surrogate_ctg:
+    ann:
+      hidden_size_options:
+      - - 100
+        - 100
+      - - 75
+        - 75
+      - - 50
+        - 50
+      - - 50
+        - 50
+        - 25
+      - - 50
+        - 25
+      - - 25
+        - 10
+      activation_functions:
+      - tanh
+      - gelu
+      decaying_lr_and_clip_param: true
+      learning_rate: 0.01
+      terminal_lr: 1.0e-05
+      num_epochs: 1000
+      min_delta: 1.0e-05
+      patience: 50
+      batch_size: 264
+      weight_decay: 0.0001
+  augmentation:
+    enabled: false
+solvers:
+  decomposition:
+    n_starts: 4
+    n_sobol_screen: 64
+    feasibility_tol: 0.0001
+    optimality_tol: 0.0001
+    max_iter: 30
+  monolithic:
+    feasibility_tol: 0.0001
+    optimality_tol: 0.02
+    max_iter: 50
+    use_exact_hessian: true
+    scale_variables: true
+samplers:
+  target_reliability: 1.0
+  unit_wise_target_reliability: 1.0
+  pmap_batch: 100
+  deus:
+    activity_type: dsc
+  notion_of_feasibility: positive
+  ku_approximation: box
+  vol_scale: 1.0
+  design_expansion: 0.0
+  ns:
+    n_live: 1000
+    final_sample_live: 1500
+    n_replacements: 100
+    n_iter: 10000
+    f0: 0.1
+    alpha: 0.2
+    prior: Uniform
+    rejector: suob-ellipsoid
+    log_evidence_estimation: true
+reconstruction:
+  reconstruct:
+  - false
+  - false
+  - false
+  post_process_sampler: true
+  post_process_decision_indices:
+  - 0
+  plot_reconstruction: nominal_map
+  post_process: false
+init:
+  sobol_samples: 256
+  sampler: sobol
+device: cpu
+max_devices: 12
+dispatch: vmap
+formulation: deterministic
+method:
+- decomposition
+max_uncertain_samples: 50
+aux_override: null
+aux_evaluation: null
+log_level: INFO

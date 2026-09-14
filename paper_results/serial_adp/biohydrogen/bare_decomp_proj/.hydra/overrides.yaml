@@ -1,0 +1,15 @@
+- case_study=biohydrogen
+- model=biohydrogen
+- surrogate=biohydrogen
+- solvers=biohydrogen
+- samplers=biohydrogen
+- reconstruction=biohydrogen
+- init=biohydrogen
+- case_study.num_nodes=30
+- model.integration.scheme=Kvaerno5
+- model.integration.step_size_controller=pid
+- model.integration.max_steps=1000000
+- method=[decomposition]
+- samplers.ns.n_live=8000
+- solvers.decomposition.max_iter=30
+- solvers.decomposition.n_starts=4

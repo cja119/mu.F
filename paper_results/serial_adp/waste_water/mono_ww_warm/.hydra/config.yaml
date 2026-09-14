@@ -1,0 +1,316 @@
+case_study:
+  case_study: waste_water
+  make_markov: true
+  vmap_evaluations: true
+  eval_cost: true
+  num_nodes: 30
+  adjacency_matrix: None
+  n_design_args: 1
+  n_aux_args:
+    node_0: 1
+    (0,1): 1
+  n_input_args: 6
+  reject_time: 0.5
+  discount_factor: 0.99999
+  sizes:
+    X_SIZE: 6
+    U_SIZE: 1
+    F_SIZE: 6
+    G_SIZE: 5
+    Z_SIZE: 4
+    L_SIZE: 1
+    PHI_SIZE: 0
+  KS_bounds:
+    design_args:
+    - - 0.01
+      - 2.0
+    aux_args:
+    - - - 0.5
+        - 1.0
+  parameters_samples:
+  - c:
+    - 3.0
+    - 30.0
+    - 65.0
+    - 95.0
+    w: 1.0
+  parameters_best_estimate:
+  - 3.0
+  - 30.0
+  - 65.0
+  - 95.0
+  extendedDS_bounds: None
+  design_space_dimensions:
+  - D
+  design_domain:
+  - real
+  global_n_aux_args: 1
+  aux_default:
+  - 0.5
+  process_space_names:
+  - D
+  mode:
+  - backward
+  - rollout
+  evaluation_mode: jax-pmap
+  serial_graph: true
+  unit_op: dynamic
+  n_theta: 4
+  fn_evals: 0
+  bypass_visualisations: true
+  edge_clip:
+  - - 0.0
+    - 10.0
+  - - 0.0
+    - 10.0
+  - - 0.0
+    - 200.0
+  - - 0.0
+    - 20.0
+  - - 0.0001
+    - 100.0
+  - - 0.0
+    - 300.0
+model:
+  root_node_inputs:
+  - - 0.41
+    - 0.74
+    - 50.0
+    - 0.5
+    - 3.45
+    - 60.0
+  constraint:
+    auxiliary: global
+  node_aux: None
+  feas_thresh: 0.1
+  memory: false
+  mu_1_max: 1.2
+  k_s1: 7.1
+  mu_2_max: 0.74
+  k_s2: 9.28
+  k_i2: 256.0
+  kl_a: 19.8
+  p_t: 1.0
+  k_h: 16.0
+  K_a: 1.5e-05
+  k_1: 42.14
+  k_2: 116.5
+  k_3: 268.0
+  k_4: 50.6
+  k_5: 343.6
+  k_6: 453.0
+  gamma: 0.064
+  cod_max: 3.0
+  s2_max: 50.0
+  ph_min: 6.5
+  ph_max: 7.5
+  k_b: 6.5e-07
+  eps_z_s2: 0.001
+  q_m_ref: 100.0
+  alpha: 0.5
+  integration:
+    scheme: Kvaerno5
+    step_size_controller: pid
+    t0: 0
+    tf: 1.0
+    dt0: null
+    max_steps: 100000
+    vmap_chunk_size: 0
+  integration_monolithic:
+    scheme: tsit5
+    step_size_controller: constant
+    t0: 0
+    tf: 1.0
+    dt0: 0.005
+    max_steps: 100000
+    vmap_chunk_size: 0
+  softmax_beta:
+    decomposition: 1000
+    monolithic: 1000
+  linear_D: true
+  margin_beta: 50.0
+  margin_cap: 1000.0
+  edge_clip_beta:
+    decomposition: 1000
+    monolithic: 1000
+surrogate:
+  classifier: true
+  classifier_selection: ANN
+  regressor_selection: ANN
+  probability_map: false
+  margin_regressor: true
+  margin_backstop: true
+  margin_ensemble:
+    enabled: false
+    n_members: 5
+  backoff:
+    enabled: true
+    held_out_frac: 0.2
+    epsilon: 0.05
+    margin_band: 1.0
+  subsample_size: 100000
+  num_folds: 2
+  index_on: 1
+  classifier_args:
+    standardised: true
+    svm:
+      type: NuSVC
+      kernel:
+      - rbf
+      nu:
+      - 0.02
+      - 0.05
+      - 0.1
+      - 0.2
+      C:
+      - 20
+      - 10
+      - 2.5
+      - 1
+      - 0.1
+      gamma:
+      - 0.2
+      - 0.5
+      - 1
+      - 2
+      infeasible_weight: 5.0
+      probability:
+      - false
+    ann:
+      hidden_size_options:
+      - - 200
+        - 100
+      - - 100
+        - 100
+      - - 50
+        - 50
+      activation_functions:
+      - - tanh
+        - tanh
+      decaying_lr_and_clip_param: true
+      learning_rate: 0.01
+      terminal_lr: 1.0e-05
+      num_epochs: 1000
+      min_delta: 1.0e-06
+      patience: 50
+      batch_size: 264
+      weight_decay: 0.0
+  forward_evaluation_surrogate: false
+  post_process_lower:
+    model_class: classification
+    desired_node_index: 0
+  surrogate_forward:
+    drop_uncertain_params: false
+    ann:
+      hidden_size_options:
+      - - 100
+        - 100
+      - - 100
+        - 50
+      - - 50
+        - 50
+      activation_functions:
+      - - tanh
+        - tanh
+      decaying_lr_and_clip_param: true
+      learning_rate: 0.01
+      terminal_lr: 1.0e-05
+      num_epochs: 1000
+      min_delta: 1.0e-05
+      patience: 50
+      batch_size: 264
+      weight_decay: 0.0
+  surrogate_ctg:
+    ann:
+      hidden_size_options:
+      - - 200
+        - 100
+      - - 100
+        - 100
+      - - 50
+        - 50
+      activation_functions:
+      - - tanh
+        - tanh
+      decaying_lr_and_clip_param: true
+      learning_rate: 0.01
+      terminal_lr: 1.0e-05
+      num_epochs: 1000
+      min_delta: 1.0e-05
+      patience: 50
+      batch_size: 264
+      weight_decay: 0.0
+  augmentation:
+    enabled: false
+solvers:
+  decomposition:
+    n_starts: 2
+    n_sobol_screen: 32
+    feasibility_tol: 0.01
+    optimality_tol: 0.01
+    max_iter: 5
+    cost_to_go:
+      n_sobol_screen: 128
+      n_starts: 4
+      max_iter: 20
+  monolithic:
+    feasibility_tol: 0.0001
+    optimality_tol: 0.02
+    max_iter: 500
+    use_exact_hessian: false
+    scale_variables: true
+    warm_start: decomposition
+samplers:
+  target_reliability: 1.0
+  unit_wise_target_reliability: 1.0
+  deus:
+    activity_type: dsc
+  notion_of_feasibility: positive
+  ku_approximation: box
+  vol_scale: 0.05
+  design_expansion: 0.0
+  pmap_batch: 500
+  ns:
+    phases:
+      nmvp_search: false
+      deterministic: true
+      probabilistic: true
+    n_live: 5000
+    final_sample_live: 10000
+    n_replacements: 500
+    n_iter: 10000
+    f0: 0.1
+    alpha: 0.2
+    prior: Uniform
+    rejector: suob-ellipsoid
+    log_evidence_estimation: true
+reconstruction:
+  reconstruct:
+  - false
+  - false
+  - false
+  post_process_sampler: false
+  post_process_decision_indices:
+  - 0
+  plot_reconstruction: nominal_map
+  post_process: false
+init:
+  sobol_samples: 4096
+  sampler: sobol
+  evolutionary_refinement: false
+  scoring_method:
+  - min_cost
+  - l1_constraint
+  n_best: 32
+  n_children_per_best: 16
+  perturbation_scale: 0.15
+  n_iterations: 16
+device: cpu
+max_devices: 12
+dispatch: vmap
+formulation: deterministic
+method: multiple_shooting
+max_uncertain_samples: 50
+aux_override: null
+aux_evaluation: null
+log_level: INFO

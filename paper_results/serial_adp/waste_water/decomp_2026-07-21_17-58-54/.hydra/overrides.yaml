@@ -1,0 +1,9 @@
+- case_study=waste_water
+- model=waste_water
+- samplers=waste_water
+- surrogate=waste_water
+- solvers=waste_water
+- reconstruction=waste_water
+- init=waste_water
+- method=decomposition
+- case_study.num_nodes=30

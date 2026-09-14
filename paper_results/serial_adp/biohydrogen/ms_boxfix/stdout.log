@@ -1,0 +1,666 @@
+/Users/cja119/Documents/mu.F/.claude/worktrees/bh-movepen/src/mu_F/main.py:87: UserWarning: 
+The version_base parameter is not specified.
+Please specify a compatability version level, or None.
+Will assume defaults for version 1.1
+  @hydra.main(config_path="config", config_name="integrator")
+/opt/miniconda3/envs/mu_F/lib/python3.12/site-packages/hydra/_internal/defaults_list.py:251: UserWarning: In 'integrator': Defaults list is missing `_self_`. See https://hydra.cc/docs/1.2/upgrades/1.0_to_1.1/default_composition_order for more information
+  warnings.warn(msg, UserWarning)
+/opt/miniconda3/envs/mu_F/lib/python3.12/site-packages/hydra/_internal/hydra.py:119: UserWarning: Future Hydra versions will no longer change working directory at job runtime by default.
+See https://hydra.cc/docs/1.2/upgrades/1.1_to_1.2/changes_to_job_working_dir/ for more information.
+  ret = run_job(
+[2026-08-20 13:13:19,947][root][INFO] - JAX backend=cpu | devices=[CpuDevice(id=0), CpuDevice(id=1), CpuDevice(id=2), CpuDevice(id=3), CpuDevice(id=4), CpuDevice(id=5), CpuDevice(id=6), CpuDevice(id=7), CpuDevice(id=8), CpuDevice(id=9), CpuDevice(id=10), CpuDevice(id=11)] | using 12
+{'d0': {'d0': [0.0, 12.21]}, 'd1': {'d1': [0.0, 12.21]}, 'd2': {'d2': [0.0, 12.21]}, 'd3': {'d3': [0.0, 12.21]}, 'd4': {'d4': [0.0, 12.21]}, 'd5': {'d5': [0.0, 12.21]}, 'd6': {'d6': [0.0, 12.21]}, 'd7': {'d7': [0.0, 12.21]}, 'd8': {'d8': [0.0, 12.21]}, 'd9': {'d9': [0.0, 12.21]}, 'd10': {'d10': [0.0, 12.21]}, 'd11': {'d11': [0.0, 12.21]}, 'd12': {'d12': [0.0, 12.21]}, 'd13': {'d13': [0.0, 12.21]}, 'd14': {'d14': [0.0, 12.21]}, 'd15': {'d15': [0.0, 12.21]}, 'd16': {'d16': [0.0, 12.21]}, 'd17': {'d17': [0.0, 12.21]}, 'd18': {'d18': [0.0, 12.21]}, 'd19': {'d19': [0.0, 12.21]}, 'd20': {'d20': [0.0, 12.21]}, 'd21': {'d21': [0.0, 12.21]}, 'd22': {'d22': [0.0, 12.21]}, 'd23': {'d23': [0.0, 12.21]}, 'd24': {'d24': [0.0, 12.21]}, 'd25': {'d25': [0.0, 12.21]}, 'd26': {'d26': [0.0, 12.21]}, 'd27': {'d27': [0.0, 12.21]}, 'd28': {'d28': [0.0, 12.21]}, 'd29': {'d29': [0.0, 12.21]}, 'd30': {'d30': [0.0, 0.97]}}
+[2026-08-20 13:13:24,209][root][INFO] - Integration took 0.36928415298461914 seconds
+[2026-08-20 13:13:26,481][root][INFO] - Integration took 0.36269402503967285 seconds
+[2026-08-20 13:13:30,050][root][INFO] - Integration took 0.25696420669555664 seconds
+[2026-08-20 13:13:33,907][root][INFO] - Integration took 0.24656176567077637 seconds
+[2026-08-20 13:13:36,704][root][INFO] - Integration took 0.2507460117340088 seconds
+[2026-08-20 13:13:39,553][root][INFO] - Integration took 0.24726390838623047 seconds
+[2026-08-20 13:13:43,037][root][INFO] - Integration took 0.25762414932250977 seconds
+[2026-08-20 13:13:45,621][root][INFO] - Integration took 0.24944090843200684 seconds
+[2026-08-20 13:13:49,130][root][INFO] - Integration took 0.2537260055541992 seconds
+[2026-08-20 13:13:52,275][root][INFO] - Integration took 0.25016307830810547 seconds
+[2026-08-20 13:13:54,953][root][INFO] - Integration took 0.25368237495422363 seconds
+[2026-08-20 13:13:58,319][root][INFO] - Integration took 0.25209593772888184 seconds
+[2026-08-20 13:14:01,203][root][INFO] - Integration took 0.2541520595550537 seconds
+[2026-08-20 13:14:05,011][root][INFO] - Integration took 0.25223398208618164 seconds
+[2026-08-20 13:14:07,952][root][INFO] - Integration took 0.2505619525909424 seconds
+[2026-08-20 13:14:11,979][root][INFO] - Integration took 1.0659010410308838 seconds
+[2026-08-20 13:14:15,318][root][INFO] - Integration took 0.2545032501220703 seconds
+[2026-08-20 13:14:18,653][root][INFO] - Integration took 0.2557389736175537 seconds
+[2026-08-20 13:14:23,016][root][INFO] - Integration took 0.25458598136901855 seconds
+[2026-08-20 13:14:26,440][root][INFO] - Integration took 0.2577526569366455 seconds
+[2026-08-20 13:14:30,821][root][INFO] - Integration took 1.286358118057251 seconds
+[2026-08-20 13:14:34,145][root][INFO] - Integration took 0.2611508369445801 seconds
+[2026-08-20 13:14:37,563][root][INFO] - Integration took 0.25672006607055664 seconds
+[2026-08-20 13:14:42,139][root][INFO] - Integration took 1.427558183670044 seconds
+[2026-08-20 13:14:45,573][root][INFO] - Integration took 0.25731682777404785 seconds
+[2026-08-20 13:14:48,984][root][INFO] - Integration took 0.2577507495880127 seconds
+[2026-08-20 13:14:52,414][root][INFO] - Integration took 0.25851011276245117 seconds
+[2026-08-20 13:14:57,086][root][INFO] - Integration took 0.258922815322876 seconds
+[2026-08-20 13:15:00,518][root][INFO] - Integration took 0.2595810890197754 seconds
+[2026-08-20 13:15:03,980][root][INFO] - Integration took 0.26014208793640137 seconds
+{'d0': {'d0': [0.0, 12.21]}, 'd1': {'d1': [0.0, 12.21]}, 'd2': {'d2': [0.0, 12.21]}, 'd3': {'d3': [0.0, 12.21]}, 'd4': {'d4': [0.0, 12.21]}, 'd5': {'d5': [0.0, 12.21]}, 'd6': {'d6': [0.0, 12.21]}, 'd7': {'d7': [0.0, 12.21]}, 'd8': {'d8': [0.0, 12.21]}, 'd9': {'d9': [0.0, 12.21]}, 'd10': {'d10': [0.0, 12.21]}, 'd11': {'d11': [0.0, 12.21]}, 'd12': {'d12': [0.0, 12.21]}, 'd13': {'d13': [0.0, 12.21]}, 'd14': {'d14': [0.0, 12.21]}, 'd15': {'d15': [0.0, 12.21]}, 'd16': {'d16': [0.0, 12.21]}, 'd17': {'d17': [0.0, 12.21]}, 'd18': {'d18': [0.0, 12.21]}, 'd19': {'d19': [0.0, 12.21]}, 'd20': {'d20': [0.0, 12.21]}, 'd21': {'d21': [0.0, 12.21]}, 'd22': {'d22': [0.0, 12.21]}, 'd23': {'d23': [0.0, 12.21]}, 'd24': {'d24': [0.0, 12.21]}, 'd25': {'d25': [0.0, 12.21]}, 'd26': {'d26': [0.0, 12.21]}, 'd27': {'d27': [0.0, 12.21]}, 'd28': {'d28': [0.0, 12.21]}, 'd29': {'d29': [0.0, 12.21]}, 'd30': {'d30': [0.0, 0.97]}}
+[2026-08-20 13:15:06,815][root][INFO] - Evolutionary refinement: methods=['l1_constraint'], n_best=32, n_children=16, scale=0.25, iterations=32
+[2026-08-20 13:15:06,815][root][INFO] - === Running l1_constraint refinement ===
+[2026-08-20 13:15:08,989][root][INFO] - l1_constraint iter 1: selected 32 best, l1_dist range [27.45, 28.40]
+[2026-08-20 13:15:47,482][root][INFO] - l1_constraint iter 1: total samples now 16896
+[2026-08-20 13:15:47,763][root][INFO] - l1_constraint iter 2: selected 32 best, l1_dist range [25.85, 27.71]
+[2026-08-20 13:15:50,819][root][INFO] - l1_constraint iter 2: total samples now 17408
+[2026-08-20 13:15:51,031][root][INFO] - l1_constraint iter 3: selected 32 best, l1_dist range [25.53, 26.89]
+[2026-08-20 13:15:53,896][root][INFO] - l1_constraint iter 3: total samples now 17920
+[2026-08-20 13:15:54,106][root][INFO] - l1_constraint iter 4: selected 32 best, l1_dist range [25.09, 26.26]
+[2026-08-20 13:15:56,869][root][INFO] - l1_constraint iter 4: total samples now 18432
+[2026-08-20 13:15:57,077][root][INFO] - l1_constraint iter 5: selected 32 best, l1_dist range [24.26, 25.82]
+[2026-08-20 13:15:59,813][root][INFO] - l1_constraint iter 5: total samples now 18944
+[2026-08-20 13:16:00,024][root][INFO] - l1_constraint iter 6: selected 32 best, l1_dist range [24.26, 25.64]
+[2026-08-20 13:16:02,702][root][INFO] - l1_constraint iter 6: total samples now 19456
+[2026-08-20 13:16:02,911][root][INFO] - l1_constraint iter 7: selected 32 best, l1_dist range [24.25, 25.45]
+[2026-08-20 13:16:05,761][root][INFO] - l1_constraint iter 7: total samples now 19968
+[2026-08-20 13:16:05,974][root][INFO] - l1_constraint iter 8: selected 32 best, l1_dist range [24.25, 25.28]
+[2026-08-20 13:16:08,735][root][INFO] - l1_constraint iter 8: total samples now 20480
+[2026-08-20 13:16:08,944][root][INFO] - l1_constraint iter 9: selected 32 best, l1_dist range [23.95, 25.12]
+[2026-08-20 13:16:11,654][root][INFO] - l1_constraint iter 9: total samples now 20992
+[2026-08-20 13:16:11,863][root][INFO] - l1_constraint iter 10: selected 32 best, l1_dist range [23.95, 25.02]
+[2026-08-20 13:16:14,622][root][INFO] - l1_constraint iter 10: total samples now 21504
+[2026-08-20 13:16:14,830][root][INFO] - l1_constraint iter 11: selected 32 best, l1_dist range [23.95, 24.95]
+[2026-08-20 13:16:17,556][root][INFO] - l1_constraint iter 11: total samples now 22016
+[2026-08-20 13:16:17,765][root][INFO] - l1_constraint iter 12: selected 32 best, l1_dist range [23.96, 24.86]
+[2026-08-20 13:16:20,486][root][INFO] - l1_constraint iter 12: total samples now 22528
+[2026-08-20 13:16:20,695][root][INFO] - l1_constraint iter 13: selected 32 best, l1_dist range [23.96, 24.84]
+[2026-08-20 13:16:23,365][root][INFO] - l1_constraint iter 13: total samples now 23040
+[2026-08-20 13:16:23,577][root][INFO] - l1_constraint iter 14: selected 32 best, l1_dist range [23.99, 24.78]
+[2026-08-20 13:16:26,282][root][INFO] - l1_constraint iter 14: total samples now 23552
+[2026-08-20 13:16:26,496][root][INFO] - l1_constraint iter 15: selected 32 best, l1_dist range [23.89, 24.70]
+[2026-08-20 13:16:29,155][root][INFO] - l1_constraint iter 15: total samples now 24064
+[2026-08-20 13:16:29,370][root][INFO] - l1_constraint iter 16: selected 32 best, l1_dist range [23.89, 24.71]
+[2026-08-20 13:16:32,077][root][INFO] - l1_constraint iter 16: total samples now 24576
+[2026-08-20 13:16:32,293][root][INFO] - l1_constraint iter 17: selected 32 best, l1_dist range [23.89, 24.61]
+[2026-08-20 13:16:34,964][root][INFO] - l1_constraint iter 17: total samples now 25088
+[2026-08-20 13:16:35,177][root][INFO] - l1_constraint iter 18: selected 32 best, l1_dist range [23.89, 24.53]
+[2026-08-20 13:16:37,888][root][INFO] - l1_constraint iter 18: total samples now 25600
+[2026-08-20 13:16:38,103][root][INFO] - l1_constraint iter 19: selected 32 best, l1_dist range [23.89, 24.48]
+[2026-08-20 13:16:40,911][root][INFO] - l1_constraint iter 19: total samples now 26112
+[2026-08-20 13:16:41,127][root][INFO] - l1_constraint iter 20: selected 32 best, l1_dist range [23.83, 24.44]
+[2026-08-20 13:16:43,840][root][INFO] - l1_constraint iter 20: total samples now 26624
+[2026-08-20 13:16:44,055][root][INFO] - l1_constraint iter 21: selected 32 best, l1_dist range [23.83, 24.44]
+[2026-08-20 13:16:46,736][root][INFO] - l1_constraint iter 21: total samples now 27136
+[2026-08-20 13:16:46,951][root][INFO] - l1_constraint iter 22: selected 32 best, l1_dist range [23.83, 24.36]
+[2026-08-20 13:16:49,641][root][INFO] - l1_constraint iter 22: total samples now 27648
+[2026-08-20 13:16:49,856][root][INFO] - l1_constraint iter 23: selected 32 best, l1_dist range [23.83, 24.30]
+[2026-08-20 13:16:52,512][root][INFO] - l1_constraint iter 23: total samples now 28160
+[2026-08-20 13:16:52,728][root][INFO] - l1_constraint iter 24: selected 32 best, l1_dist range [23.83, 24.27]
+[2026-08-20 13:16:55,423][root][INFO] - l1_constraint iter 24: total samples now 28672
+[2026-08-20 13:16:55,639][root][INFO] - l1_constraint iter 25: selected 32 best, l1_dist range [23.83, 24.26]
+[2026-08-20 13:16:58,373][root][INFO] - l1_constraint iter 25: total samples now 29184
+[2026-08-20 13:16:58,593][root][INFO] - l1_constraint iter 26: selected 32 best, l1_dist range [23.75, 24.26]
+[2026-08-20 13:17:01,266][root][INFO] - l1_constraint iter 26: total samples now 29696
+[2026-08-20 13:17:01,484][root][INFO] - l1_constraint iter 27: selected 32 best, l1_dist range [23.74, 24.25]
+[2026-08-20 13:17:04,119][root][INFO] - l1_constraint iter 27: total samples now 30208
+[2026-08-20 13:17:04,336][root][INFO] - l1_constraint iter 28: selected 32 best, l1_dist range [23.74, 24.22]
+[2026-08-20 13:17:06,989][root][INFO] - l1_constraint iter 28: total samples now 30720
+[2026-08-20 13:17:07,209][root][INFO] - l1_constraint iter 29: selected 32 best, l1_dist range [23.74, 24.19]
+[2026-08-20 13:17:09,834][root][INFO] - l1_constraint iter 29: total samples now 31232
+[2026-08-20 13:17:10,056][root][INFO] - l1_constraint iter 30: selected 32 best, l1_dist range [23.74, 24.00]
+[2026-08-20 13:17:12,705][root][INFO] - l1_constraint iter 30: total samples now 31744
+[2026-08-20 13:17:12,932][root][INFO] - l1_constraint iter 31: selected 32 best, l1_dist range [23.74, 24.00]
+[2026-08-20 13:17:15,512][root][INFO] - l1_constraint iter 31: total samples now 32256
+[2026-08-20 13:17:15,739][root][INFO] - l1_constraint iter 32: selected 32 best, l1_dist range [23.73, 24.00]
+[2026-08-20 13:17:18,255][root][INFO] - l1_constraint iter 32: total samples now 32768
+[2026-08-20 13:17:18,797][root][INFO] - warm_start=decomposition: seeding monolithic from rollout_trajectories_iterate_0.npz (aux=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]).
+[2026-08-20 13:22:14,730][root][INFO] - SQP start: n_d=234 n_g=263 max_iter=200 tol_stat=1.0e-04 tol_feas=1.0e-04
+E0820 13:31:24.849060 9373753 slow_operation_alarm.cc:73] 
+********************************
+[Compiling module jit_sqp_step for CPU] Very slow compile? If you want to file a bug, run with envvar XLA_FLAGS=--xla_dump_to=/tmp/foo and attach the results.
+********************************
+E0820 13:32:35.583699 9373734 slow_operation_alarm.cc:140] The operation took 3m10.74475s
+
+********************************
+[Compiling module jit_sqp_step for CPU] Very slow compile? If you want to file a bug, run with envvar XLA_FLAGS=--xla_dump_to=/tmp/foo and attach the results.
+********************************
+[2026-08-20 13:32:43,321][root][INFO] - SQP iter   0: stationarity=9.433e-02 feasibility=8.631e-08 obj=-0.39981 penalty=9.99e-01 alpha=1.53e-05 stag=1 step=2.24e-06 hscale=1.00e+00 worst@47=9.43e-02
+[2026-08-20 13:32:44,338][root][INFO] - SQP iter   1: stationarity=9.432e-02 feasibility=1.297e-07 obj=-0.39981 penalty=9.98e-01 alpha=7.63e-06 stag=2 step=1.12e-06 hscale=1.00e+00 worst@47=9.43e-02
+[2026-08-20 13:32:45,394][root][INFO] - SQP iter   2: stationarity=9.432e-02 feasibility=1.352e-07 obj=-0.39981 penalty=9.97e-01 alpha=9.54e-07 stag=3 step=1.40e-07 hscale=1.00e+00 worst@47=9.43e-02
+[2026-08-20 13:32:46,554][root][INFO] - SQP iter   3: stationarity=9.432e-02 feasibility=1.354e-07 obj=-0.39981 penalty=9.96e-01 alpha=2.98e-08 stag=4 step=4.37e-09 hscale=1.00e+00 worst@47=9.43e-02
+[2026-08-20 13:32:47,731][root][INFO] - SQP iter   4: stationarity=9.432e-02 feasibility=1.354e-07 obj=-0.39981 penalty=9.95e-01 alpha=1.49e-08 stag=5 step=2.19e-09 hscale=1.00e+00 worst@47=9.43e-02
+[2026-08-20 13:32:48,929][root][INFO] - SQP iter   5: stationarity=9.432e-02 feasibility=1.355e-07 obj=-0.39981 penalty=9.94e-01 alpha=7.45e-09 stag=6 step=1.09e-09 hscale=1.00e+00 worst@47=9.43e-02
+[2026-08-20 13:32:50,185][root][INFO] - SQP iter   6: stationarity=9.432e-02 feasibility=2.685e-04 obj=-0.39974 penalty=9.93e-01 alpha=9.31e-10 stag=7 step=1.37e-10 hscale=1.00e+00 worst@47=9.43e-02
+[2026-08-20 13:32:50,956][root][INFO] - SQP iter   7: stationarity=9.757e-01 feasibility=4.928e-04 obj=-0.40044 penalty=9.92e-01 alpha=6.25e-02 stag=8 step=5.67e-03 hscale=5.41e+01 worst@38=9.76e-01
+[2026-08-20 13:32:51,661][root][INFO] - SQP iter   8: stationarity=9.753e-02 feasibility=2.780e-04 obj=-0.40083 penalty=9.91e-01 alpha=1.00e+00 stag=9 step=2.67e-03 hscale=1.58e+02 worst@47=9.75e-02
+[2026-08-20 13:32:52,388][root][INFO] - SQP iter   9: stationarity=9.757e-01 feasibility=1.188e-03 obj=-0.40168 penalty=1.00e+00 alpha=5.00e-01 stag=0 step=4.89e-03 hscale=1.00e+00 worst@38=9.76e-01
+[2026-08-20 13:32:53,164][root][INFO] - SQP iter  10: stationarity=7.919e-02 feasibility=1.563e-03 obj=-0.40234 penalty=1.00e+00 alpha=6.25e-02 stag=1 step=9.32e-03 hscale=8.48e+01 worst@4=7.92e-02
+[2026-08-20 13:32:54,001][root][INFO] - SQP iter  11: stationarity=4.635e-01 feasibility=1.173e-03 obj=-0.40348 penalty=1.00e+00 alpha=2.50e-01 stag=2 step=1.89e-02 hscale=1.12e+02 worst@38=4.63e-01
+[2026-08-20 13:32:54,676][root][INFO] - SQP iter  12: stationarity=5.097e-02 feasibility=6.568e-07 obj=-0.40353 penalty=1.00e+00 alpha=1.00e+00 stag=3 step=2.36e-03 hscale=1.14e+02 worst@78=5.10e-02
+[2026-08-20 13:32:55,359][root][INFO] - SQP iter  13: stationarity=3.005e-02 feasibility=1.264e-07 obj=-0.40356 penalty=9.99e-01 alpha=1.00e+00 stag=4 step=5.37e-04 hscale=1.43e+02 worst@38=3.01e-02
+[2026-08-20 13:32:56,040][root][INFO] - SQP iter  14: stationarity=2.088e-01 feasibility=2.664e-06 obj=-0.40374 penalty=1.36e+00 alpha=1.00e+00 stag=5 step=2.82e-03 hscale=1.84e+02 worst@134=2.09e-01
+[2026-08-20 13:32:56,738][root][INFO] - SQP iter  15: stationarity=9.757e-01 feasibility=3.737e-05 obj=-0.40431 penalty=5.38e+00 alpha=5.00e-01 stag=6 step=9.44e-03 hscale=3.11e+02 worst@38=9.76e-01
+[2026-08-20 13:32:57,538][root][INFO] - SQP iter  16: stationarity=1.519e-02 feasibility=1.233e-07 obj=-0.40432 penalty=5.38e+00 alpha=1.00e+00 stag=7 step=1.98e-04 hscale=4.66e+02 worst@228=1.52e-02
+[2026-08-20 13:32:58,215][root][INFO] - SQP iter  17: stationarity=7.829e-02 feasibility=9.931e-09 obj=-0.40433 penalty=5.37e+00 alpha=1.00e+00 stag=8 step=4.53e-05 hscale=5.83e+02 worst@38=7.83e-02
+[2026-08-20 13:32:58,897][root][INFO] - SQP iter  18: stationarity=1.644e-01 feasibility=3.386e-08 obj=-0.40434 penalty=5.37e+00 alpha=1.00e+00 stag=9 step=2.05e-04 hscale=1.38e+03 worst@113=1.64e-01
+[2026-08-20 13:32:59,574][root][INFO] - SQP iter  19: stationarity=9.757e-01 feasibility=3.648e-07 obj=-0.40440 penalty=1.00e+00 alpha=1.00e+00 stag=0 step=1.03e-03 hscale=1.00e+00 worst@38=9.76e-01
+[2026-08-20 13:33:00,436][root][INFO] - SQP iter  20: stationarity=1.531e-02 feasibility=9.756e-05 obj=-0.40530 penalty=9.99e-01 alpha=2.50e-01 stag=1 step=1.51e-02 hscale=1.27e+03 worst@221=1.53e-02
+[2026-08-20 13:33:01,145][root][INFO] - SQP iter  21: stationarity=4.396e-02 feasibility=2.758e-07 obj=-0.40530 penalty=9.98e-01 alpha=1.00e+00 stag=2 step=7.47e-05 hscale=1.27e+03 worst@215=4.40e-02
+[2026-08-20 13:33:01,857][root][INFO] - SQP iter  22: stationarity=1.781e-02 feasibility=7.950e-09 obj=-0.40531 penalty=9.97e-01 alpha=1.00e+00 stag=3 step=4.03e-05 hscale=1.32e+03 worst@27=1.78e-02
+[2026-08-20 13:33:02,569][root][INFO] - SQP iter  23: stationarity=1.730e-01 feasibility=2.900e-08 obj=-0.40532 penalty=9.96e-01 alpha=1.00e+00 stag=4 step=1.95e-04 hscale=1.38e+03 worst@215=1.73e-01
+[2026-08-20 13:33:03,285][root][INFO] - SQP iter  24: stationarity=2.583e-01 feasibility=1.848e-06 obj=-0.40537 penalty=9.95e-01 alpha=1.00e+00 stag=5 step=9.76e-04 hscale=1.69e+03 worst@215=2.58e-01
+[2026-08-20 13:33:03,990][root][INFO] - SQP iter  25: stationarity=9.466e-01 feasibility=2.426e-04 obj=-0.40553 penalty=2.28e+00 alpha=1.00e+00 stag=6 step=4.32e-03 hscale=3.73e+03 worst@27=9.47e-01
+[2026-08-20 13:33:04,681][root][INFO] - SQP iter  26: stationarity=2.170e-01 feasibility=5.032e-08 obj=-0.40553 penalty=2.28e+00 alpha=1.00e+00 stag=7 step=2.92e-04 hscale=4.20e+03 worst@141=2.17e-01
+[2026-08-20 13:33:05,378][root][INFO] - SQP iter  27: stationarity=1.302e-02 feasibility=5.707e-09 obj=-0.40554 penalty=2.28e+00 alpha=1.00e+00 stag=8 step=1.33e-05 hscale=2.89e+04 worst@228=1.30e-02
+[2026-08-20 13:33:06,092][root][INFO] - SQP iter  28: stationarity=1.304e-02 feasibility=7.237e-10 obj=-0.40554 penalty=2.28e+00 alpha=1.00e+00 stag=9 step=1.72e-06 hscale=2.89e+04 worst@228=1.30e-02
+[2026-08-20 13:33:06,785][root][INFO] - SQP iter  29: stationarity=1.303e-02 feasibility=7.291e-10 obj=-0.40554 penalty=1.00e+00 alpha=1.00e+00 stag=0 step=1.72e-06 hscale=1.00e+00 worst@228=1.30e-02
+[2026-08-20 13:33:07,533][root][INFO] - SQP iter  30: stationarity=3.116e-02 feasibility=5.755e-05 obj=-0.40607 penalty=9.99e-01 alpha=2.50e-01 stag=1 step=1.24e-02 hscale=1.06e+00 worst@228=3.12e-02
+[2026-08-20 13:33:08,283][root][INFO] - SQP iter  31: stationarity=3.784e-02 feasibility=5.542e-05 obj=-0.40643 penalty=9.98e-01 alpha=2.50e-01 stag=2 step=1.11e-02 hscale=2.62e+00 worst@227=3.78e-02
+[2026-08-20 13:33:09,079][root][INFO] - SQP iter  32: stationarity=7.347e-01 feasibility=9.083e-05 obj=-0.40653 penalty=9.97e-01 alpha=6.25e-02 stag=3 step=4.28e-03 hscale=8.51e+02 worst@228=7.35e-01
+[2026-08-20 13:33:09,794][root][INFO] - SQP iter  33: stationarity=2.535e-02 feasibility=1.954e-06 obj=-0.40653 penalty=9.96e-01 alpha=1.00e+00 stag=4 step=1.61e-04 hscale=9.70e+02 worst@232=2.54e-02
+[2026-08-20 13:33:10,505][root][INFO] - SQP iter  34: stationarity=3.497e-02 feasibility=1.072e-06 obj=-0.40653 penalty=9.95e-01 alpha=1.00e+00 stag=5 step=3.40e-05 hscale=1.31e+03 worst@228=3.50e-02
+[2026-08-20 13:33:11,267][root][INFO] - SQP iter  35: stationarity=7.326e-01 feasibility=2.402e-04 obj=-0.40666 penalty=1.35e+00 alpha=1.25e-01 stag=6 step=6.93e-03 hscale=1.80e+03 worst@227=7.33e-01
+[2026-08-20 13:33:12,092][root][INFO] - SQP iter  36: stationarity=1.111e-01 feasibility=1.067e-07 obj=-0.40666 penalty=1.35e+00 alpha=1.00e+00 stag=7 step=3.01e-04 hscale=1.97e+03 worst@85=1.11e-01
+[2026-08-20 13:33:12,780][root][INFO] - SQP iter  37: stationarity=1.016e-02 feasibility=8.983e-09 obj=-0.40666 penalty=1.35e+00 alpha=1.00e+00 stag=8 step=1.40e-05 hscale=1.23e+04 worst@228=1.02e-02
+[2026-08-20 13:33:13,478][root][INFO] - SQP iter  38: stationarity=6.079e-03 feasibility=1.143e-09 obj=-0.40666 penalty=1.34e+00 alpha=1.00e+00 stag=9 step=2.04e-06 hscale=1.23e+04 worst@228=6.08e-03
+[2026-08-20 13:33:14,174][root][INFO] - SQP iter  39: stationarity=6.074e-03 feasibility=1.245e-09 obj=-0.40666 penalty=1.00e+00 alpha=1.00e+00 stag=0 step=2.04e-06 hscale=1.00e+00 worst@228=6.07e-03
+[2026-08-20 13:33:14,901][root][INFO] - SQP iter  40: stationarity=1.438e-02 feasibility=4.539e-05 obj=-0.40694 penalty=9.99e-01 alpha=5.00e-01 stag=1 step=1.26e-02 hscale=1.02e+00 worst@228=1.44e-02
+[2026-08-20 13:33:15,669][root][INFO] - SQP iter  41: stationarity=1.225e-02 feasibility=4.237e-05 obj=-0.40707 penalty=9.98e-01 alpha=1.25e-01 stag=2 step=6.77e-03 hscale=3.58e+00 worst@227=1.23e-02
+[2026-08-20 13:33:16,436][root][INFO] - SQP iter  42: stationarity=6.935e-01 feasibility=6.081e-05 obj=-0.40720 penalty=9.97e-01 alpha=1.25e-01 stag=3 step=8.05e-03 hscale=1.93e+02 worst@228=6.94e-01
+[2026-08-20 13:33:17,135][root][INFO] - SQP iter  43: stationarity=4.719e-03 feasibility=5.388e-07 obj=-0.40720 penalty=9.96e-01 alpha=1.00e+00 stag=4 step=1.06e-04 hscale=1.37e+03 worst@89=4.72e-03
+[2026-08-20 13:33:17,833][root][INFO] - SQP iter  44: stationarity=5.672e-03 feasibility=2.280e-07 obj=-0.40721 penalty=9.95e-01 alpha=1.00e+00 stag=5 step=2.28e-04 hscale=1.37e+03 worst@0=5.67e-03
+[2026-08-20 13:33:18,661][root][INFO] - SQP iter  45: stationarity=2.731e-02 feasibility=1.088e-06 obj=-0.40722 penalty=9.94e-01 alpha=1.00e+00 stag=6 step=1.10e-03 hscale=1.38e+03 worst@89=2.73e-02
+[2026-08-20 13:33:19,368][root][INFO] - SQP iter  46: stationarity=3.740e-03 feasibility=9.133e-09 obj=-0.40722 penalty=9.93e-01 alpha=1.00e+00 stag=7 step=1.16e-05 hscale=1.74e+03 worst@229=3.74e-03
+[2026-08-20 13:33:20,062][root][INFO] - SQP iter  47: stationarity=2.071e-02 feasibility=4.982e-07 obj=-0.40723 penalty=9.92e-01 alpha=1.00e+00 stag=8 step=4.93e-04 hscale=1.74e+03 worst@225=2.07e-02
+[2026-08-20 13:33:20,761][root][INFO] - SQP iter  48: stationarity=7.413e-02 feasibility=2.749e-06 obj=-0.40727 penalty=9.91e-01 alpha=1.00e+00 stag=9 step=2.43e-03 hscale=1.79e+03 worst@232=7.41e-02
+[2026-08-20 13:33:21,501][root][INFO] - SQP iter  49: stationarity=2.022e-01 feasibility=6.314e-06 obj=-0.40731 penalty=1.00e+00 alpha=2.50e-01 stag=0 step=3.02e-03 hscale=1.00e+00 worst@71=2.02e-01
+[2026-08-20 13:33:22,230][root][INFO] - SQP iter  50: stationarity=3.925e-03 feasibility=1.252e-05 obj=-0.40736 penalty=9.99e-01 alpha=2.50e-01 stag=1 step=3.64e-03 hscale=1.19e+03 worst@229=3.92e-03
+[2026-08-20 13:33:22,930][root][INFO] - SQP iter  51: stationarity=4.185e-03 feasibility=6.447e-08 obj=-0.40736 penalty=9.98e-01 alpha=1.00e+00 stag=2 step=1.85e-05 hscale=1.19e+03 worst@230=4.18e-03
+[2026-08-20 13:33:23,626][root][INFO] - SQP iter  52: stationarity=4.508e-03 feasibility=1.270e-08 obj=-0.40736 penalty=9.97e-01 alpha=1.00e+00 stag=3 step=1.06e-05 hscale=1.22e+03 worst@229=4.51e-03
+[2026-08-20 13:33:24,319][root][INFO] - SQP iter  53: stationarity=1.505e-02 feasibility=5.743e-08 obj=-0.40736 penalty=9.96e-01 alpha=1.00e+00 stag=4 step=4.92e-05 hscale=1.27e+03 worst@218=1.51e-02
+[2026-08-20 13:33:25,010][root][INFO] - SQP iter  54: stationarity=5.152e-02 feasibility=2.849e-07 obj=-0.40737 penalty=9.95e-01 alpha=1.00e+00 stag=5 step=2.44e-04 hscale=1.53e+03 worst@218=5.15e-02
+[2026-08-20 13:33:25,709][root][INFO] - SQP iter  55: stationarity=2.252e-01 feasibility=1.455e-06 obj=-0.40738 penalty=1.35e+00 alpha=1.00e+00 stag=6 step=1.24e-03 hscale=2.31e+03 worst@218=2.25e-01
+[2026-08-20 13:33:26,394][root][INFO] - SQP iter  56: stationarity=3.748e-03 feasibility=4.397e-09 obj=-0.40738 penalty=1.34e+00 alpha=1.00e+00 stag=7 step=6.34e-06 hscale=2.31e+03 worst@229=3.75e-03
+[2026-08-20 13:33:27,093][root][INFO] - SQP iter  57: stationarity=4.000e-03 feasibility=7.055e-09 obj=-0.40738 penalty=1.34e+00 alpha=1.00e+00 stag=8 step=5.89e-06 hscale=2.31e+03 worst@229=4.00e-03
+[2026-08-20 13:33:27,783][root][INFO] - SQP iter  58: stationarity=4.000e-03 feasibility=7.015e-09 obj=-0.40738 penalty=1.34e+00 alpha=1.00e+00 stag=9 step=5.89e-06 hscale=2.31e+03 worst@229=4.00e-03
+[2026-08-20 13:33:28,596][root][INFO] - SQP iter  59: stationarity=4.000e-03 feasibility=7.028e-09 obj=-0.40738 penalty=1.00e+00 alpha=1.00e+00 stag=0 step=5.89e-06 hscale=1.00e+00 worst@229=4.00e-03
+[2026-08-20 13:33:29,338][root][INFO] - SQP iter  60: stationarity=4.005e-03 feasibility=8.112e-06 obj=-0.40743 penalty=9.99e-01 alpha=2.50e-01 stag=1 step=3.39e-03 hscale=1.01e+00 worst@229=4.01e-03
+[2026-08-20 13:33:30,138][root][INFO] - SQP iter  61: stationarity=6.944e-03 feasibility=1.120e-05 obj=-0.40745 penalty=9.98e-01 alpha=3.12e-02 stag=2 step=1.74e-03 hscale=5.26e+01 worst@228=6.94e-03
+[2026-08-20 13:33:30,839][root][INFO] - SQP iter  62: stationarity=4.004e-03 feasibility=2.651e-07 obj=-0.40745 penalty=9.97e-01 alpha=1.00e+00 stag=3 step=2.44e-04 hscale=6.63e+01 worst@229=4.00e-03
+[2026-08-20 13:33:31,540][root][INFO] - SQP iter  63: stationarity=1.651e-02 feasibility=1.506e-06 obj=-0.40747 penalty=9.96e-01 alpha=1.00e+00 stag=4 step=1.18e-03 hscale=7.87e+01 worst@38=1.65e-02
+[2026-08-20 13:33:32,236][root][INFO] - SQP iter  64: stationarity=6.350e-01 feasibility=2.676e-05 obj=-0.40753 penalty=9.95e-01 alpha=1.00e+00 stag=5 step=5.79e-03 hscale=1.92e+02 worst@228=6.35e-01
+[2026-08-20 13:33:33,499][root][INFO] - SQP iter  65: stationarity=2.790e-01 feasibility=2.676e-05 obj=-0.40753 penalty=2.35e+00 alpha=9.31e-10 stag=6 step=3.06e-11 hscale=1.92e+02 worst@221=2.79e-01
+[2026-08-20 13:33:34,307][root][INFO] - SQP iter  66: stationarity=2.801e-01 feasibility=2.663e-05 obj=-0.40755 penalty=2.35e+00 alpha=3.12e-02 stag=7 step=1.03e-03 hscale=5.30e+01 worst@221=2.80e-01
+[2026-08-20 13:33:35,101][root][INFO] - SQP iter  67: stationarity=3.058e-02 feasibility=2.651e-05 obj=-0.40756 penalty=2.35e+00 alpha=3.12e-02 stag=8 step=1.10e-03 hscale=7.77e+05 worst@221=3.06e-02
+[2026-08-20 13:33:35,797][root][INFO] - SQP iter  68: stationarity=9.703e-01 feasibility=1.059e-07 obj=-0.40756 penalty=1.56e+01 alpha=1.00e+00 stag=9 step=1.98e-05 hscale=7.75e+05 worst@29=9.70e-01
+[2026-08-20 13:33:36,506][root][INFO] - SQP iter  69: stationarity=2.889e-02 feasibility=1.648e-09 obj=-0.40756 penalty=1.00e+00 alpha=1.00e+00 stag=0 step=1.54e-07 hscale=1.00e+00 worst@97=2.89e-02
+[2026-08-20 13:33:37,230][root][INFO] - SQP iter  70: stationarity=4.187e-03 feasibility=6.933e-05 obj=-0.40762 penalty=9.99e-01 alpha=5.00e-01 stag=1 step=5.80e-03 hscale=3.77e+00 worst@229=4.19e-03
+[2026-08-20 13:33:37,982][root][INFO] - SQP iter  71: stationarity=1.831e-01 feasibility=5.467e-05 obj=-0.40768 penalty=9.98e-01 alpha=1.25e-01 stag=2 step=5.77e-03 hscale=1.06e+02 worst@97=1.83e-01
+[2026-08-20 13:33:38,674][root][INFO] - SQP iter  72: stationarity=3.870e-03 feasibility=2.396e-07 obj=-0.40768 penalty=9.97e-01 alpha=1.00e+00 stag=3 step=1.07e-04 hscale=1.72e+02 worst@229=3.87e-03
+[2026-08-20 13:33:39,366][root][INFO] - SQP iter  73: stationarity=2.657e-02 feasibility=4.232e-08 obj=-0.40768 penalty=9.96e-01 alpha=1.00e+00 stag=4 step=2.75e-05 hscale=2.07e+02 worst@97=2.66e-02
+[2026-08-20 13:33:40,066][root][INFO] - SQP iter  74: stationarity=5.836e-02 feasibility=1.609e-07 obj=-0.40768 penalty=9.95e-01 alpha=1.00e+00 stag=5 step=1.08e-04 hscale=5.20e+02 worst@97=5.84e-02
+[2026-08-20 13:33:40,771][root][INFO] - SQP iter  75: stationarity=4.266e-03 feasibility=3.075e-08 obj=-0.40768 penalty=9.94e-01 alpha=1.00e+00 stag=6 step=2.08e-05 hscale=2.56e+03 worst@229=4.27e-03
+[2026-08-20 13:33:41,596][root][INFO] - SQP iter  76: stationarity=4.141e-01 feasibility=4.489e-07 obj=-0.40769 penalty=9.93e-01 alpha=1.00e+00 stag=7 step=3.04e-04 hscale=3.17e+03 worst@230=4.14e-01
+[2026-08-20 13:33:42,337][root][INFO] - SQP iter  77: stationarity=7.321e-01 feasibility=7.829e-07 obj=-0.40769 penalty=1.97e+00 alpha=2.50e-01 stag=8 step=3.02e-04 hscale=9.22e+04 worst@97=7.32e-01
+[2026-08-20 13:33:43,037][root][INFO] - SQP iter  78: stationarity=2.167e-02 feasibility=1.479e-09 obj=-0.40769 penalty=1.97e+00 alpha=1.00e+00 stag=9 step=1.18e-06 hscale=9.22e+04 worst@71=2.17e-02
+[2026-08-20 13:33:43,738][root][INFO] - SQP iter  79: stationarity=4.270e-03 feasibility=2.717e-10 obj=-0.40769 penalty=1.00e+00 alpha=1.00e+00 stag=0 step=1.17e-07 hscale=1.00e+00 worst@229=4.27e-03
+[2026-08-20 13:33:44,526][root][INFO] - SQP iter  80: stationarity=4.265e-03 feasibility=1.514e-06 obj=-0.40770 penalty=9.99e-01 alpha=6.25e-02 stag=1 step=6.73e-04 hscale=1.00e+00 worst@229=4.26e-03
+[2026-08-20 13:33:45,345][root][INFO] - SQP iter  81: stationarity=1.463e-02 feasibility=2.068e-06 obj=-0.40770 penalty=9.98e-01 alpha=1.56e-02 stag=2 step=6.84e-04 hscale=3.49e+02 worst@221=1.46e-02
+[2026-08-20 13:33:46,170][root][INFO] - SQP iter  82: stationarity=4.200e-03 feasibility=4.787e-07 obj=-0.40770 penalty=9.97e-01 alpha=1.00e+00 stag=3 step=3.09e-05 hscale=4.12e+02 worst@229=4.20e-03
+[2026-08-20 13:33:46,869][root][INFO] - SQP iter  83: stationarity=5.176e-02 feasibility=1.870e-06 obj=-0.40771 penalty=9.96e-01 alpha=1.00e+00 stag=4 step=1.17e-04 hscale=4.65e+02 worst@221=5.18e-02
+[2026-08-20 13:33:47,612][root][INFO] - SQP iter  84: stationarity=3.533e-01 feasibility=4.369e-06 obj=-0.40771 penalty=9.95e-01 alpha=2.50e-01 stag=5 step=1.50e-04 hscale=8.36e+03 worst@228=3.53e-01
+[2026-08-20 13:33:48,308][root][INFO] - SQP iter  85: stationarity=7.042e-03 feasibility=3.801e-08 obj=-0.40771 penalty=9.94e-01 alpha=1.00e+00 stag=6 step=1.88e-06 hscale=8.36e+03 worst@230=7.04e-03
+[2026-08-20 13:33:49,009][root][INFO] - SQP iter  86: stationarity=4.268e-03 feasibility=3.280e-08 obj=-0.40771 penalty=9.93e-01 alpha=1.00e+00 stag=7 step=1.28e-06 hscale=8.36e+03 worst@229=4.27e-03
+[2026-08-20 13:33:49,707][root][INFO] - SQP iter  87: stationarity=4.264e-03 feasibility=3.287e-08 obj=-0.40771 penalty=9.92e-01 alpha=1.00e+00 stag=8 step=1.28e-06 hscale=8.36e+03 worst@229=4.26e-03
+[2026-08-20 13:33:50,401][root][INFO] - SQP iter  88: stationarity=4.264e-03 feasibility=3.294e-08 obj=-0.40771 penalty=9.91e-01 alpha=1.00e+00 stag=9 step=1.28e-06 hscale=8.36e+03 worst@229=4.26e-03
+[2026-08-20 13:33:51,101][root][INFO] - SQP iter  89: stationarity=4.264e-03 feasibility=3.301e-08 obj=-0.40771 penalty=1.00e+00 alpha=1.00e+00 stag=0 step=1.28e-06 hscale=1.00e+00 worst@229=4.26e-03
+[2026-08-20 13:33:52,062][root][INFO] - SQP iter  90: stationarity=4.243e-03 feasibility=4.987e-08 obj=-0.40771 penalty=9.99e-01 alpha=6.10e-05 stag=1 step=6.54e-07 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:33:53,080][root][INFO] - SQP iter  91: stationarity=4.243e-03 feasibility=5.198e-08 obj=-0.40771 penalty=9.98e-01 alpha=7.63e-06 stag=2 step=8.18e-08 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:33:54,221][root][INFO] - SQP iter  92: stationarity=4.243e-03 feasibility=5.201e-08 obj=-0.40771 penalty=9.97e-01 alpha=1.19e-07 stag=3 step=1.28e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:33:55,325][root][INFO] - SQP iter  93: stationarity=4.243e-03 feasibility=5.208e-08 obj=-0.40771 penalty=9.96e-01 alpha=2.38e-07 stag=4 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:33:56,437][root][INFO] - SQP iter  94: stationarity=4.243e-03 feasibility=5.215e-08 obj=-0.40771 penalty=9.95e-01 alpha=2.38e-07 stag=5 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:33:57,559][root][INFO] - SQP iter  95: stationarity=4.243e-03 feasibility=5.221e-08 obj=-0.40771 penalty=9.94e-01 alpha=2.38e-07 stag=6 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:33:58,670][root][INFO] - SQP iter  96: stationarity=4.243e-03 feasibility=5.228e-08 obj=-0.40771 penalty=9.93e-01 alpha=2.38e-07 stag=7 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:33:59,811][root][INFO] - SQP iter  97: stationarity=4.243e-03 feasibility=5.231e-08 obj=-0.40771 penalty=9.92e-01 alpha=1.19e-07 stag=8 step=1.28e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:00,921][root][INFO] - SQP iter  98: stationarity=4.243e-03 feasibility=5.238e-08 obj=-0.40771 penalty=9.91e-01 alpha=2.38e-07 stag=9 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:02,021][root][INFO] - SQP iter  99: stationarity=4.243e-03 feasibility=5.244e-08 obj=-0.40771 penalty=1.00e+00 alpha=2.38e-07 stag=0 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:03,282][root][INFO] - SQP iter 100: stationarity=4.243e-03 feasibility=5.244e-08 obj=-0.40771 penalty=9.99e-01 alpha=9.31e-10 stag=1 step=9.98e-12 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:04,408][root][INFO] - SQP iter 101: stationarity=4.243e-03 feasibility=5.248e-08 obj=-0.40771 penalty=9.98e-01 alpha=1.19e-07 stag=2 step=1.28e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:05,649][root][INFO] - SQP iter 102: stationarity=4.243e-03 feasibility=5.254e-08 obj=-0.40771 penalty=9.97e-01 alpha=2.38e-07 stag=3 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:06,755][root][INFO] - SQP iter 103: stationarity=4.243e-03 feasibility=5.261e-08 obj=-0.40771 penalty=9.96e-01 alpha=2.38e-07 stag=4 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:07,865][root][INFO] - SQP iter 104: stationarity=4.243e-03 feasibility=5.267e-08 obj=-0.40771 penalty=9.95e-01 alpha=2.38e-07 stag=5 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:08,975][root][INFO] - SQP iter 105: stationarity=4.243e-03 feasibility=5.274e-08 obj=-0.40771 penalty=9.94e-01 alpha=2.38e-07 stag=6 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:10,107][root][INFO] - SQP iter 106: stationarity=4.243e-03 feasibility=5.277e-08 obj=-0.40771 penalty=9.93e-01 alpha=1.19e-07 stag=7 step=1.28e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:11,226][root][INFO] - SQP iter 107: stationarity=4.243e-03 feasibility=5.284e-08 obj=-0.40771 penalty=9.92e-01 alpha=2.38e-07 stag=8 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:12,339][root][INFO] - SQP iter 108: stationarity=4.243e-03 feasibility=5.290e-08 obj=-0.40771 penalty=9.91e-01 alpha=2.38e-07 stag=9 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:13,442][root][INFO] - SQP iter 109: stationarity=4.243e-03 feasibility=5.297e-08 obj=-0.40771 penalty=1.00e+00 alpha=2.38e-07 stag=0 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:14,685][root][INFO] - SQP iter 110: stationarity=4.243e-03 feasibility=5.297e-08 obj=-0.40771 penalty=9.99e-01 alpha=9.31e-10 stag=1 step=9.98e-12 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:15,819][root][INFO] - SQP iter 111: stationarity=4.243e-03 feasibility=5.300e-08 obj=-0.40771 penalty=9.98e-01 alpha=1.19e-07 stag=2 step=1.28e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:16,923][root][INFO] - SQP iter 112: stationarity=4.243e-03 feasibility=5.307e-08 obj=-0.40771 penalty=9.97e-01 alpha=2.38e-07 stag=3 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:18,041][root][INFO] - SQP iter 113: stationarity=4.243e-03 feasibility=5.314e-08 obj=-0.40771 penalty=9.96e-01 alpha=2.38e-07 stag=4 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:19,148][root][INFO] - SQP iter 114: stationarity=4.243e-03 feasibility=5.320e-08 obj=-0.40771 penalty=9.95e-01 alpha=2.38e-07 stag=5 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:20,254][root][INFO] - SQP iter 115: stationarity=4.243e-03 feasibility=5.327e-08 obj=-0.40771 penalty=9.94e-01 alpha=2.38e-07 stag=6 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:21,375][root][INFO] - SQP iter 116: stationarity=4.243e-03 feasibility=5.330e-08 obj=-0.40771 penalty=9.93e-01 alpha=1.19e-07 stag=7 step=1.28e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:22,485][root][INFO] - SQP iter 117: stationarity=4.243e-03 feasibility=5.337e-08 obj=-0.40771 penalty=9.92e-01 alpha=2.38e-07 stag=8 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:23,606][root][INFO] - SQP iter 118: stationarity=4.243e-03 feasibility=5.343e-08 obj=-0.40771 penalty=9.91e-01 alpha=2.38e-07 stag=9 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:24,711][root][INFO] - SQP iter 119: stationarity=4.243e-03 feasibility=5.350e-08 obj=-0.40771 penalty=1.00e+00 alpha=2.38e-07 stag=0 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:25,959][root][INFO] - SQP iter 120: stationarity=4.243e-03 feasibility=5.350e-08 obj=-0.40771 penalty=9.99e-01 alpha=9.31e-10 stag=1 step=9.98e-12 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:27,078][root][INFO] - SQP iter 121: stationarity=4.243e-03 feasibility=5.353e-08 obj=-0.40771 penalty=9.98e-01 alpha=1.19e-07 stag=2 step=1.28e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:28,192][root][INFO] - SQP iter 122: stationarity=4.243e-03 feasibility=5.360e-08 obj=-0.40771 penalty=9.97e-01 alpha=2.38e-07 stag=3 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:29,296][root][INFO] - SQP iter 123: stationarity=4.243e-03 feasibility=5.366e-08 obj=-0.40771 penalty=9.96e-01 alpha=2.38e-07 stag=4 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:30,400][root][INFO] - SQP iter 124: stationarity=4.243e-03 feasibility=5.373e-08 obj=-0.40771 penalty=9.95e-01 alpha=2.38e-07 stag=5 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:31,510][root][INFO] - SQP iter 125: stationarity=4.243e-03 feasibility=5.380e-08 obj=-0.40771 penalty=9.94e-01 alpha=2.38e-07 stag=6 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:32,647][root][INFO] - SQP iter 126: stationarity=4.243e-03 feasibility=5.383e-08 obj=-0.40771 penalty=9.93e-01 alpha=1.19e-07 stag=7 step=1.28e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:33,761][root][INFO] - SQP iter 127: stationarity=4.243e-03 feasibility=5.389e-08 obj=-0.40771 penalty=9.92e-01 alpha=2.38e-07 stag=8 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:34,870][root][INFO] - SQP iter 128: stationarity=4.243e-03 feasibility=5.396e-08 obj=-0.40771 penalty=9.91e-01 alpha=2.38e-07 stag=9 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:35,990][root][INFO] - SQP iter 129: stationarity=4.243e-03 feasibility=5.403e-08 obj=-0.40771 penalty=1.00e+00 alpha=2.38e-07 stag=0 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:37,242][root][INFO] - SQP iter 130: stationarity=4.243e-03 feasibility=5.403e-08 obj=-0.40771 penalty=9.99e-01 alpha=9.31e-10 stag=1 step=9.98e-12 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:38,379][root][INFO] - SQP iter 131: stationarity=4.243e-03 feasibility=5.406e-08 obj=-0.40771 penalty=9.98e-01 alpha=1.19e-07 stag=2 step=1.28e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:39,619][root][INFO] - SQP iter 132: stationarity=4.243e-03 feasibility=5.413e-08 obj=-0.40771 penalty=9.97e-01 alpha=2.38e-07 stag=3 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:40,737][root][INFO] - SQP iter 133: stationarity=4.243e-03 feasibility=5.419e-08 obj=-0.40771 penalty=9.96e-01 alpha=2.38e-07 stag=4 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:41,852][root][INFO] - SQP iter 134: stationarity=4.243e-03 feasibility=5.426e-08 obj=-0.40771 penalty=9.95e-01 alpha=2.38e-07 stag=5 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:42,967][root][INFO] - SQP iter 135: stationarity=4.243e-03 feasibility=5.432e-08 obj=-0.40771 penalty=9.94e-01 alpha=2.38e-07 stag=6 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:44,093][root][INFO] - SQP iter 136: stationarity=4.243e-03 feasibility=5.436e-08 obj=-0.40771 penalty=9.93e-01 alpha=1.19e-07 stag=7 step=1.28e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:45,197][root][INFO] - SQP iter 137: stationarity=4.243e-03 feasibility=5.442e-08 obj=-0.40771 penalty=9.92e-01 alpha=2.38e-07 stag=8 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:46,297][root][INFO] - SQP iter 138: stationarity=4.243e-03 feasibility=5.449e-08 obj=-0.40771 penalty=9.91e-01 alpha=2.38e-07 stag=9 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:47,393][root][INFO] - SQP iter 139: stationarity=4.243e-03 feasibility=5.455e-08 obj=-0.40771 penalty=1.00e+00 alpha=2.38e-07 stag=0 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:48,637][root][INFO] - SQP iter 140: stationarity=4.243e-03 feasibility=5.455e-08 obj=-0.40771 penalty=9.99e-01 alpha=9.31e-10 stag=1 step=9.98e-12 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:49,773][root][INFO] - SQP iter 141: stationarity=4.243e-03 feasibility=5.459e-08 obj=-0.40771 penalty=9.98e-01 alpha=1.19e-07 stag=2 step=1.28e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:50,883][root][INFO] - SQP iter 142: stationarity=4.243e-03 feasibility=5.465e-08 obj=-0.40771 penalty=9.97e-01 alpha=2.38e-07 stag=3 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:51,992][root][INFO] - SQP iter 143: stationarity=4.243e-03 feasibility=5.472e-08 obj=-0.40771 penalty=9.96e-01 alpha=2.38e-07 stag=4 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:53,108][root][INFO] - SQP iter 144: stationarity=4.243e-03 feasibility=5.479e-08 obj=-0.40771 penalty=9.95e-01 alpha=2.38e-07 stag=5 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:54,214][root][INFO] - SQP iter 145: stationarity=4.243e-03 feasibility=5.485e-08 obj=-0.40771 penalty=9.94e-01 alpha=2.38e-07 stag=6 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:55,362][root][INFO] - SQP iter 146: stationarity=4.243e-03 feasibility=5.488e-08 obj=-0.40771 penalty=9.93e-01 alpha=1.19e-07 stag=7 step=1.28e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:56,474][root][INFO] - SQP iter 147: stationarity=4.243e-03 feasibility=5.495e-08 obj=-0.40771 penalty=9.92e-01 alpha=2.38e-07 stag=8 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:57,589][root][INFO] - SQP iter 148: stationarity=4.243e-03 feasibility=5.502e-08 obj=-0.40771 penalty=9.91e-01 alpha=2.38e-07 stag=9 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:58,708][root][INFO] - SQP iter 149: stationarity=4.243e-03 feasibility=5.508e-08 obj=-0.40771 penalty=1.00e+00 alpha=2.38e-07 stag=0 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:34:59,962][root][INFO] - SQP iter 150: stationarity=4.243e-03 feasibility=5.508e-08 obj=-0.40771 penalty=9.99e-01 alpha=9.31e-10 stag=1 step=9.98e-12 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:01,071][root][INFO] - SQP iter 151: stationarity=4.243e-03 feasibility=5.515e-08 obj=-0.40771 penalty=9.98e-01 alpha=2.38e-07 stag=2 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:02,174][root][INFO] - SQP iter 152: stationarity=4.243e-03 feasibility=5.521e-08 obj=-0.40771 penalty=9.97e-01 alpha=2.38e-07 stag=3 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:03,429][root][INFO] - SQP iter 153: stationarity=4.243e-03 feasibility=5.528e-08 obj=-0.40771 penalty=9.96e-01 alpha=2.38e-07 stag=4 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:04,551][root][INFO] - SQP iter 154: stationarity=4.243e-03 feasibility=5.535e-08 obj=-0.40771 penalty=9.95e-01 alpha=2.38e-07 stag=5 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:05,670][root][INFO] - SQP iter 155: stationarity=4.243e-03 feasibility=5.541e-08 obj=-0.40771 penalty=9.94e-01 alpha=2.38e-07 stag=6 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:06,797][root][INFO] - SQP iter 156: stationarity=4.243e-03 feasibility=5.548e-08 obj=-0.40771 penalty=9.93e-01 alpha=2.38e-07 stag=7 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:07,911][root][INFO] - SQP iter 157: stationarity=4.243e-03 feasibility=5.554e-08 obj=-0.40771 penalty=9.92e-01 alpha=2.38e-07 stag=8 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:09,013][root][INFO] - SQP iter 158: stationarity=4.243e-03 feasibility=5.561e-08 obj=-0.40771 penalty=9.91e-01 alpha=2.38e-07 stag=9 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:10,123][root][INFO] - SQP iter 159: stationarity=4.243e-03 feasibility=5.568e-08 obj=-0.40771 penalty=1.00e+00 alpha=2.38e-07 stag=0 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:11,508][root][INFO] - SQP iter 160: stationarity=4.243e-03 feasibility=5.568e-08 obj=-0.40771 penalty=9.99e-01 alpha=9.31e-10 stag=1 step=9.98e-12 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:12,619][root][INFO] - SQP iter 161: stationarity=4.243e-03 feasibility=5.574e-08 obj=-0.40771 penalty=9.98e-01 alpha=2.38e-07 stag=2 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:13,737][root][INFO] - SQP iter 162: stationarity=4.243e-03 feasibility=5.581e-08 obj=-0.40771 penalty=9.97e-01 alpha=2.38e-07 stag=3 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:14,853][root][INFO] - SQP iter 163: stationarity=4.243e-03 feasibility=5.587e-08 obj=-0.40771 penalty=9.96e-01 alpha=2.38e-07 stag=4 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:15,961][root][INFO] - SQP iter 164: stationarity=4.243e-03 feasibility=5.594e-08 obj=-0.40771 penalty=9.95e-01 alpha=2.38e-07 stag=5 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:17,066][root][INFO] - SQP iter 165: stationarity=4.243e-03 feasibility=5.601e-08 obj=-0.40771 penalty=9.94e-01 alpha=2.38e-07 stag=6 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:18,173][root][INFO] - SQP iter 166: stationarity=4.243e-03 feasibility=5.607e-08 obj=-0.40771 penalty=9.93e-01 alpha=2.38e-07 stag=7 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:19,286][root][INFO] - SQP iter 167: stationarity=4.243e-03 feasibility=5.614e-08 obj=-0.40771 penalty=9.92e-01 alpha=2.38e-07 stag=8 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:20,387][root][INFO] - SQP iter 168: stationarity=4.243e-03 feasibility=5.620e-08 obj=-0.40771 penalty=9.91e-01 alpha=2.38e-07 stag=9 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:21,490][root][INFO] - SQP iter 169: stationarity=4.243e-03 feasibility=5.627e-08 obj=-0.40771 penalty=1.00e+00 alpha=2.38e-07 stag=0 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:22,728][root][INFO] - SQP iter 170: stationarity=4.243e-03 feasibility=5.627e-08 obj=-0.40771 penalty=9.99e-01 alpha=9.31e-10 stag=1 step=9.98e-12 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:23,842][root][INFO] - SQP iter 171: stationarity=4.243e-03 feasibility=5.634e-08 obj=-0.40771 penalty=9.98e-01 alpha=2.38e-07 stag=2 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:24,953][root][INFO] - SQP iter 172: stationarity=4.243e-03 feasibility=5.640e-08 obj=-0.40771 penalty=9.97e-01 alpha=2.38e-07 stag=3 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:26,066][root][INFO] - SQP iter 173: stationarity=4.243e-03 feasibility=5.647e-08 obj=-0.40771 penalty=9.96e-01 alpha=2.38e-07 stag=4 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:27,175][root][INFO] - SQP iter 174: stationarity=4.243e-03 feasibility=5.653e-08 obj=-0.40771 penalty=9.95e-01 alpha=2.38e-07 stag=5 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:28,282][root][INFO] - SQP iter 175: stationarity=4.243e-03 feasibility=5.660e-08 obj=-0.40771 penalty=9.94e-01 alpha=2.38e-07 stag=6 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:29,389][root][INFO] - SQP iter 176: stationarity=4.243e-03 feasibility=5.667e-08 obj=-0.40771 penalty=9.93e-01 alpha=2.38e-07 stag=7 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:30,498][root][INFO] - SQP iter 177: stationarity=4.243e-03 feasibility=5.673e-08 obj=-0.40771 penalty=9.92e-01 alpha=2.38e-07 stag=8 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:31,615][root][INFO] - SQP iter 178: stationarity=4.243e-03 feasibility=5.680e-08 obj=-0.40771 penalty=9.91e-01 alpha=2.38e-07 stag=9 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:32,724][root][INFO] - SQP iter 179: stationarity=4.243e-03 feasibility=5.686e-08 obj=-0.40771 penalty=1.00e+00 alpha=2.38e-07 stag=0 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:33,992][root][INFO] - SQP iter 180: stationarity=4.243e-03 feasibility=5.686e-08 obj=-0.40771 penalty=9.99e-01 alpha=9.31e-10 stag=1 step=9.98e-12 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:35,102][root][INFO] - SQP iter 181: stationarity=4.243e-03 feasibility=5.693e-08 obj=-0.40771 penalty=9.98e-01 alpha=2.38e-07 stag=2 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:36,208][root][INFO] - SQP iter 182: stationarity=4.243e-03 feasibility=5.700e-08 obj=-0.40771 penalty=9.97e-01 alpha=2.38e-07 stag=3 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:37,462][root][INFO] - SQP iter 183: stationarity=4.243e-03 feasibility=5.706e-08 obj=-0.40771 penalty=9.96e-01 alpha=2.38e-07 stag=4 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:38,582][root][INFO] - SQP iter 184: stationarity=4.243e-03 feasibility=5.713e-08 obj=-0.40771 penalty=9.95e-01 alpha=2.38e-07 stag=5 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:39,692][root][INFO] - SQP iter 185: stationarity=4.243e-03 feasibility=5.719e-08 obj=-0.40771 penalty=9.94e-01 alpha=2.38e-07 stag=6 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:40,799][root][INFO] - SQP iter 186: stationarity=4.243e-03 feasibility=5.726e-08 obj=-0.40771 penalty=9.93e-01 alpha=2.38e-07 stag=7 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:41,907][root][INFO] - SQP iter 187: stationarity=4.243e-03 feasibility=5.733e-08 obj=-0.40771 penalty=9.92e-01 alpha=2.38e-07 stag=8 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:43,016][root][INFO] - SQP iter 188: stationarity=4.243e-03 feasibility=5.739e-08 obj=-0.40771 penalty=9.91e-01 alpha=2.38e-07 stag=9 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:44,126][root][INFO] - SQP iter 189: stationarity=4.243e-03 feasibility=5.746e-08 obj=-0.40771 penalty=1.00e+00 alpha=2.38e-07 stag=0 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:45,381][root][INFO] - SQP iter 190: stationarity=4.243e-03 feasibility=5.746e-08 obj=-0.40771 penalty=9.99e-01 alpha=9.31e-10 stag=1 step=9.98e-12 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:46,492][root][INFO] - SQP iter 191: stationarity=4.243e-03 feasibility=5.752e-08 obj=-0.40771 penalty=9.98e-01 alpha=2.38e-07 stag=2 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:47,622][root][INFO] - SQP iter 192: stationarity=4.243e-03 feasibility=5.759e-08 obj=-0.40771 penalty=9.97e-01 alpha=2.38e-07 stag=3 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:48,727][root][INFO] - SQP iter 193: stationarity=4.243e-03 feasibility=5.766e-08 obj=-0.40771 penalty=9.96e-01 alpha=2.38e-07 stag=4 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:49,837][root][INFO] - SQP iter 194: stationarity=4.243e-03 feasibility=5.772e-08 obj=-0.40771 penalty=9.95e-01 alpha=2.38e-07 stag=5 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:50,951][root][INFO] - SQP iter 195: stationarity=4.243e-03 feasibility=5.779e-08 obj=-0.40771 penalty=9.94e-01 alpha=2.38e-07 stag=6 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:52,053][root][INFO] - SQP iter 196: stationarity=4.243e-03 feasibility=5.785e-08 obj=-0.40771 penalty=9.93e-01 alpha=2.38e-07 stag=7 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:53,174][root][INFO] - SQP iter 197: stationarity=4.243e-03 feasibility=5.792e-08 obj=-0.40771 penalty=9.92e-01 alpha=2.38e-07 stag=8 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:54,292][root][INFO] - SQP iter 198: stationarity=4.243e-03 feasibility=5.799e-08 obj=-0.40771 penalty=9.91e-01 alpha=2.38e-07 stag=9 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:55,398][root][INFO] - SQP iter 199: stationarity=4.243e-03 feasibility=5.805e-08 obj=-0.40771 penalty=1.00e+00 alpha=2.38e-07 stag=0 step=2.55e-09 hscale=1.00e+00 worst@229=4.24e-03
+[2026-08-20 13:35:55,469][root][INFO] - SQP stationarity top-5 [final] 229:4.24e-03, 230:2.29e-03, 222:2.14e-03, 172:1.75e-03, 165:1.74e-03
+[2026-08-20 13:35:55,469][root][INFO] - SQP worst-index frequency [idx(count)] 229(129), 228(15), 47(8), 38(8), 221(6)
+[2026-08-20 13:35:55,469][root][INFO] - SQP max_iter reached at iter 199: obj=-0.40771
+[2026-08-20 13:36:00,288][root][INFO] - Monolithic solver finished unsuccessfully, objective value -4.077071e-01
+[2026-08-20 13:36:00,289][root][INFO] - Design variables for node 0: [7.79331299]
+[2026-08-20 13:36:00,289][root][INFO] - Design variables for node 1: [3.7666778]
+[2026-08-20 13:36:00,289][root][INFO] - Design variables for node 2: [10.97533687]
+[2026-08-20 13:36:00,289][root][INFO] - Design variables for node 3: [11.00321711]
+[2026-08-20 13:36:00,289][root][INFO] - Design variables for node 4: [11.7145781]
+[2026-08-20 13:36:00,289][root][INFO] - Design variables for node 5: [10.74561704]
+[2026-08-20 13:36:00,290][root][INFO] - Design variables for node 6: [11.63667688]
+[2026-08-20 13:36:00,290][root][INFO] - Design variables for node 7: [11.4789022]
+[2026-08-20 13:36:00,290][root][INFO] - Design variables for node 8: [11.50898895]
+[2026-08-20 13:36:00,290][root][INFO] - Design variables for node 9: [11.53182841]
+[2026-08-20 13:36:00,290][root][INFO] - Design variables for node 10: [11.60254008]
+[2026-08-20 13:36:00,290][root][INFO] - Design variables for node 11: [11.49199252]
+[2026-08-20 13:36:00,290][root][INFO] - Design variables for node 12: [11.63005794]
+[2026-08-20 13:36:00,290][root][INFO] - Design variables for node 13: [11.69785937]
+[2026-08-20 13:36:00,290][root][INFO] - Design variables for node 14: [11.6322467]
+[2026-08-20 13:36:00,290][root][INFO] - Design variables for node 15: [11.71056427]
+[2026-08-20 13:36:00,290][root][INFO] - Design variables for node 16: [11.77895424]
+[2026-08-20 13:36:00,290][root][INFO] - Design variables for node 17: [11.72501298]
+[2026-08-20 13:36:00,291][root][INFO] - Design variables for node 18: [11.73726423]
+[2026-08-20 13:36:00,291][root][INFO] - Design variables for node 19: [11.86945938]
+[2026-08-20 13:36:00,291][root][INFO] - Design variables for node 20: [11.88504313]
+[2026-08-20 13:36:00,291][root][INFO] - Design variables for node 21: [11.92040291]
+[2026-08-20 13:36:00,291][root][INFO] - Design variables for node 22: [11.94253911]
+[2026-08-20 13:36:00,291][root][INFO] - Design variables for node 23: [11.98008244]
+[2026-08-20 13:36:00,291][root][INFO] - Design variables for node 24: [11.95557157]
+[2026-08-20 13:36:00,291][root][INFO] - Design variables for node 25: [12.0304372]
+[2026-08-20 13:36:00,291][root][INFO] - Design variables for node 26: [11.58452659]
+[2026-08-20 13:36:00,291][root][INFO] - Design variables for node 27: [11.97244606]
+[2026-08-20 13:36:00,291][root][INFO] - Design variables for node 28: [11.82390327]
+[2026-08-20 13:36:00,291][root][INFO] - Design variables for node 29: [3.76573008]
+[2026-08-20 13:36:02,030][root][INFO] - Saved monolithic policy (60-d, aux=[0.021725705380128336]) to monolithic_policy.xlsx
+[2026-08-20 13:36:02,041][root][INFO] - Direct method multiple_shooting completed with outputs: SQPResult(success=False, objective=Array(-0.40770706, dtype=float64), decision_variables=Array([2.17257054e-02, 7.79331299e+00, 3.76667780e+00, 1.09753369e+01,
+       1.10032171e+01, 1.17145781e+01, 1.07456170e+01, 1.16366769e+01,
+       1.14789022e+01, 1.15089890e+01, 1.15318284e+01, 1.16025401e+01,
+       1.14919925e+01, 1.16300579e+01, 1.16978594e+01, 1.16322467e+01,
+       1.17105643e+01, 1.17789542e+01, 1.17250130e+01, 1.17372642e+01,
+       1.18694594e+01, 1.18850431e+01, 1.19204029e+01, 1.19425391e+01,
+       1.19800824e+01, 1.19555716e+01, 1.20304372e+01, 1.15845266e+01,
+       1.19724461e+01, 1.18239033e+01, 3.76573008e+00, 3.47333838e-01,
+       9.98079435e+02, 1.01180757e+02, 1.57904638e+00, 4.11089522e+01,
+       6.93140884e+00, 9.01091335e-03, 6.31950033e-01, 9.94022558e+02,
+       2.94106483e+01, 1.54646913e+00, 3.53687022e-01, 1.27413853e+01,
+       1.42819598e-02, 1.05264570e+00, 9.85584952e+02, 8.93035228e+01,
+       1.61397946e+00, 3.65064417e-01, 4.15471250e+01, 1.80218267e-02,
+       1.62826397e+00, 9.69287736e+02, 6.35198588e+01, 1.66065634e+00,
+       2.12317754e-01, 9.67792197e+01, 2.09226929e-02, 2.24906113e+00,
+       9.43552693e+02, 1.14761021e+02, 1.75629173e+00, 1.95482037e-01,
+       1.15934344e+02, 2.32928731e-02, 2.69216258e+00, 9.10723295e+02,
+       1.35793739e+01, 1.37552846e+00, 1.00572809e-01, 2.39439608e+02,
+       2.52968319e-02, 2.83909064e+00, 8.78332123e+02, 4.78299522e+01,
+       1.41433920e+00, 1.34648118e-01, 3.80559219e+02, 2.70327400e-02,
+       2.93856312e+00, 8.43720589e+02, 3.36895113e+01, 1.36889903e+00,
+       1.21027170e-01, 5.30050789e+02, 2.85639195e-02, 2.95895338e+00,
+       8.09420442e+02, 3.47626778e+01, 1.34559595e+00, 1.21631873e-01,
+       6.82991190e+02, 2.99336062e-02, 2.96375193e+00, 7.75205815e+02,
+       3.60285934e+01, 1.34767162e+00, 1.22650878e-01, 8.36214457e+02,
+       3.11726385e-02, 2.98318068e+00, 7.40436707e+02, 4.04495115e+01,
+       1.37950276e+00, 1.25925553e-01, 9.89192448e+02, 3.23037864e-02,
+       2.98946405e+00, 7.05441773e+02, 3.31933952e+01, 1.34244919e+00,
+       1.19709857e-01, 1.14438497e+03, 3.33443416e-02, 2.99613987e+00,
+       6.70497073e+02, 4.21383227e+01, 1.38520989e+00, 1.26976438e-01,
+       1.29819472e+03, 3.43077453e-02, 3.04207080e+00, 6.34007558e+02,
+       4.67612037e+01, 1.43497569e+00, 1.29386166e-01, 1.45256277e+03,
+       3.52046526e-02, 3.07736881e+00, 5.96522501e+02, 4.03972599e+01,
+       1.41688307e+00, 1.24132690e-01, 1.61033870e+03, 3.60436534e-02,
+       3.09646025e+00, 5.58794041e+02, 4.61165850e+01, 1.43872450e+00,
+       1.27867471e-01, 1.76876069e+03, 3.68317735e-02, 3.13426188e+00,
+       5.19935900e+02, 5.16794750e+01, 1.48021565e+00, 1.30675861e-01,
+       1.92781422e+03, 3.75748329e-02, 3.16372627e+00, 4.80216717e+02,
+       4.55835945e+01, 1.46594059e+00, 1.26243329e-01, 2.08964578e+03,
+       3.82777067e-02, 3.16881226e+00, 4.40600696e+02, 4.63493507e+01,
+       1.45946071e+00, 1.26654621e-01, 2.25245066e+03, 3.89445196e-02,
+       3.19610577e+00, 4.00225288e+02, 5.98375262e+01, 1.52280754e+00,
+       1.33946947e-01, 2.41423285e+03, 3.95787917e-02, 3.24816266e+00,
+       3.58121590e+02, 6.01629841e+01, 1.55654189e+00, 1.33027536e-01,
+       2.57799733e+03, 4.01835519e-02, 3.29273744e+00, 3.14816856e+02,
+       6.29882769e+01, 1.57818142e+00, 1.33491119e-01, 2.74423160e+03,
+       4.07614248e-02, 3.32795443e+00, 2.70580091e+02, 6.45874639e+01,
+       1.59287272e+00, 1.33516388e-01, 2.91248843e+03, 4.13146998e-02,
+       3.35787551e+00, 2.25549748e+02, 6.89171259e+01, 1.61386789e+00,
+       1.34797846e-01, 3.08210073e+03, 4.18453857e-02, 3.37773544e+00,
+       1.79961464e+02, 6.43141996e+01, 1.60703703e+00, 1.32406086e-01,
+       3.25350773e+03, 4.23552550e-02, 3.39511870e+00, 1.33987111e+02,
+       7.54194534e+01, 1.63845786e+00, 1.36610063e-01, 3.42495715e+03,
+       4.28458793e-02, 3.33942922e+00, 8.95829893e+01, 3.20134213e+01,
+       1.44004729e+00, 1.13630110e-01, 3.60139074e+03, 4.33186586e-02,
+       3.27678086e+00, 4.78711873e+01, 7.00493255e+01, 1.53987362e+00,
+       1.36994082e-01, 3.76928123e+03, 4.37748458e-02, 3.28906813e+00,
+       4.86999936e+00, 5.13839085e+01, 1.52951375e+00, 1.27535223e-01,
+       3.93725676e+03, 4.42155660e-02], dtype=float64), multipliers=Array([ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  0.00000000e+00,
+        0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  0.00000000e+00,
+        0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  0.00000000e+00,
+        0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  0.00000000e+00,
+        0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  0.00000000e+00,
+        0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  0.00000000e+00,
+        0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  0.00000000e+00,
+        0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  0.00000000e+00,
+        0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  0.00000000e+00,
+        0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  0.00000000e+00,
+        0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  0.00000000e+00,
+        0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  0.00000000e+00,
+        0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  0.00000000e+00,
+        0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  0.00000000e+00,
+        0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  0.00000000e+00,
+       -1.23361047e-01, -1.46189502e-01, -1.40739536e-03, -3.76583805e-03,
+        8.86630236e-04,  1.08881337e-03,  2.25299140e-19, -6.54870102e-02,
+       -1.46152111e-01, -1.31671265e-04, -3.10051455e-03,  8.82757029e-04,
+        1.51155176e-03,  3.37948710e-19, -3.61683144e-02, -1.46097194e-01,
+       -2.68259801e-04, -2.03981881e-03,  5.26908170e-04,  1.53543036e-03,
+        4.50598280e-19, -1.96374366e-02, -1.46046019e-01, -7.32158199e-04,
+       -1.94204652e-03,  3.41990568e-04,  1.53467710e-03,  5.63247849e-19,
+       -2.57229779e-02, -1.46011261e-01,  7.39629055e-04, -3.09266039e-03,
+        6.21089805e-07,  1.53349752e-03,  6.75897419e-19, -2.33093414e-02,
+       -1.46000379e-01,  1.94595915e-04, -3.27550340e-03,  2.09409651e-04,
+        1.53258779e-03,  7.88546989e-19, -2.20460284e-02, -1.45980104e-01,
+        5.53510148e-04, -3.03332786e-03,  1.97821488e-04,  1.53622419e-03,
+        9.01196559e-19, -2.14969473e-02, -1.45895417e-01,  5.77694343e-04,
+       -3.07262561e-03,  1.91530134e-04,  1.53846958e-03,  1.01384613e-18,
+       -2.13872645e-02, -1.45722486e-01,  6.35319591e-04, -3.05794178e-03,
+        1.90132832e-04,  1.53655820e-03,  1.12569267e-18, -2.13271589e-02,
+       -1.45431344e-01,  5.95539426e-04, -3.01658559e-03,  1.89578650e-04,
+        1.52749532e-03,  1.23595644e-18, -2.11960016e-02, -1.45007607e-01,
+        5.14475512e-04, -3.04172967e-03,  1.88022073e-04,  1.50869475e-03,
+        1.34387224e-18, -2.11771131e-02, -1.44454149e-01,  5.70491733e-04,
+       -3.01234930e-03,  1.88038412e-04,  1.47873951e-03,  1.44868452e-18,
+       -2.10052322e-02, -1.43773705e-01,  4.05609914e-04, -2.90095865e-03,
+        1.86912006e-04,  1.43817773e-03,  1.54575280e-18, -2.06935519e-02,
+       -1.42972971e-01,  2.59309376e-04, -2.90544051e-03,  1.83888125e-04,
+        1.38625431e-03,  1.63049955e-18, -2.05239979e-02, -1.42078393e-01,
+        3.02287791e-04, -2.91905420e-03,  1.82137496e-04,  1.32392246e-03,
+        1.69222552e-18, -2.03716667e-02, -1.41110699e-01,  2.23907895e-04,
+       -2.85386993e-03,  1.80862280e-04,  1.25356498e-03,  1.71112130e-18,
+       -2.01624470e-02, -1.40082572e-01,  1.33734746e-04, -2.85310025e-03,
+        1.78624925e-04,  1.17660479e-03,  1.64918458e-18, -2.00636355e-02,
+       -1.39009431e-01,  1.86091431e-04, -2.88447286e-03,  1.77231299e-04,
+        1.09428819e-03,  2.24074519e-18, -1.99966652e-02, -1.37902201e-01,
+        1.56623644e-04, -2.79143169e-03,  1.76919179e-04,  1.00813734e-03,
+        2.13869807e-18, -1.97482250e-02, -1.36765894e-01, -3.79222895e-05,
+       -2.66255090e-03,  1.75127986e-04,  9.18892439e-04,  1.91120221e-18,
+       -1.94476177e-02, -1.35610616e-01, -1.31554365e-04, -2.62285764e-03,
+        1.72327341e-04,  8.26832334e-04,  1.53754305e-18, -1.92205333e-02,
+       -1.34451177e-01, -1.78127910e-04, -2.59688972e-03,  1.70057698e-04,
+        7.32832173e-04,  1.42471899e-18, -1.90542779e-02, -1.33299745e-01,
+       -2.09297749e-04, -2.57624488e-03,  1.68321425e-04,  6.38012225e-04,
+        1.49020452e-18, -1.89161946e-02, -1.32164741e-01, -2.46828944e-04,
+       -2.56594872e-03,  1.66878588e-04,  5.43288838e-04,  1.24551410e-18,
+       -1.87974258e-02, -1.31051546e-01, -2.35789511e-04, -2.56312206e-03,
+        1.65964097e-04,  4.49314646e-04,  7.98353350e-19, -1.85980029e-02,
+       -1.29963799e-01, -3.19655560e-04, -2.57576562e-03,  1.65129870e-04,
+        3.56475355e-04,  5.14012578e-19, -1.82328441e-02, -1.28903626e-01,
+       -2.65444264e-04, -2.35387025e-03,  1.67488041e-04,  2.65071907e-04,
+        8.76841069e-20, -1.66347158e-02, -1.27884882e-01, -8.49061007e-04,
+       -1.38239229e-03,  1.70438436e-04,  1.74633826e-04, -2.01862670e-19,
+       -1.26740127e-02, -1.29208559e-01, -1.91987127e-03, -8.17663490e-04,
+        1.67558946e-04,  8.65924784e-05, -2.26406068e-19], dtype=float64), constraints=Array([ 1.65425179e-02,  1.66355323e-02,  1.66355323e-02,  1.66355323e-02,
+        1.66355323e-02,  1.66355323e-02,  1.66355323e-02,  1.66355323e-02,
+        1.66355323e-02,  1.66355323e-02,  1.66355323e-02,  1.66355323e-02,
+        1.66355323e-02,  1.66355323e-02,  1.66355323e-02,  1.66355323e-02,
+        1.66355323e-02,  1.66355323e-02,  1.66355323e-02,  1.66355323e-02,
+        1.66355323e-02,  1.66355323e-02,  1.66355323e-02,  1.66355323e-02,
+        1.66355323e-02,  1.66355323e-02,  1.66355323e-02,  1.66355323e-02,
+        1.66355323e-02,  1.66355323e-02,  1.66355323e-02,  1.66355323e-02,
+        1.66355323e-02,  1.66355323e-02,  1.66355323e-02,  1.66355323e-02,
+        1.66355323e-02,  1.66355323e-02,  1.66355323e-02,  1.66355323e-02,
+        1.66355323e-02,  1.66355323e-02,  1.66355323e-02,  1.66355323e-02,
+        1.66355323e-02,  1.66355323e-02,  1.66355323e-02,  1.66355323e-02,
+        1.66355323e-02,  1.66355323e-02,  1.66355323e-02,  1.66355323e-02,
+        1.66355323e-02,  1.66355323e-02,  1.66355323e-02,  1.66355323e-02,
+        1.66355323e-02,  1.66355323e-02,  1.66355323e-02,  1.66355323e-02,
+        3.30149476e-15,  1.11071941e-14,  1.13470291e-13,  1.25898215e-13,
+       -1.37158000e-12,  3.74210764e-15, -2.09913221e-14, -7.00843624e-15,
+       -3.19992972e-14,  6.55052732e-15, -2.81479748e-15,  1.34530406e-11,
+       -2.45172570e-15,  4.04058312e-15, -4.84392994e-13,  2.96191842e-14,
+        9.70777321e-13,  2.65256279e-12, -7.54735430e-13,  1.78502836e-14,
+       -3.94203231e-16, -1.69129205e-14,  3.04125552e-15,  1.51896443e-12,
+       -1.17773685e-12,  2.30964375e-13, -3.69909491e-15,  3.94203231e-16,
+       -1.95355816e-12,  8.55518401e-14, -4.18649073e-12,  6.29171209e-12,
+        7.30889217e-13, -3.33106267e-09,  2.70029213e-14, -9.96217355e-12,
+        8.92939067e-13, -2.27501438e-10,  9.42039788e-11, -1.48111473e-12,
+       -6.81390101e-10,  9.26377593e-15,  3.59295303e-12, -2.65911515e-13,
+        5.92725818e-11, -2.93690851e-11,  1.72560887e-13,  1.62416074e-13,
+        7.43073090e-14, -8.11970779e-12,  6.64051532e-13, -1.33963968e-10,
+        5.91539926e-11, -5.15033081e-13, -4.09739281e-13,  5.57797572e-14,
+       -3.70531970e-12,  2.91563845e-13, -4.91587841e-11,  2.73636699e-11,
+       -1.78762029e-13, -1.38156894e-13, -2.44406003e-14, -3.98046743e-11,
+        3.24356513e-12, -9.13781724e-10,  4.07689765e-10, -3.23056980e-12,
+       -3.07945350e-12, -8.57392027e-15,  1.35511880e-12, -1.45319123e-13,
+        3.40747062e-11, -1.54609149e-11,  1.11676941e-13,  1.31532933e-13,
+        5.16406233e-14, -2.06916840e-12,  1.90012356e-13, -4.73112106e-11,
+        2.11213447e-11, -1.80509624e-13, -1.85470898e-13,  1.75420438e-14,
+        3.07884659e-12, -2.93547272e-13,  6.32893543e-11, -3.02284940e-11,
+        2.07005415e-13,  2.31752597e-13, -1.53739260e-14,  8.38463827e-13,
+       -1.03006002e-13,  1.80212044e-11, -8.91049731e-12,  5.63176497e-14,
+        7.78530441e-14,  4.53333716e-15,  6.36551358e-13, -5.18335724e-14,
+        1.01161255e-11, -5.14097171e-12,  3.77705959e-14,  2.19364931e-14,
+        5.24290297e-14,  1.08451207e-12, -9.82457762e-14,  2.27609711e-11,
+       -1.04191008e-11,  6.32516546e-14,  7.71648404e-14,  4.75014893e-14,
+        5.43298611e-13, -5.65937984e-14,  1.05878176e-11, -5.16937557e-12,
+        2.81306378e-14,  4.06900440e-14, -5.49913507e-14,  6.30180052e-13,
+       -4.62799753e-14,  1.15132285e-11, -5.19278957e-12,  3.26405597e-14,
+        2.92486574e-14,  6.46493299e-14, -1.14915186e-13,  1.78508476e-15,
+       -7.86068692e-12,  2.64053593e-12, -1.70813292e-14, -2.03020093e-14,
+        1.59652309e-14,  1.01361681e-12, -9.41466927e-14,  1.43062434e-11,
+       -7.62797323e-12,  3.95745646e-14,  4.71419538e-14,  3.07478520e-14,
+       -1.15841921e-15,  8.59485256e-15, -5.14037744e-12,  1.51973475e-12,
+       -3.21331935e-15, -2.16784167e-14, -1.73449422e-14, -1.36925151e-13,
+        1.30245073e-14, -6.51014142e-12,  2.22893577e-12, -6.20114261e-15,
+       -2.16784167e-14, -1.71478405e-14, -6.25546375e-14,  6.08251105e-15,
+       -2.59552464e-12,  9.14425345e-13, -1.74759474e-15, -1.03230556e-14,
+        1.16092852e-13, -8.89665956e-14,  7.00811055e-15, -2.42380338e-12,
+        9.44748391e-13, -1.35297657e-15, -5.50562964e-15,  7.98261543e-14,
+        4.49466655e-13, -4.02635785e-14, -7.81840624e-13, -5.13316704e-13,
+        4.62266994e-15,  3.44101852e-16, -2.97623439e-14, -1.55228175e-13,
+        1.46112494e-14, -7.91043844e-13,  6.55591922e-13, -5.29915823e-15,
+        1.03230556e-14,  2.40463971e-14,  4.32831755e-12, -4.40106037e-13,
+        1.54900157e-10, -5.98420826e-11,  5.18810140e-13,  5.56412695e-13,
+       -9.46087754e-15, -7.63212915e-12,  6.68423337e-13, -1.20931937e-10,
+        6.17195526e-11, -2.08302018e-13, -4.43203186e-13,  2.56232100e-14,
+       -5.68227779e-08,  5.83914970e-09,  1.23169548e-08,  5.80513018e-08,
+        9.18981711e-11, -4.21434270e-10, -5.65681637e-14], dtype=float64), iterations=200, kkt_stationarity=0.004243448409185169, kkt_feasibility=5.805130183371777e-08, timing=0.0, message='max_iter reached')
+[2026-08-20 13:36:02,077][root][INFO] - Function evaluations for node 0: 32768
+[2026-08-20 13:36:02,077][root][INFO] - Function evaluations for node 1: 32768
+[2026-08-20 13:36:02,077][root][INFO] - Function evaluations for node 2: 32768
+[2026-08-20 13:36:02,077][root][INFO] - Function evaluations for node 3: 32768
+[2026-08-20 13:36:02,077][root][INFO] - Function evaluations for node 4: 32768
+[2026-08-20 13:36:02,077][root][INFO] - Function evaluations for node 5: 32768
+[2026-08-20 13:36:02,077][root][INFO] - Function evaluations for node 6: 32768
+[2026-08-20 13:36:02,077][root][INFO] - Function evaluations for node 7: 32768
+[2026-08-20 13:36:02,077][root][INFO] - Function evaluations for node 8: 32768
+[2026-08-20 13:36:02,077][root][INFO] - Function evaluations for node 9: 32768
+[2026-08-20 13:36:02,077][root][INFO] - Function evaluations for node 10: 32768
+[2026-08-20 13:36:02,077][root][INFO] - Function evaluations for node 11: 32768
+[2026-08-20 13:36:02,077][root][INFO] - Function evaluations for node 12: 32768
+[2026-08-20 13:36:02,077][root][INFO] - Function evaluations for node 13: 32768
+[2026-08-20 13:36:02,077][root][INFO] - Function evaluations for node 14: 32768
+[2026-08-20 13:36:02,077][root][INFO] - Function evaluations for node 15: 32768
+[2026-08-20 13:36:02,077][root][INFO] - Function evaluations for node 16: 32768
+[2026-08-20 13:36:02,077][root][INFO] - Function evaluations for node 17: 32768
+[2026-08-20 13:36:02,077][root][INFO] - Function evaluations for node 18: 32768
+[2026-08-20 13:36:02,078][root][INFO] - Function evaluations for node 19: 32768
+[2026-08-20 13:36:02,078][root][INFO] - Function evaluations for node 20: 32768
+[2026-08-20 13:36:02,078][root][INFO] - Function evaluations for node 21: 32768
+[2026-08-20 13:36:02,078][root][INFO] - Function evaluations for node 22: 32768
+[2026-08-20 13:36:02,078][root][INFO] - Function evaluations for node 23: 32768
+[2026-08-20 13:36:02,078][root][INFO] - Function evaluations for node 24: 32768
+[2026-08-20 13:36:02,078][root][INFO] - Function evaluations for node 25: 32768
+[2026-08-20 13:36:02,078][root][INFO] - Function evaluations for node 26: 32768
+[2026-08-20 13:36:02,078][root][INFO] - Function evaluations for node 27: 32768
+[2026-08-20 13:36:02,078][root][INFO] - Function evaluations for node 28: 32768
+[2026-08-20 13:36:02,078][root][INFO] - Function evaluations for node 29: 32768
+[2026-08-20 13:36:02,494][root][INFO] - Integration took 0.27245116233825684 seconds
+[2026-08-20 13:36:03,523][root][INFO] - Rollout node 0: feasible 1/1, mean node-cost 1.259e-08, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:03,523][root][INFO] - Rollout node 0 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:03,802][root][INFO] - Integration took 0.2599771022796631 seconds
+[2026-08-20 13:36:04,716][root][INFO] - Rollout node 1: feasible 1/1, mean node-cost -0.0002529, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:04,716][root][INFO] - Rollout node 1 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:04,995][root][INFO] - Integration took 0.2650289535522461 seconds
+[2026-08-20 13:36:05,891][root][INFO] - Rollout node 2: feasible 1/1, mean node-cost -0.002865, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:05,891][root][INFO] - Rollout node 2 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:06,166][root][INFO] - Integration took 0.2609679698944092 seconds
+[2026-08-20 13:36:07,066][root][INFO] - Rollout node 3: feasible 1/1, mean node-cost -0.005523, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:07,066][root][INFO] - Rollout node 3 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:07,342][root][INFO] - Integration took 0.2627592086791992 seconds
+[2026-08-20 13:36:08,264][root][INFO] - Rollout node 4: feasible 1/1, mean node-cost -0.001916, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:08,264][root][INFO] - Rollout node 4 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:08,541][root][INFO] - Integration took 0.2626821994781494 seconds
+[2026-08-20 13:36:09,449][root][INFO] - Rollout node 5: feasible 1/1, mean node-cost -0.01235, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:09,449][root][INFO] - Rollout node 5 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:09,727][root][INFO] - Integration took 0.2641751766204834 seconds
+[2026-08-20 13:36:10,641][root][INFO] - Rollout node 6: feasible 1/1, mean node-cost -0.01411, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:10,641][root][INFO] - Rollout node 6 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:10,923][root][INFO] - Integration took 0.2686281204223633 seconds
+[2026-08-20 13:36:11,829][root][INFO] - Rollout node 7: feasible 1/1, mean node-cost -0.01495, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:11,829][root][INFO] - Rollout node 7 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:12,105][root][INFO] - Integration took 0.26166605949401855 seconds
+[2026-08-20 13:36:12,998][root][INFO] - Rollout node 8: feasible 1/1, mean node-cost -0.01529, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:12,998][root][INFO] - Rollout node 8 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:13,276][root][INFO] - Integration took 0.2632429599761963 seconds
+[2026-08-20 13:36:14,195][root][INFO] - Rollout node 9: feasible 1/1, mean node-cost -0.01532, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:14,195][root][INFO] - Rollout node 9 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:14,472][root][INFO] - Integration took 0.26396679878234863 seconds
+[2026-08-20 13:36:15,369][root][INFO] - Rollout node 10: feasible 1/1, mean node-cost -0.0153, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:15,369][root][INFO] - Rollout node 10 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:15,652][root][INFO] - Integration took 0.27008986473083496 seconds
+[2026-08-20 13:36:16,545][root][INFO] - Rollout node 11: feasible 1/1, mean node-cost -0.01552, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:16,545][root][INFO] - Rollout node 11 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:16,824][root][INFO] - Integration took 0.2649271488189697 seconds
+[2026-08-20 13:36:17,734][root][INFO] - Rollout node 12: feasible 1/1, mean node-cost -0.01538, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:17,734][root][INFO] - Rollout node 12 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:18,013][root][INFO] - Integration took 0.2657301425933838 seconds
+[2026-08-20 13:36:18,896][root][INFO] - Rollout node 13: feasible 1/1, mean node-cost -0.01544, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:18,896][root][INFO] - Rollout node 13 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:19,172][root][INFO] - Integration took 0.26313233375549316 seconds
+[2026-08-20 13:36:20,058][root][INFO] - Rollout node 14: feasible 1/1, mean node-cost -0.01578, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:20,058][root][INFO] - Rollout node 14 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:20,344][root][INFO] - Integration took 0.27179908752441406 seconds
+[2026-08-20 13:36:21,232][root][INFO] - Rollout node 15: feasible 1/1, mean node-cost -0.01584, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:21,232][root][INFO] - Rollout node 15 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:21,516][root][INFO] - Integration took 0.2705109119415283 seconds
+[2026-08-20 13:36:22,427][root][INFO] - Rollout node 16: feasible 1/1, mean node-cost -0.01591, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:22,427][root][INFO] - Rollout node 16 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:22,710][root][INFO] - Integration took 0.26880693435668945 seconds
+[2026-08-20 13:36:23,604][root][INFO] - Rollout node 17: feasible 1/1, mean node-cost -0.01618, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:23,604][root][INFO] - Rollout node 17 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:23,883][root][INFO] - Integration took 0.2658078670501709 seconds
+[2026-08-20 13:36:24,780][root][INFO] - Rollout node 18: feasible 1/1, mean node-cost -0.01628, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:24,780][root][INFO] - Rollout node 18 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:25,060][root][INFO] - Integration took 0.26618003845214844 seconds
+[2026-08-20 13:36:25,961][root][INFO] - Rollout node 19: feasible 1/1, mean node-cost -0.01618, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:25,962][root][INFO] - Rollout node 19 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:26,243][root][INFO] - Integration took 0.2679629325866699 seconds
+[2026-08-20 13:36:27,142][root][INFO] - Rollout node 20: feasible 1/1, mean node-cost -0.01638, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:27,143][root][INFO] - Rollout node 20 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:27,425][root][INFO] - Integration took 0.26850390434265137 seconds
+[2026-08-20 13:36:35,137][root][INFO] - Rollout node 21: feasible 1/1, mean node-cost -0.01662, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:35,137][root][INFO] - Rollout node 21 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:35,420][root][INFO] - Integration took 0.2693929672241211 seconds
+[2026-08-20 13:36:36,323][root][INFO] - Rollout node 22: feasible 1/1, mean node-cost -0.01683, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:36,323][root][INFO] - Rollout node 22 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:36,611][root][INFO] - Integration took 0.27422404289245605 seconds
+[2026-08-20 13:36:37,501][root][INFO] - Rollout node 23: feasible 1/1, mean node-cost -0.01696, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:37,501][root][INFO] - Rollout node 23 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:37,784][root][INFO] - Integration took 0.26929402351379395 seconds
+[2026-08-20 13:36:38,693][root][INFO] - Rollout node 24: feasible 1/1, mean node-cost -0.01714, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:38,693][root][INFO] - Rollout node 24 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:38,976][root][INFO] - Integration took 0.26937294006347656 seconds
+[2026-08-20 13:36:39,860][root][INFO] - Rollout node 25: feasible 1/1, mean node-cost -0.01714, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:39,860][root][INFO] - Rollout node 25 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:40,143][root][INFO] - Integration took 0.2691481113433838 seconds
+[2026-08-20 13:36:41,036][root][INFO] - Rollout node 26: feasible 1/1, mean node-cost -0.01764, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:41,036][root][INFO] - Rollout node 26 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:41,320][root][INFO] - Integration took 0.27028894424438477 seconds
+[2026-08-20 13:36:42,227][root][INFO] - Rollout node 27: feasible 1/1, mean node-cost -0.01679, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:42,227][root][INFO] - Rollout node 27 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:42,513][root][INFO] - Integration took 0.27159690856933594 seconds
+[2026-08-20 13:36:43,405][root][INFO] - Rollout node 28: feasible 1/1, mean node-cost -0.0168, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:43,405][root][INFO] - Rollout node 28 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:43,691][root][INFO] - Integration took 0.2718851566314697 seconds
+[2026-08-20 13:36:44,577][root][INFO] - Rollout node 29: feasible 1/1, mean node-cost -0.01502, mean cost-to-go (optimiser objective) 0, optimiser viable 1/1
+[2026-08-20 13:36:44,577][root][INFO] - Rollout node 29 per-constraint feasible-frac=[1.0, 1.0] worst-margin=[0.017, 0.017]
+[2026-08-20 13:36:45,899][root][INFO] - Saved rollout trajectory plot to rollout_trajectory.png (rollout, monolithic)
+Done

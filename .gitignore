@@ -184,3 +184,6 @@ MIGRATION.md
 **/*.log
 **/*.pdf
 **/*.pid
+!paper_results/serial_adp/**/*
+paper_results/serial_adp/**/*.pkl
+paper_results/serial_adp/**/*.pickle

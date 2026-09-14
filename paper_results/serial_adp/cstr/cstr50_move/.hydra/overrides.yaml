@@ -1,0 +1,11 @@
+- case_study=cstr
+- model=cstr
+- surrogate=cstr
+- solvers=cstr
+- samplers=cstr
+- init=cstr
+- reconstruction=cstr
+- case_study.num_nodes=50
+- samplers.ns.n_live=1000
+- samplers.ns.final_sample_live=1500
+- method=[decomposition]

@@ -1,0 +1,42 @@
+{
+    "initial_phase": {
+        "n_model_evaluations": 5000,
+        "cpu_s": 17.24930500984192
+    },
+    "deterministic_phase": {
+        "n_model_evaluations": 67500,
+        "cpu_s": {
+            "proposing": 6.974393844604492,
+            "evaluating": 581.8077318668365,
+            "total": 592.9628880023956
+        }
+    },
+    "transition_phase": {
+        "n_model_evaluations": 5000,
+        "cpu_s": 27.85867428779602
+    },
+    "probabilistic_phase": {
+        "n_model_evaluations": {
+            "main": 500,
+            "topup": 0,
+            "total": 500
+        },
+        "cpu_s": {
+            "main": {
+                "proposing": 0.03323101997375488,
+                "evaluating": 2.591691017150879,
+                "total": 2.624922037124634
+            },
+            "topup": {
+                "proposing": 0.0,
+                "evaluating": 0.0,
+                "total": 0.0
+            },
+            "total": 2.6387369632720947
+        }
+    },
+    "overall": {
+        "n_model_evaluations": 78000,
+        "cpu_s": 640.7096042633057
+    }
+}
